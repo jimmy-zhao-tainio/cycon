@@ -1,0 +1,306 @@
+CYCON — Codex implementation brief (plain text)
+
+Status note (Dec 2025)
+Cycon is being built iteratively. The architecture below reflects the current “thin demo” direction:
+demos should use ONLY a high-level Cycon API and must not reference Silk.NET/OpenGL/backends directly.
+Font work is staged: runtime currently uses ONLY a bitmap atlas (VGA CP437 8×16) to unblock the framework.
+The Fixedsys Excelsior TTF/FreeType path is a future milestone and is not used at runtime today.
+
+Goal
+Build a .NET (net9.0) C# framework named “Cycon” that provides a GPU-accelerated graphical console /
+command prompt with an object-oriented, notebook-like transcript buffer.
+
+It must be stable under window resizing with no squish/morph: resizing changes only how many text cells
+fit and how content wraps; it must never scale rendered content. The command prompt must be part of the
+scrollable transcript flow (not fixed at the bottom). Mouse selection must be fully supported. It must
+support history, autocomplete, scrolling, and inline 3D output blocks (render-to-texture) that flow with
+transcript content.
+
+Hard requirements (rendering)
+- Pixel-perfect fixed-size grid: layout uses framebuffer pixel size (not logical window size).
+- Nearest sampling, integer pixel coordinates, no fractional scaling.
+- Resizing changes only Cols/Rows/Padding and wrapping; never global scaling transforms.
+- Command prompt is a Block in the transcript flow.
+
+Hard requirements (font)
+Current runtime font: VGA CP437 atlas 8×16, crisp, no smoothing.
+- No subpixel positioning.
+- No linear filtering (atlas sampling must be NEAREST).
+- Use framebuffer pixels for all math.
+Pragmatic staging:
+- Phase 0 (current): bitmap atlas font (VGA CP437 8×16).
+- Phase 1 (future): Fixedsys Excelsior TTF rasterization once FreeType binding is stable.
+
+Non-negotiable architectural rules
+- Cycon.Core must not reference any OS/windowing/graphics APIs (no Silk, no OpenGL, no FreeType).
+- Cycon.Layout is pure math: blocks → visual lines, hit testing, scroll metrics.
+- Cycon.Rendering produces backend-agnostic render commands and glyph atlas bitmaps.
+  It must not reference Silk.NET.
+- Only Cycon.Backends.* projects talk to Silk.NET/OpenGL and the OS.
+- The high-level “app” API must hide windowing/backends from demos.
+
+Solution / projects
+
+Cycon.sln
+
+Libraries (core framework)
+- Cycon.Text
+- Cycon.Core
+- Cycon.Layout
+- Cycon.Rendering
+- Cycon.Commands
+- Cycon.Host
+
+Backends
+- Cycon.Backends.Abstractions
+- Cycon.Backends.SilkNet  (OpenGL executor + window/input adapters)
+
+High-level runtime API (no backend types exposed to demos)
+- Cycon.App              (public high-level API: CyconApp.Run2D/Run3D)
+- Cycon.Platform.SilkNet (platform runner that wires Host + Backends.SilkNet)
+- Cycon.App.Abstractions (contracts shared between App and Platform runners)
+
+Executables
+- Demo.Cycon2D  (references ONLY Cycon.App)
+- Demo.Cycon3D  (references ONLY Cycon.App)
+
+Tests
+- Cycon.Core.Tests
+- Cycon.Layout.Tests
+- Cycon.Rendering.Tests
+
+Project dependency graph (must be enforced)
+Cycon.Text: no deps (or minimal)
+Cycon.Core: may depend on Cycon.Text only
+Cycon.Layout: depends on Cycon.Core, Cycon.Text
+Cycon.Rendering: depends on Cycon.Core, Cycon.Layout
+  Optional for Phase 1 (TTF): SharpFont/FreeType wrapper lives here ONLY.
+Cycon.Commands: depends on Cycon.Core, Cycon.Text
+Cycon.Backends.Abstractions: depends on Cycon.Core only (MUST NOT reference Layout)
+Cycon.Backends.SilkNet: depends on Cycon.Backends.Abstractions only (+ Silk.NET packages)
+Cycon.Host: depends on Cycon.Core, Cycon.Text, Cycon.Layout, Cycon.Rendering, Cycon.Commands, Cycon.Backends.Abstractions
+Cycon.Platform.SilkNet: depends on Cycon.Host + Cycon.Backends.SilkNet
+Cycon.App.Abstractions: no deps
+Cycon.App: depends on Cycon.Host + (one platform runner, currently Cycon.Platform.SilkNet; hardcoded at compile time)
+Demo.*: depends on Cycon.App only
+
+Known current deviation (needs cleanup later):
+- None.
+
+High-level public API (what demos/apps use)
+- Cycon.App:
+  - CyconAppOptions (Title, Width, Height, InitialText, etc.)
+  - CyconApp.Run2D(options)
+  - CyconApp.Run3D(options)
+
+Demos must not reference:
+- SilkWindow/SilkSwapchainGl/OpenGL executor types
+- Framebuffer sizes, Present(), VSync toggling, resize events
+Those are implementation details of Cycon.Platform.*.
+
+Core object model (object-oriented console)
+Everything visible is a Block inside a Transcript. Prompt is a Block too.
+
+Cycon.Core defines:
+- ConsoleDocument: Transcript + InputState + ScrollState + SelectionState + Settings
+- Transcript: ordered list of IBlock
+- IBlock: base interface for any content in the buffer
+  Builtins:
+  - TextBlock (runs of styled text)
+  - PromptBlock (editable input line(s), completion UI as part of block)
+  - ImageBlock (future)
+  - Scene3DBlock (future; interactive viewport)
+- Selection model: document-space positions (BlockId + text offset / cell offset), not pixels.
+- HistoryBuffer, CompletionSession, PromptEditor
+- ConsoleIntent + ConsoleReducer:
+  backend input → intents; reducer updates document state
+
+Optional interactive blocks (not required for first milestone)
+- IInteractiveBlock: handles mouse/keyboard within its rect (e.g., Scene3DBlock orbit controls).
+
+Layout model
+Cycon.Layout takes ConsoleDocument + LayoutSettings + viewport metrics and produces LayoutFrame.
+- LayoutSettings includes fixed cell metrics: CellWidthPx, CellHeightPx, baseline, padding policy.
+- FixedCellGrid computes Cols/Rows/Padding from framebuffer size and cell metrics; no scaling.
+- HitTester maps mouse pixel coords → document positions using integer division and layout maps.
+- Wrapping is by columns (cell count), stable and deterministic.
+- Resize correctness invariant:
+  if grid changes (Cols/Rows), rebuild layout immediately on next tick (do not “wait for mouse release”).
+
+Rendering model
+Cycon.Rendering generates a backend-agnostic RenderFrame (pixel-space draw commands).
+- RenderFrame is a list of draw ops (glyph runs, quads, clip push/pop).
+- Text draw commands must emit integer pixel positions only.
+- Glyph atlas generation:
+  Phase 0 (current): Bitmap atlas font (VGA CP437 8×16) loaded from a 24-bit BI_RGB BMP.
+  Phase 1 (future): Fixedsys Excelsior TTF at pixel size 16 via FreeType bindings.
+
+Font interfaces (Rendering)
+- GlyphAtlasData (pixels + dimensions + per-glyph UVs + metrics)
+- Fixed cell metrics (CellWidthPx, CellHeightPx, BaselinePx)
+- Current bitmap atlas loader (Phase 0): Cycon.Rendering parses a 24-bit BI_RGB BMP and produces an RGBA8888 buffer; backend uploads as RGBA8 and shader derives alpha from RGB intensity.
+
+Backend execution model (Silk.NET + OpenGL)
+Cycon.Backends.SilkNet provides:
+- IWindow exposing both logical Size and FramebufferSize (pixel size used for layout/render).
+- IInputSource translating Silk events into KeyEvent/MouseEvent.
+- OpenGL swapchain + device + texture wrappers.
+- RenderFrameExecutorGl: executes RenderFrame with an ortho projection where 1 unit == 1 framebuffer pixel.
+
+Critical GL rules:
+- glViewport must use framebuffer size.
+- Glyph atlas texture must use MIN/MAG = NEAREST and CLAMP_TO_EDGE.
+- All glyph quads land on integer pixel coordinates (snap on CPU).
+- No global scaling transforms.
+
+Host orchestration model
+Cycon.Host owns all “policy”:
+- Document + reducer
+- LayoutEngine + ConsoleRenderer
+- Resize policy (grid mismatch resolver)
+- VSync policy (optional)
+- Command execution (history/autocomplete)
+Current façade target:
+- ConsoleHostSession: session-level orchestrator that returns RenderFrame + optional VSync changes.
+
+Cycon.Platform.SilkNet owns:
+- window creation + render loop + Present()
+- event wiring
+- clipboard integration
+It forwards input and framebuffer sizes to Cycon.Host.
+
+Assets
+- Fonts:
+  - Runtime: Assets/Fonts/vga-8x16.bmp (24-bit BI_RGB; 32 cols x 8 rows; 8×16 cells).
+  - Assets/Fonts/vga-8x16.png may exist for tooling but is not used by the current loader.
+Host locates assets and passes to Rendering font loader.
+
+3D inline blocks (future milestone)
+Scene3DBlock is laid out as a rectangle in transcript flow.
+- It renders into an offscreen texture owned by the backend (OpenGL FBO texture).
+- The console compositor draws that texture as a quad inline.
+- Block rectangle must be integer pixel aligned; prefer height multiples of CellHeightPx.
+- Mouse events that hit inside the 3D rect are routed to that block’s handler; otherwise selection behavior.
+
+Filename skeleton (key files only; create stubs for all listed types)
+
+Cycon.App:
+CyconApp.cs
+CyconAppOptions.cs
+
+Cycon.Platform.SilkNet:
+SilkNetCyconRunner.cs
+CyconAppOptions.cs
+
+Cycon.Core:
+ConsoleDocument.cs
+Settings/ConsoleSettings.cs
+Transcript/Transcript.cs
+Transcript/IBlock.cs
+Transcript/Blocks/TextBlock.cs
+Transcript/Blocks/PromptBlock.cs
+Transcript/Blocks/ImageBlock.cs
+Transcript/Blocks/Scene3DBlock.cs
+Editing/PromptEditor.cs
+Editing/HistoryBuffer.cs
+Editing/CompletionSession.cs
+Selection/SelectionState.cs
+Selection/SelectionRange.cs
+Scrolling/ScrollState.cs
+Styling/TextStyle.cs
+Styling/TextSpan.cs
+Events/ConsoleIntent.cs
+Events/ConsoleReducer.cs
+
+Cycon.Text:
+Graphemes/GraphemeEnumerator.cs
+Words/WordBreaker.cs
+Buffer/GapBuffer.cs
+
+Cycon.Layout:
+LayoutEngine.cs
+LayoutFrame.cs
+LayoutSettings.cs
+Metrics/ConsoleViewport.cs
+Metrics/FixedCellGrid.cs
+HitTesting/HitTestMap.cs
+HitTesting/HitTester.cs
+Wrapping/LineWrapper.cs
+Blocks/*BlockLayouter.cs (Text/Prompt/Image/Scene3D)
+
+Cycon.Rendering:
+Backend/RenderFrame.cs
+Backend/DrawCommand.cs (+ GlyphRun/Quad/Clipping)
+Renderer/ConsoleRenderer.cs
+Renderer/Compositor.cs
+Fonts/BmpLoader.cs (24-bit BI_RGB BMP -> RGBA8888)
+Fonts/VgaCp4378x16Font.cs
+Fonts/FixedsysExcelsior16Font.cs (Phase 1; FreeType-based; future)
+Glyphs/GlyphMetrics.cs
+Glyphs/GlyphAtlas.cs
+Glyphs/GlyphAtlasBuilder.cs
+
+Cycon.Backends.Abstractions:
+IWindow.cs (must include FramebufferSize)
+IInputSource.cs
+IGraphicsDevice.cs
+ISwapchain.cs
+ITexture.cs
+IClipboard.cs
+Input/KeyEvent.cs
+Input/MouseEvent.cs
+Timing/FrameTimer.cs
+
+Cycon.Backends.SilkNet:
+SilkWindow.cs
+SilkInputSource.cs
+SilkGraphicsDeviceGl.cs
+SilkSwapchainGl.cs
+SilkTextureGl.cs
+SilkClipboard.cs
+Execution/RenderFrameExecutorGl.cs
+Execution/Shaders/*
+
+Cycon.Host:
+Hosting/ConsoleHostSession.cs
+ConsoleAppHost.cs (optional higher façade)
+HostConfig.cs
+AssetLoader.cs
+Services/FontService.cs
+Input/IntentMapping/InputToIntentMapper.cs
+Services/CommandExecutor.cs
+Services/Scene3DService.cs
+
+Cycon.Commands:
+CommandRegistry.cs
+CommandLineParser.cs
+Completion/*
+Builtins (help/clear etc.)
+
+Demo.Cycon2D:
+Program.cs (should call CyconApp.Run2D only)
+ResizeTortureScene.cs
+DemoCommands.cs
+
+Demo.Cycon3D:
+Program.cs (should call CyconApp.Run3D only)
+SpinningCubeBlockFactory.cs
+OrbitControls.cs
+
+Implementation sequencing (do in this order)
+1) Ensure solution/projects with correct references and empty class stubs build.
+2) Implement Host façade + Platform runner so demos are backend-free.
+3) Implement Layout FixedCellGrid and the grid mismatch resolver (resizing never scales).
+4) Implement text rendering pipeline with bitmap atlas fallback (VGA 8×16) to validate the whole stack.
+5) Implement selection + clipboard.
+6) Implement history + autocomplete.
+7) Implement inline 3D block (render-to-texture).
+8) Return to Fixedsys Excelsior TTF pipeline (Phase 1) once FreeType binding is stable.
+
+Acceptance checks
+- Text is crisp at all times, including while resizing.
+- Glyphs never blur: no linear filtering, no fractional positioning, no DPI logical-size mistakes.
+- Resizing changes only cols/rows/padding and wrapping; content is never scaled.
+- Prompt moves with content in transcript and participates in scrolling.
+- Mouse selection works across wrapped lines and supports copy.
+- 3D block renders inline and does not break layout invariants.
