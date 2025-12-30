@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Cycon.Core.Transcript;
 using Cycon.Layout.Metrics;
 
 namespace Cycon.Layout.HitTesting;
@@ -24,4 +25,4 @@ public sealed class HitTestMap
     public bool TryGetLine(int rowIndex, out HitTestLine line) => _linesByRow.TryGetValue(rowIndex, out line);
 }
 
-public readonly record struct HitTestLine(int BlockIndex, int Start, int Length, int RowIndex);
+public readonly record struct HitTestLine(BlockId BlockId, int BlockIndex, int Start, int Length, int RowIndex);

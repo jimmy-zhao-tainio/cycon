@@ -21,7 +21,7 @@ public static class ScrollAnchoring
 
         var topRow = Math.Clamp(scroll.ScrollOffsetRows, 0, layout.Lines.Count - 1);
         var topLine = layout.Lines[topRow];
-        scroll.TopVisualLineAnchor = new TopVisualLineAnchor(topLine.BlockIndex, topLine.Start);
+        scroll.TopVisualLineAnchor = new TopVisualLineAnchor(topLine.BlockId, topLine.Start);
     }
 
     public static void RestoreFromAnchor(ScrollState scroll, LayoutFrame layout)
@@ -55,7 +55,7 @@ public static class ScrollAnchoring
 
         foreach (var line in layout.Lines)
         {
-            if (line.BlockIndex != anchor.BlockIndex)
+            if (line.BlockId != anchor.BlockId)
             {
                 continue;
             }
@@ -85,4 +85,3 @@ public static class ScrollAnchoring
         return Math.Max(0, firstRowInBlock);
     }
 }
-

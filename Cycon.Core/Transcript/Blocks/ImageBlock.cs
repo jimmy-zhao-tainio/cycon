@@ -2,12 +2,12 @@ namespace Cycon.Core.Transcript.Blocks;
 
 public sealed class ImageBlock : IBlock
 {
-    public ImageBlock(int widthPx, int heightPx)
+    public ImageBlock(BlockId id)
     {
-        WidthPx = widthPx;
-        HeightPx = heightPx;
+        Id = id;
     }
 
-    public int WidthPx { get; }
-    public int HeightPx { get; }
+    public BlockId Id { get; }
+    public BlockKind Kind => BlockKind.Image;
 }
+

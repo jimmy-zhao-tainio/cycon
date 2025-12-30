@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Cycon.Core.Transcript;
 using Cycon.Layout.HitTesting;
 using Cycon.Layout.Metrics;
 
@@ -20,4 +21,4 @@ public sealed class LayoutFrame
     public int TotalRows { get; }
 }
 
-public readonly record struct LayoutLine(int BlockIndex, int Start, int Length, int RowIndex);
+public readonly record struct LayoutLine(BlockId BlockId, int BlockIndex, int Start, int Length, int RowIndex);

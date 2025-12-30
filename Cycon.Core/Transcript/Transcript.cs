@@ -9,4 +9,6 @@ public sealed class Transcript
     public IReadOnlyList<IBlock> Blocks => _blocks;
 
     public void Add(IBlock block) => _blocks.Add(block);
+
+    public void Insert(int index, IBlock block) => _blocks.Insert(index, block);
 }

@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using Cycon.Core;
 using Cycon.Core.Metrics;
-using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Layout;
@@ -22,14 +20,10 @@ public sealed class ConsoleRenderer
         frame.BuiltGrid = new GridSize(layout.Grid.Cols, layout.Grid.Rows);
         var grid = layout.Grid;
         var scrollOffsetRows = GetScrollOffsetRows(document, layout);
+        var pendingCaret = default(CaretQuad?);
 
         foreach (var line in layout.Lines)
         {
-            if (line.Length == 0)
-            {
-                continue;
-            }
-
             var rowOnScreen = line.RowIndex - scrollOffsetRows;
             if (rowOnScreen < 0 || rowOnScreen >= grid.Rows)
             {
@@ -37,8 +31,22 @@ public sealed class ConsoleRenderer
             }
 
             var block = document.Transcript.Blocks[line.BlockIndex];
-            var blockText = GetBlockText(block);
-            if (line.Start + line.Length > blockText.Text.Length)
+            var text = GetBlockText(block);
+            if (line.Start + line.Length > text.Length)
+            {
+                continue;
+            }
+
+            if (block is PromptBlock prompt && pendingCaret is null)
+            {
+                var caret = ComputeCaret(prompt, layout, line.BlockIndex);
+                if (caret is { } c)
+                {
+                    pendingCaret = new CaretQuad(c.RowIndex, c.ColIndex);
+                }
+            }
+
+            if (line.Length == 0)
             {
                 continue;
             }
@@ -47,7 +55,7 @@ public sealed class ConsoleRenderer
             for (var i = 0; i < line.Length; i++)
             {
                 var charIndex = line.Start + i;
-                var codepoint = blockText.Text[charIndex];
+                var codepoint = text[charIndex];
 
                 if (!atlas.TryGetMetrics(codepoint, out var metrics))
                 {
@@ -61,13 +69,23 @@ public sealed class ConsoleRenderer
                 var glyphX = cellX + metrics.BearingX;
                 var glyphY = baselineY - metrics.BearingY;
 
-                var color = blockText.GetColorAt(charIndex, DefaultColor);
-                glyphs.Add(new GlyphInstance(codepoint, glyphX, glyphY, color));
+                glyphs.Add(new GlyphInstance(codepoint, glyphX, glyphY, DefaultColor));
             }
 
             if (glyphs.Count > 0)
             {
                 frame.Add(new DrawGlyphRun(0, 0, glyphs));
+            }
+        }
+
+        if (pendingCaret is { } caretQuad)
+        {
+            var rowOnScreen = caretQuad.RowIndex - scrollOffsetRows;
+            if (rowOnScreen >= 0 && rowOnScreen < grid.Rows)
+            {
+                var caretX = grid.PaddingLeftPx + (caretQuad.ColIndex * grid.CellWidthPx);
+                var caretY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx) + (grid.CellHeightPx - 2);
+                frame.Add(new DrawQuad(caretX, caretY, grid.CellWidthPx, 2, DefaultColor));
             }
         }
 
@@ -83,54 +101,49 @@ public sealed class ConsoleRenderer
         return Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
     }
 
-    private static BlockText GetBlockText(IBlock block)
+    private static string GetBlockText(IBlock block)
     {
         return block switch
         {
-            TextBlock textBlock => BuildText(textBlock),
-            PromptBlock promptBlock => new BlockText(promptBlock.PromptText, null),
-            _ => new BlockText(string.Empty, null)
+            TextBlock textBlock => textBlock.Text,
+            PromptBlock promptBlock => promptBlock.Prompt + promptBlock.Input,
+            ImageBlock => throw new NotSupportedException("ImageBlock rendering not implemented in Blocks v0."),
+            Scene3DBlock => throw new NotSupportedException("Scene3DBlock rendering not implemented in Blocks v0."),
+            _ => string.Empty
         };
     }
 
-    private static BlockText BuildText(TextBlock block)
+    private static CaretCell? ComputeCaret(PromptBlock prompt, LayoutFrame layout, int promptBlockIndex)
     {
-        if (block.Spans.Count == 1)
-        {
-            return new BlockText(block.Spans[0].Text, block.Spans);
-        }
+        var caretCharIndex = prompt.Prompt.Length + Math.Clamp(prompt.CaretIndex, 0, prompt.Input.Length);
 
-        var builder = new StringBuilder();
-        foreach (var span in block.Spans)
+        CaretCell? best = null;
+        foreach (var line in layout.Lines)
         {
-            builder.Append(span.Text);
-        }
-
-        return new BlockText(builder.ToString(), block.Spans);
-    }
-
-    private readonly record struct BlockText(string Text, IReadOnlyList<TextSpan>? Spans)
-    {
-        public int GetColorAt(int charIndex, int fallbackColor)
-        {
-            if (Spans is null)
+            if (line.BlockIndex != promptBlockIndex)
             {
-                return fallbackColor;
+                continue;
             }
 
-            var offset = 0;
-            foreach (var span in Spans)
+            if (caretCharIndex < line.Start)
             {
-                var spanLength = span.Text.Length;
-                if (charIndex < offset + spanLength)
-                {
-                    return span.Style.ForegroundRgba;
-                }
-
-                offset += spanLength;
+                break;
             }
 
-            return fallbackColor;
+            if (caretCharIndex < line.Start + line.Length)
+            {
+                return new CaretCell(line.RowIndex, caretCharIndex - line.Start);
+            }
+
+            if (caretCharIndex == line.Start + line.Length && line.Length < layout.Grid.Cols)
+            {
+                best = new CaretCell(line.RowIndex, caretCharIndex - line.Start);
+            }
         }
+
+        return best;
     }
+
+    private readonly record struct CaretCell(int RowIndex, int ColIndex);
+    private readonly record struct CaretQuad(int RowIndex, int ColIndex);
 }

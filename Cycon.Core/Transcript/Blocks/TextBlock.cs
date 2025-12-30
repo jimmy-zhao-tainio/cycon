@@ -1,14 +1,14 @@
-using System.Collections.Generic;
-using Cycon.Core.Styling;
-
 namespace Cycon.Core.Transcript.Blocks;
 
 public sealed class TextBlock : IBlock
 {
-    public TextBlock(IReadOnlyList<TextSpan> spans)
+    public TextBlock(BlockId id, string text)
     {
-        Spans = spans;
+        Id = id;
+        Text = text;
     }
 
-    public IReadOnlyList<TextSpan> Spans { get; }
+    public BlockId Id { get; }
+    public BlockKind Kind => BlockKind.Text;
+    public string Text { get; }
 }

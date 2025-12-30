@@ -6,7 +6,6 @@ using Cycon.Core.Metrics;
 using Cycon.Core.Scrolling;
 using Cycon.Core.Selection;
 using Cycon.Core.Settings;
-using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Host.Services;
@@ -45,6 +44,8 @@ public sealed class ConsoleHostSession
     private bool? _pendingSetVSync;
     private readonly int _cellWidthPx;
     private readonly int _cellHeightPx;
+    private int _nextBlockId;
+    private bool _pendingContentRebuild;
 
     private ConsoleHostSession(string text, int resizeSettleMs, int rebuildThrottleMs)
     {
@@ -52,6 +53,7 @@ public sealed class ConsoleHostSession
         _rebuildThrottleMs = rebuildThrottleMs;
 
         _document = CreateDocument(text);
+        _nextBlockId = _document.Transcript.Blocks.Count + 1;
         _layoutSettings = new LayoutSettings();
         var fontService = new FontService();
         _atlas = fontService.LoadVgaAtlas(_layoutSettings);
@@ -72,6 +74,67 @@ public sealed class ConsoleHostSession
     }
 
     public GlyphAtlasData Atlas => _atlasData;
+
+    public void OnTextInput(char ch)
+    {
+        if (char.IsControl(ch))
+        {
+            return;
+        }
+
+        var prompt = GetPromptBlock();
+        var caret = Math.Clamp(prompt.CaretIndex, 0, prompt.Input.Length);
+        prompt.Input = prompt.Input.Insert(caret, ch.ToString());
+        prompt.CaretIndex = caret + 1;
+        _document.Scroll.IsFollowingTail = true;
+        _pendingContentRebuild = true;
+    }
+
+    public void OnBackspace()
+    {
+        var prompt = GetPromptBlock();
+        if (prompt.CaretIndex <= 0 || prompt.Input.Length == 0)
+        {
+            return;
+        }
+
+        var caret = Math.Clamp(prompt.CaretIndex, 0, prompt.Input.Length);
+        prompt.Input = prompt.Input.Remove(caret - 1, 1);
+        prompt.CaretIndex = caret - 1;
+        _document.Scroll.IsFollowingTail = true;
+        _pendingContentRebuild = true;
+    }
+
+    public void OnMoveCaretLeft()
+    {
+        var prompt = GetPromptBlock();
+        prompt.CaretIndex = Math.Max(0, prompt.CaretIndex - 1);
+        _pendingContentRebuild = true;
+    }
+
+    public void OnMoveCaretRight()
+    {
+        var prompt = GetPromptBlock();
+        prompt.CaretIndex = Math.Min(prompt.Input.Length, prompt.CaretIndex + 1);
+        _pendingContentRebuild = true;
+    }
+
+    public void OnEnter()
+    {
+        var prompt = GetPromptBlock();
+        var command = prompt.Input;
+        if (!string.IsNullOrEmpty(command))
+        {
+            var echo = new TextBlock(NewBlockId(), prompt.Prompt + command);
+            var insertIndex = Math.Max(0, _document.Transcript.Blocks.Count - 1);
+            _document.Transcript.Insert(insertIndex, echo);
+        }
+
+        prompt.Input = string.Empty;
+        prompt.CaretIndex = 0;
+        _document.Scroll.IsFollowingTail = true;
+        _pendingContentRebuild = true;
+    }
 
     public void Initialize(int initialFbW, int initialFbH)
     {
@@ -126,6 +189,7 @@ public sealed class ConsoleHostSession
 
         var elapsedSinceRebuildMs = (nowTicks - _lastRebuildTicks) * 1000.0 / Stopwatch.Frequency;
         var shouldRebuild = _lastFrame is null
+            || _pendingContentRebuild
             || (_pendingResizeRebuild && gridMismatch)
             || (gridMismatch && (gridSettled || elapsedSinceRebuildMs >= _rebuildThrottleMs));
 
@@ -165,6 +229,7 @@ public sealed class ConsoleHostSession
             }
 
             _pendingResizeRebuild = false;
+            _pendingContentRebuild = false;
 
             framebufferWidth = snapW;
             framebufferHeight = snapH;
@@ -184,8 +249,12 @@ public sealed class ConsoleHostSession
     private static ConsoleDocument CreateDocument(string text)
     {
         var transcript = new Transcript();
-        var span = new TextSpan(text, new TextStyle());
-        transcript.Add(new TextBlock(new[] { span }));
+        foreach (var line in SplitLines(text))
+        {
+            transcript.Add(new TextBlock(new BlockId(transcript.Blocks.Count + 1), line));
+        }
+
+        transcript.Add(new PromptBlock(new BlockId(transcript.Blocks.Count + 1), "> "));
 
         return new ConsoleDocument(
             transcript,
@@ -193,6 +262,31 @@ public sealed class ConsoleHostSession
             new ScrollState(),
             new SelectionState(),
             new ConsoleSettings());
+    }
+
+    private static string[] SplitLines(string text)
+    {
+        return text
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n', StringSplitOptions.None);
+    }
+
+    private BlockId NewBlockId() => new(_nextBlockId++);
+
+    private PromptBlock GetPromptBlock()
+    {
+        if (_document.Transcript.Blocks.Count == 0)
+        {
+            throw new InvalidOperationException("Transcript has no blocks.");
+        }
+
+        if (_document.Transcript.Blocks[^1] is not PromptBlock prompt)
+        {
+            throw new InvalidOperationException("Transcript must end with a PromptBlock.");
+        }
+
+        return prompt;
     }
 
     private void LogOnce(

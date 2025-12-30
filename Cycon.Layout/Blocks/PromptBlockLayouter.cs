@@ -8,6 +8,6 @@ public static class PromptBlockLayouter
 {
     public static IReadOnlyList<LineSpan> Wrap(PromptBlock block, int columns)
     {
-        return LineWrapper.Wrap(block.PromptText, columns);
+        return LineWrapper.Wrap(block.Prompt + block.Input, columns);
     }
 }

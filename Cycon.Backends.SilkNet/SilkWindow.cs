@@ -1,13 +1,15 @@
 using System;
 using Cycon.Backends.Abstractions;
+using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
 
 namespace Cycon.Backends.SilkNet;
 
-public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow
+public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposable
 {
     private readonly Silk.NET.Windowing.IWindow _window;
+    private IInputContext? _input;
 
     private SilkWindow(Silk.NET.Windowing.IWindow window)
     {
@@ -18,6 +20,9 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow
     public event Action? Loaded;
     public event Action<double>? Render;
     public event Action<int, int>? FramebufferResized;
+    public event Action<char>? TextInput;
+    public event Action<Key>? KeyDown;
+    public event Action<Key>? KeyUp;
 
     public int Width => _window.Size.X;
     public int Height => _window.Size.Y;
@@ -58,12 +63,46 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow
 
     internal void SwapBuffers() => _window.SwapBuffers();
 
-    private void HandleLoad() => Loaded?.Invoke();
+    public void Dispose()
+    {
+        _input?.Dispose();
+        _window.Dispose();
+    }
+
+    private void HandleLoad()
+    {
+        try
+        {
+            _input = _window.CreateInput();
+            WireInput(_input);
+        }
+        catch
+        {
+            _input = null;
+        }
+
+        Loaded?.Invoke();
+    }
 
     private void HandleRender(double deltaTime) => Render?.Invoke(deltaTime);
 
     private void OnFramebufferResize(Vector2D<int> size)
     {
         FramebufferResized?.Invoke(size.X, size.Y);
+    }
+
+    private void WireInput(IInputContext? input)
+    {
+        if (input is null)
+        {
+            return;
+        }
+
+        foreach (var keyboard in input.Keyboards)
+        {
+            keyboard.KeyChar += (_, ch) => TextInput?.Invoke(ch);
+            keyboard.KeyDown += (_, key, _) => KeyDown?.Invoke(key);
+            keyboard.KeyUp += (_, key, _) => KeyUp?.Invoke(key);
+        }
     }
 }

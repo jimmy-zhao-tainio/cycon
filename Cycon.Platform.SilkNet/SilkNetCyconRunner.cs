@@ -1,6 +1,7 @@
 using Cycon.Backends.SilkNet;
 using Cycon.Backends.SilkNet.Execution;
 using Cycon.Host.Hosting;
+using Silk.NET.Input;
 
 namespace Cycon.Platform.SilkNet;
 
@@ -26,6 +27,27 @@ public static class SilkNetCyconRunner
 
         window.FramebufferResized += (width, height) => session.OnFramebufferResized(width, height);
 
+        window.TextInput += session.OnTextInput;
+        window.KeyDown += key =>
+        {
+            switch (key)
+            {
+                case Key.Backspace:
+                    session.OnBackspace();
+                    break;
+                case Key.Enter:
+                case Key.KeypadEnter:
+                    session.OnEnter();
+                    break;
+                case Key.Left:
+                    session.OnMoveCaretLeft();
+                    break;
+                case Key.Right:
+                    session.OnMoveCaretRight();
+                    break;
+            }
+        };
+
         window.Render += _ =>
         {
             if (executor is null)
@@ -45,5 +67,6 @@ public static class SilkNetCyconRunner
         };
 
         window.Run();
+        window.Dispose();
     }
 }

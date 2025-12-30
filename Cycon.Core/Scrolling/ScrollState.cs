@@ -1,4 +1,5 @@
 using System;
+using Cycon.Core.Transcript;
 
 namespace Cycon.Core.Scrolling;
 
@@ -22,4 +23,4 @@ public sealed class ScrollState
     }
 }
 
-public readonly record struct TopVisualLineAnchor(int BlockIndex, int CharIndex);
+public readonly record struct TopVisualLineAnchor(BlockId BlockId, int CharIndex);

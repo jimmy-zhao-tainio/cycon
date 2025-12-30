@@ -1,4 +1,5 @@
 using System;
+using Cycon.Core.Transcript;
 
 namespace Cycon.Layout.HitTesting;
 
@@ -30,8 +31,8 @@ public sealed class HitTester
 
         var clampedCol = col < 0 ? 0 : col;
         var charIndex = line.Start + Math.Min(clampedCol, line.Length);
-        return new DocumentPosition(line.BlockIndex, charIndex);
+        return new DocumentPosition(line.BlockId, charIndex);
     }
 }
 
-public readonly record struct DocumentPosition(int BlockIndex, int CharIndex);
+public readonly record struct DocumentPosition(BlockId BlockId, int CharIndex);

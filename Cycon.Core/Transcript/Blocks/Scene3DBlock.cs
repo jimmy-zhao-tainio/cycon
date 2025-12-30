@@ -2,10 +2,12 @@ namespace Cycon.Core.Transcript.Blocks;
 
 public sealed class Scene3DBlock : IBlock
 {
-    public Scene3DBlock(int preferredHeightPx)
+    public Scene3DBlock(BlockId id)
     {
-        PreferredHeightPx = preferredHeightPx;
+        Id = id;
     }
 
-    public int PreferredHeightPx { get; }
+    public BlockId Id { get; }
+    public BlockKind Kind => BlockKind.Scene3D;
 }
+

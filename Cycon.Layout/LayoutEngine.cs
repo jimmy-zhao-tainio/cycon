@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Text;
 using Cycon.Core;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
@@ -26,8 +25,8 @@ public sealed class LayoutEngine
 
             foreach (var line in wrapped)
             {
-                lines.Add(new LayoutLine(blockIndex, line.Start, line.Length, rowIndex));
-                hitLines.Add(new HitTestLine(blockIndex, line.Start, line.Length, rowIndex));
+                lines.Add(new LayoutLine(block.Id, blockIndex, line.Start, line.Length, rowIndex));
+                hitLines.Add(new HitTestLine(block.Id, blockIndex, line.Start, line.Length, rowIndex));
                 rowIndex++;
             }
         }
@@ -40,25 +39,11 @@ public sealed class LayoutEngine
     {
         return block switch
         {
-            TextBlock textBlock => Concatenate(textBlock),
-            PromptBlock promptBlock => promptBlock.PromptText,
+            TextBlock textBlock => textBlock.Text,
+            PromptBlock promptBlock => promptBlock.Prompt + promptBlock.Input,
+            ImageBlock => throw new NotSupportedException("ImageBlock layout not implemented in Blocks v0."),
+            Scene3DBlock => throw new NotSupportedException("Scene3DBlock layout not implemented in Blocks v0."),
             _ => string.Empty
         };
-    }
-
-    private static string Concatenate(TextBlock block)
-    {
-        if (block.Spans.Count == 1)
-        {
-            return block.Spans[0].Text;
-        }
-
-        var builder = new StringBuilder();
-        foreach (var span in block.Spans)
-        {
-            builder.Append(span.Text);
-        }
-
-        return builder.ToString();
     }
 }
