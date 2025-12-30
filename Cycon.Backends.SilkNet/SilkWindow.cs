@@ -40,6 +40,8 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         set => _window.Title = value;
     }
 
+    public void Show() => _window.IsVisible = true;
+
     internal Silk.NET.Windowing.IWindow Native => _window;
 
     public static SilkWindow Create(int width, int height, string title)
@@ -47,6 +49,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         var options = WindowOptions.Default;
         options.Size = new Vector2D<int>(width, height);
         options.Title = title;
+        options.IsVisible = false;
         options.API = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.ForwardCompatible, new APIVersion(3, 3));
         options.WindowBorder = WindowBorder.Resizable;
         options.ShouldSwapAutomatically = false;

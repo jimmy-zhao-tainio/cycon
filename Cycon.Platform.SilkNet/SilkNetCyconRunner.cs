@@ -23,6 +23,12 @@ public static class SilkNetCyconRunner
             session.Initialize(window.FramebufferWidth, window.FramebufferHeight);
             executor.Initialize(session.Atlas);
             executor.Resize(window.FramebufferWidth, window.FramebufferHeight);
+
+            var tick = session.Tick();
+            executor.Resize(tick.FramebufferWidth, tick.FramebufferHeight);
+            executor.Execute(tick.Frame, session.Atlas);
+            swapchain.Present();
+            window.Show();
         };
 
         window.FramebufferResized += (width, height) => session.OnFramebufferResized(width, height);

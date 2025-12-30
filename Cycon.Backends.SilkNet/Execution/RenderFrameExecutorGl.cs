@@ -62,6 +62,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
         _gl.Enable(EnableCap.Blend);
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         _gl.ClearColor(0f, 0f, 0f, 1f);
+        _gl.Clear(ClearBufferMask.ColorBufferBit);
 
         _initialized = true;
     }
