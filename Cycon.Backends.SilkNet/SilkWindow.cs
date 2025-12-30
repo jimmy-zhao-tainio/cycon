@@ -10,11 +10,13 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 {
     private readonly Silk.NET.Windowing.IWindow _window;
     private IInputContext? _input;
+    private bool _disposed;
 
     private SilkWindow(Silk.NET.Windowing.IWindow window)
     {
         _window = window;
         _window.FramebufferResize += OnFramebufferResize;
+        _window.Closing += HandleClosing;
     }
 
     public event Action? Loaded;
@@ -23,6 +25,10 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     public event Action<char>? TextInput;
     public event Action<Key>? KeyDown;
     public event Action<Key>? KeyUp;
+    public event Action<int, int>? MouseMoved;
+    public event Action<int, int, MouseButton>? MouseDown;
+    public event Action<int, int, MouseButton>? MouseUp;
+    public event Action<int, int>? MouseWheel;
 
     public int Width => _window.Size.X;
     public int Height => _window.Size.Y;
@@ -68,8 +74,31 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
     public void Dispose()
     {
-        _input?.Dispose();
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        DisposeInput();
         _window.Dispose();
+    }
+
+    private void HandleClosing()
+    {
+        DisposeInput();
+    }
+
+    private void DisposeInput()
+    {
+        var input = _input;
+        if (input is null)
+        {
+            return;
+        }
+
+        _input = null;
+        input.Dispose();
     }
 
     private void HandleLoad()
@@ -106,6 +135,24 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
             keyboard.KeyChar += (_, ch) => TextInput?.Invoke(ch);
             keyboard.KeyDown += (_, key, _) => KeyDown?.Invoke(key);
             keyboard.KeyUp += (_, key, _) => KeyUp?.Invoke(key);
+        }
+
+        foreach (var mouse in input.Mice)
+        {
+            mouse.MouseDown += (_, button) =>
+            {
+                var pos = mouse.Position;
+                MouseDown?.Invoke((int)pos.X, (int)pos.Y, button);
+            };
+
+            mouse.MouseUp += (_, button) =>
+            {
+                var pos = mouse.Position;
+                MouseUp?.Invoke((int)pos.X, (int)pos.Y, button);
+            };
+
+            mouse.MouseMove += (_, pos) => MouseMoved?.Invoke((int)pos.X, (int)pos.Y);
+            mouse.Scroll += (_, wheel) => MouseWheel?.Invoke((int)wheel.X, (int)wheel.Y);
         }
     }
 }

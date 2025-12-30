@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using Cycon.Backends.Abstractions;
 using Cycon.Backends.Abstractions.Rendering;
 using Cycon.Core;
 using Cycon.Core.Metrics;
@@ -8,11 +9,14 @@ using Cycon.Core.Selection;
 using Cycon.Core.Settings;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
+using Cycon.Host.Interaction;
+using Cycon.Host.Input;
 using Cycon.Host.Services;
 using Cycon.Layout;
 using Cycon.Layout.Metrics;
 using Cycon.Layout.Scrolling;
 using Cycon.Rendering.Renderer;
+using Cycon.Rendering.Styling;
 
 namespace Cycon.Host.Hosting;
 
@@ -27,6 +31,9 @@ public sealed class ConsoleHostSession
     private readonly ConsoleRenderer _renderer;
     private readonly Cycon.Rendering.Glyphs.GlyphAtlas _atlas;
     private readonly GlyphAtlasData _atlasData;
+    private readonly SelectionStyle _selectionStyle;
+    private readonly InteractionReducer _interaction = new();
+    private readonly IClipboard _clipboard;
 
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
@@ -44,96 +51,90 @@ public sealed class ConsoleHostSession
     private bool? _pendingSetVSync;
     private readonly int _cellWidthPx;
     private readonly int _cellHeightPx;
-    private int _nextBlockId;
     private bool _pendingContentRebuild;
 
-    private ConsoleHostSession(string text, int resizeSettleMs, int rebuildThrottleMs)
+    private ConsoleHostSession(string text, IClipboard clipboard, int resizeSettleMs, int rebuildThrottleMs)
     {
         _resizeSettleMs = resizeSettleMs;
         _rebuildThrottleMs = rebuildThrottleMs;
 
+        _clipboard = clipboard;
         _document = CreateDocument(text);
-        _nextBlockId = _document.Transcript.Blocks.Count + 1;
+        FocusLastPrompt(_document, _interaction);
         _layoutSettings = new LayoutSettings();
         var fontService = new FontService();
         _atlas = fontService.LoadVgaAtlas(_layoutSettings);
         _layoutSettings.CellWidthPx = _atlas.CellWidthPx;
         _layoutSettings.CellHeightPx = _atlas.CellHeightPx;
         _layoutSettings.PaddingPolicy = PaddingPolicy.None;
+        _layoutSettings.BorderLeftRightPx = 5;
+        _layoutSettings.BorderTopBottomPx = 3;
         _cellWidthPx = _layoutSettings.CellWidthPx;
         _cellHeightPx = _layoutSettings.CellHeightPx;
 
         _atlasData = RenderFrameAdapter.Adapt(_atlas);
         _renderer = new ConsoleRenderer();
+        _selectionStyle = SelectionStyle.Default;
         _layoutEngine = new LayoutEngine();
     }
 
-    public static ConsoleHostSession CreateVga(string text, int resizeSettleMs = 80, int rebuildThrottleMs = 80)
+    public static ConsoleHostSession CreateVga(string text, IClipboard clipboard, int resizeSettleMs = 80, int rebuildThrottleMs = 80)
     {
-        return new ConsoleHostSession(text, resizeSettleMs, rebuildThrottleMs);
+        return new ConsoleHostSession(text, clipboard, resizeSettleMs, rebuildThrottleMs);
     }
 
     public GlyphAtlasData Atlas => _atlasData;
 
-    public void OnTextInput(char ch)
+    public void OnTextInput(HostTextInputEvent e)
     {
-        if (char.IsControl(ch))
+        if (_lastLayout is null)
         {
             return;
         }
 
-        var prompt = GetPromptBlock();
-        var caret = Math.Clamp(prompt.CaretIndex, 0, prompt.Input.Length);
-        prompt.Input = prompt.Input.Insert(caret, ch.ToString());
-        prompt.CaretIndex = caret + 1;
-        _document.Scroll.IsFollowingTail = true;
-        _pendingContentRebuild = true;
+        ApplyActions(_interaction.Handle(new InputEvent.Text(e.Ch), _lastLayout, _document.Transcript));
     }
 
-    public void OnBackspace()
+    public void OnKeyEvent(HostKeyEvent e)
     {
-        var prompt = GetPromptBlock();
-        if (prompt.CaretIndex <= 0 || prompt.Input.Length == 0)
+        if (!e.IsDown)
         {
             return;
         }
 
-        var caret = Math.Clamp(prompt.CaretIndex, 0, prompt.Input.Length);
-        prompt.Input = prompt.Input.Remove(caret - 1, 1);
-        prompt.CaretIndex = caret - 1;
-        _document.Scroll.IsFollowingTail = true;
-        _pendingContentRebuild = true;
-    }
-
-    public void OnMoveCaretLeft()
-    {
-        var prompt = GetPromptBlock();
-        prompt.CaretIndex = Math.Max(0, prompt.CaretIndex - 1);
-        _pendingContentRebuild = true;
-    }
-
-    public void OnMoveCaretRight()
-    {
-        var prompt = GetPromptBlock();
-        prompt.CaretIndex = Math.Min(prompt.Input.Length, prompt.CaretIndex + 1);
-        _pendingContentRebuild = true;
-    }
-
-    public void OnEnter()
-    {
-        var prompt = GetPromptBlock();
-        var command = prompt.Input;
-        if (!string.IsNullOrEmpty(command))
+        if (_lastLayout is null)
         {
-            var echo = new TextBlock(NewBlockId(), prompt.Prompt + command);
-            var insertIndex = Math.Max(0, _document.Transcript.Blocks.Count - 1);
-            _document.Transcript.Insert(insertIndex, echo);
+            return;
         }
 
-        prompt.Input = string.Empty;
-        prompt.CaretIndex = 0;
-        _document.Scroll.IsFollowingTail = true;
-        _pendingContentRebuild = true;
+        ApplyActions(_interaction.Handle(new InputEvent.KeyDown(e.Key, e.Mods), _lastLayout, _document.Transcript));
+    }
+
+    public void OnMouseEvent(HostMouseEvent e)
+    {
+        if (_lastLayout is null)
+        {
+            return;
+        }
+
+        var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
+        var adjustedX = e.X;
+        var adjustedY = e.Y + (scrollOffsetRows * _cellHeightPx);
+
+        var actions = e.Kind switch
+        {
+            HostMouseEventKind.Down when (e.Buttons & HostMouseButtons.Left) != 0 =>
+                _interaction.Handle(new InputEvent.MouseDown(adjustedX, adjustedY, MouseButton.Left, e.Mods), _lastLayout, _document.Transcript),
+            HostMouseEventKind.Move =>
+                _interaction.Handle(new InputEvent.MouseMove(adjustedX, adjustedY, e.Mods), _lastLayout, _document.Transcript),
+            HostMouseEventKind.Up when (e.Buttons & HostMouseButtons.Left) != 0 =>
+                _interaction.Handle(new InputEvent.MouseUp(adjustedX, adjustedY, MouseButton.Left, e.Mods), _lastLayout, _document.Transcript),
+            HostMouseEventKind.Wheel =>
+                _interaction.Handle(new InputEvent.MouseWheel(adjustedX, adjustedY, e.WheelDelta, e.Mods), _lastLayout, _document.Transcript),
+            _ => Array.Empty<HostAction>()
+        };
+
+        ApplyActions(actions);
     }
 
     public void Initialize(int initialFbW, int initialFbH)
@@ -272,22 +273,163 @@ public sealed class ConsoleHostSession
             .Split('\n', StringSplitOptions.None);
     }
 
-    private BlockId NewBlockId() => new(_nextBlockId++);
-
-    private PromptBlock GetPromptBlock()
+    private static void FocusLastPrompt(ConsoleDocument document, InteractionReducer interaction)
     {
-        if (_document.Transcript.Blocks.Count == 0)
+        var prompt = FindLastPrompt(document.Transcript);
+        if (prompt is null)
         {
-            throw new InvalidOperationException("Transcript has no blocks.");
+            interaction.State.Focused = null;
+            return;
         }
 
-        if (_document.Transcript.Blocks[^1] is not PromptBlock prompt)
-        {
-            throw new InvalidOperationException("Transcript must end with a PromptBlock.");
-        }
-
-        return prompt;
+        interaction.State.Focused = prompt.Id;
+        prompt.SetCaret(prompt.Input.Length);
     }
+
+    private void ApplyActions(IReadOnlyList<HostAction> actions)
+    {
+        if (actions.Count == 0)
+        {
+            _document.Selection.ActiveRange = _interaction.State.Selection;
+            return;
+        }
+
+        foreach (var action in actions)
+        {
+            switch (action)
+            {
+                case HostAction.Focus:
+                case HostAction.SetMouseCapture:
+                    break;
+                case HostAction.ClearSelection:
+                    _document.Selection.ActiveRange = null;
+                    break;
+                case HostAction.InsertText insert:
+                    if (TryGetPrompt(insert.PromptId, out var insertPrompt))
+                    {
+                        insertPrompt.InsertText(insert.Text);
+                        _document.Scroll.IsFollowingTail = true;
+                    }
+                    break;
+                case HostAction.Backspace backspace:
+                    if (TryGetPrompt(backspace.PromptId, out var backspacePrompt))
+                    {
+                        backspacePrompt.Backspace();
+                        _document.Scroll.IsFollowingTail = true;
+                    }
+                    break;
+                case HostAction.MoveCaret moveCaret:
+                    if (TryGetPrompt(moveCaret.PromptId, out var moveCaretPrompt))
+                    {
+                        moveCaretPrompt.MoveCaret(moveCaret.Delta);
+                    }
+                    break;
+                case HostAction.SetCaret setCaret:
+                    if (TryGetPrompt(setCaret.PromptId, out var setCaretPrompt))
+                    {
+                        setCaretPrompt.SetCaret(setCaret.Index);
+                    }
+                    break;
+                case HostAction.SubmitPrompt submit:
+                    CommitPromptIfAny(submit.PromptId);
+                    _document.Scroll.IsFollowingTail = true;
+                    break;
+                case HostAction.CopySelectionToClipboard:
+                    if (_interaction.TryGetSelectedText(_document.Transcript, out var selected))
+                    {
+                        _clipboard.SetText(selected);
+                    }
+                    break;
+                case HostAction.PasteFromClipboardIntoLastPrompt:
+                    PasteIntoLastPrompt();
+                    break;
+                case HostAction.RequestRebuild:
+                    _pendingContentRebuild = true;
+                    break;
+            }
+        }
+
+        _document.Selection.ActiveRange = _interaction.State.Selection;
+    }
+
+    private void PasteIntoLastPrompt()
+    {
+        var paste = _clipboard.GetText();
+        if (string.IsNullOrEmpty(paste))
+        {
+            return;
+        }
+
+        var promptId = _interaction.State.LastPromptId;
+        if (promptId is null || !TryGetPrompt(promptId.Value, out var prompt))
+        {
+            return;
+        }
+
+        prompt.InsertText(paste);
+        _document.Scroll.IsFollowingTail = true;
+    }
+
+    private void CommitPromptIfAny(BlockId promptId)
+    {
+        if (!TryGetPrompt(promptId, out var prompt))
+        {
+            return;
+        }
+
+        var command = prompt.Input;
+        var insertIndex = Math.Max(0, _document.Transcript.Blocks.Count - 1);
+        _document.Transcript.Insert(insertIndex, new TextBlock(new BlockId(AllocateNewBlockId()), prompt.Prompt + command));
+
+        if (!string.IsNullOrWhiteSpace(command))
+        {
+            _document.Transcript.Insert(insertIndex + 1, new TextBlock(new BlockId(AllocateNewBlockId()), "Unrecognized command."));
+        }
+
+        prompt.Input = string.Empty;
+        prompt.SetCaret(0);
+    }
+
+    private int AllocateNewBlockId()
+    {
+        var max = 0;
+        foreach (var block in _document.Transcript.Blocks)
+        {
+            max = Math.Max(max, block.Id.Value);
+        }
+
+        return max + 1;
+    }
+
+    private static PromptBlock? FindLastPrompt(Transcript transcript)
+    {
+        for (var i = transcript.Blocks.Count - 1; i >= 0; i--)
+        {
+            if (transcript.Blocks[i] is PromptBlock prompt)
+            {
+                return prompt;
+            }
+        }
+
+        return null;
+    }
+
+    private bool TryGetPrompt(BlockId id, out PromptBlock prompt)
+    {
+        foreach (var block in _document.Transcript.Blocks)
+        {
+            if (block.Id == id && block is PromptBlock p)
+            {
+                prompt = p;
+                return true;
+            }
+        }
+
+        prompt = null!;
+        return false;
+    }
+
+
 
     private void LogOnce(
         Cycon.Rendering.Glyphs.GlyphAtlas atlas,
@@ -402,10 +544,19 @@ public sealed class ConsoleHostSession
             ScrollAnchoring.RestoreFromAnchor(_document.Scroll, layout);
         }
 
-        var renderFrame = _renderer.Render(_document, layout, _atlas);
+        var renderFrame = _renderer.Render(_document, layout, _atlas, _selectionStyle);
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         var builtGrid = backendFrame.BuiltGrid;
         return (backendFrame, builtGrid, layout, renderFrame);
+    }
+
+    private static int GetScrollOffsetRows(ConsoleDocument document, LayoutFrame layout)
+    {
+        var maxScrollOffsetRows = layout.Grid.Rows <= 0
+            ? 0
+            : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
+
+        return Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
     }
 }
 

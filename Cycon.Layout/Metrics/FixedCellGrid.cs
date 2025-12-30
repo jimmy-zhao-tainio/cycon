@@ -51,19 +51,24 @@ public readonly struct FixedCellGrid
             throw new ArgumentOutOfRangeException(nameof(settings), "Cell metrics must be positive.");
         }
 
-        var cols = viewport.FramebufferWidthPx / settings.CellWidthPx;
-        var rows = viewport.FramebufferHeightPx / settings.CellHeightPx;
+        var borderX = Math.Max(0, settings.BorderLeftRightPx);
+        var borderY = Math.Max(0, settings.BorderTopBottomPx);
+        var availableWidth = Math.Max(0, viewport.FramebufferWidthPx - (borderX * 2));
+        var availableHeight = Math.Max(0, viewport.FramebufferHeightPx - (borderY * 2));
+
+        var cols = settings.CellWidthPx > 0 ? availableWidth / settings.CellWidthPx : 0;
+        var rows = settings.CellHeightPx > 0 ? availableHeight / settings.CellHeightPx : 0;
 
         var usedWidth = cols * settings.CellWidthPx;
         var usedHeight = rows * settings.CellHeightPx;
 
-        var leftoverX = viewport.FramebufferWidthPx - usedWidth;
-        var leftoverY = viewport.FramebufferHeightPx - usedHeight;
+        var leftoverX = availableWidth - usedWidth;
+        var leftoverY = availableHeight - usedHeight;
 
-        var paddingLeft = 0;
-        var paddingTop = 0;
-        var paddingRight = leftoverX;
-        var paddingBottom = leftoverY;
+        var paddingLeft = borderX;
+        var paddingTop = borderY;
+        var paddingRight = borderX + leftoverX;
+        var paddingBottom = borderY + leftoverY;
 
         return new FixedCellGrid(
             viewport.FramebufferWidthPx,

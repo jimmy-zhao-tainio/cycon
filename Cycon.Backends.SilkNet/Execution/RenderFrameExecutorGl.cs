@@ -140,46 +140,79 @@ public sealed class RenderFrameExecutorGl : IDisposable
         var vertices = new List<float>();
         foreach (var command in frame.Commands)
         {
-            if (command is not DrawGlyphRun glyphRun)
+            switch (command)
             {
-                continue;
-            }
-
-            foreach (var glyph in glyphRun.Glyphs)
-            {
-                if (!atlas.TryGetMetrics(glyph.Codepoint, out var metrics))
-                {
-                    continue;
-                }
-
-                if (metrics.Width == 0 || metrics.Height == 0)
-                {
-                    continue;
-                }
-
-                var x0 = glyph.X + glyphRun.X;
-                var y0 = glyph.Y + glyphRun.Y;
-                var x1 = x0 + metrics.Width;
-                var y1 = y0 + metrics.Height;
-
-                var u0 = metrics.AtlasX / (float)atlas.Width;
-                var u1 = (metrics.AtlasX + metrics.Width) / (float)atlas.Width;
-                var v0 = metrics.AtlasY / (float)atlas.Height;
-                var v1 = (metrics.AtlasY + metrics.Height) / (float)atlas.Height;
-
-                var (r, g, b, a) = ToColor(glyph.Rgba);
-
-                AddVertex(vertices, x0, y0, u0, v0, r, g, b, a);
-                AddVertex(vertices, x1, y0, u1, v0, r, g, b, a);
-                AddVertex(vertices, x1, y1, u1, v1, r, g, b, a);
-
-                AddVertex(vertices, x0, y0, u0, v0, r, g, b, a);
-                AddVertex(vertices, x1, y1, u1, v1, r, g, b, a);
-                AddVertex(vertices, x0, y1, u0, v1, r, g, b, a);
+                case DrawGlyphRun glyphRun:
+                    AddGlyphRunVertices(vertices, glyphRun, atlas);
+                    break;
+                case DrawQuad quad:
+                    AddQuadVertices(vertices, quad);
+                    break;
             }
         }
 
         return vertices;
+    }
+
+    private void AddGlyphRunVertices(List<float> vertices, DrawGlyphRun glyphRun, GlyphAtlasData atlas)
+    {
+        foreach (var glyph in glyphRun.Glyphs)
+        {
+            if (!atlas.TryGetMetrics(glyph.Codepoint, out var metrics))
+            {
+                continue;
+            }
+
+            if (metrics.Width == 0 || metrics.Height == 0)
+            {
+                continue;
+            }
+
+            var x0 = glyph.X + glyphRun.X;
+            var y0 = glyph.Y + glyphRun.Y;
+            var x1 = x0 + metrics.Width;
+            var y1 = y0 + metrics.Height;
+
+            var u0 = metrics.AtlasX / (float)atlas.Width;
+            var u1 = (metrics.AtlasX + metrics.Width) / (float)atlas.Width;
+            var v0 = metrics.AtlasY / (float)atlas.Height;
+            var v1 = (metrics.AtlasY + metrics.Height) / (float)atlas.Height;
+
+            var (r, g, b, a) = ToColor(glyph.Rgba);
+
+            AddVertex(vertices, x0, y0, u0, v0, r, g, b, a);
+            AddVertex(vertices, x1, y0, u1, v0, r, g, b, a);
+            AddVertex(vertices, x1, y1, u1, v1, r, g, b, a);
+
+            AddVertex(vertices, x0, y0, u0, v0, r, g, b, a);
+            AddVertex(vertices, x1, y1, u1, v1, r, g, b, a);
+            AddVertex(vertices, x0, y1, u0, v1, r, g, b, a);
+        }
+    }
+
+    private static void AddQuadVertices(List<float> vertices, DrawQuad quad)
+    {
+        if (quad.Width <= 0 || quad.Height <= 0)
+        {
+            return;
+        }
+
+        var x0 = quad.X;
+        var y0 = quad.Y;
+        var x1 = x0 + quad.Width;
+        var y1 = y0 + quad.Height;
+
+        const float solidU = -1f;
+        const float solidV = -1f;
+        var (r, g, b, a) = ToColor(quad.Rgba);
+
+        AddVertex(vertices, x0, y0, solidU, solidV, r, g, b, a);
+        AddVertex(vertices, x1, y0, solidU, solidV, r, g, b, a);
+        AddVertex(vertices, x1, y1, solidU, solidV, r, g, b, a);
+
+        AddVertex(vertices, x0, y0, solidU, solidV, r, g, b, a);
+        AddVertex(vertices, x1, y1, solidU, solidV, r, g, b, a);
+        AddVertex(vertices, x0, y1, solidU, solidV, r, g, b, a);
     }
 
     private static void AddVertex(List<float> vertices, float x, float y, float u, float v, float r, float g, float b, float a)

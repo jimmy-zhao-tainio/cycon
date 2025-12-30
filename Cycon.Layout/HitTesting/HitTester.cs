@@ -26,7 +26,17 @@ public sealed class HitTester
 
         if (!map.TryGetLine(row, out var line))
         {
-            return null;
+            if (map.Lines.Count == 0)
+            {
+                return null;
+            }
+
+            var lastRow = map.Lines[^1].RowIndex;
+            var clampedRow = Math.Clamp(row, 0, lastRow);
+            if (!map.TryGetLine(clampedRow, out line))
+            {
+                line = map.Lines[^1];
+            }
         }
 
         var clampedCol = col < 0 ? 0 : col;

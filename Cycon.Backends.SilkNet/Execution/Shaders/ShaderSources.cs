@@ -32,8 +32,13 @@ uniform sampler2D uAtlas;
 
 void main()
 {
-    vec4 t = texture(uAtlas, vTexCoord);
-    float alpha = max(t.r, max(t.g, t.b));
+    float alpha = 1.0;
+    if (vTexCoord.x >= 0.0)
+    {
+        vec4 t = texture(uAtlas, vTexCoord);
+        alpha = max(t.r, max(t.g, t.b));
+    }
+
     FragColor = vec4(vColor.rgb, vColor.a * alpha);
 }
 ";
