@@ -20,12 +20,12 @@ public sealed class InteractionReducerSequenceTests
         var reducer = new InteractionReducer();
 
         DragSelect(reducer, layout, document.Transcript, row: 0, colStart: 0, colEnd: 5);
-        Assert.True(reducer.State.Selection is { } r && r.Anchor != r.Caret);
+        Assert.True(reducer.Snapshot.Selection is { } r && r.Anchor != r.Caret);
 
         var actions = reducer.Handle(new InputEvent.Text('a'), layout, document.Transcript);
         ApplyActions(actions, reducer, document, clipboardText: null);
 
-        Assert.Null(reducer.State.Selection);
+        Assert.Null(reducer.Snapshot.Selection);
         Assert.Equal("a", prompt.Input);
         Assert.Equal(1, prompt.CaretIndex);
     }
@@ -54,16 +54,16 @@ public sealed class InteractionReducerSequenceTests
         var (x, y) = CellToPixel(layout, row: 0, col: 1);
         reducer.Handle(new InputEvent.MouseDown(x, y, MouseButton.Left, HostKeyModifiers.None), layout, document.Transcript);
 
-        Assert.True(reducer.State.IsSelecting);
-        Assert.NotNull(reducer.State.MouseCaptured);
-        Assert.NotNull(reducer.State.Selection);
+        Assert.True(reducer.Snapshot.IsSelecting);
+        Assert.NotNull(reducer.Snapshot.MouseCaptured);
+        Assert.NotNull(reducer.Snapshot.Selection);
 
         reducer.Handle(new InputEvent.KeyDown(HostKey.Escape, HostKeyModifiers.None), layout, document.Transcript);
 
-        Assert.False(reducer.State.IsSelecting);
-        Assert.Null(reducer.State.MouseCaptured);
-        Assert.Null(reducer.State.Selection);
-        Assert.Equal(prompt.Id, reducer.State.Focused);
+        Assert.False(reducer.Snapshot.IsSelecting);
+        Assert.Null(reducer.Snapshot.MouseCaptured);
+        Assert.Null(reducer.Snapshot.Selection);
+        Assert.Equal(prompt.Id, reducer.Snapshot.Focused);
     }
 
     [Fact]
@@ -73,14 +73,14 @@ public sealed class InteractionReducerSequenceTests
         var reducer = new InteractionReducer();
 
         DragSelect(reducer, layout, document.Transcript, row: 0, colStart: 0, colEnd: 5);
-        Assert.NotNull(reducer.State.Selection);
+        Assert.NotNull(reducer.Snapshot.Selection);
 
         var actions = reducer.Handle(new InputEvent.KeyDown(HostKey.V, HostKeyModifiers.Control), layout, document.Transcript);
         ApplyActions(actions, reducer, document, clipboardText: "XYZ");
 
         Assert.Equal("XYZ", prompt.Input);
         Assert.Equal(3, prompt.CaretIndex);
-        Assert.Null(reducer.State.Selection);
+        Assert.Null(reducer.Snapshot.Selection);
     }
 
     [Fact]
@@ -91,14 +91,14 @@ public sealed class InteractionReducerSequenceTests
 
         var (x0, y0) = CellToPixel(layout, row: 0, col: 0);
         reducer.Handle(new InputEvent.MouseDown(x0, y0, MouseButton.Left, HostKeyModifiers.None), layout, document.Transcript);
-        Assert.NotNull(reducer.State.MouseCaptured);
+        Assert.NotNull(reducer.Snapshot.MouseCaptured);
 
         var (x1, y1) = CellToPixel(layout, row: 0, col: 2);
         var actions = reducer.Handle(new InputEvent.MouseDown(x1, y1, MouseButton.Left, HostKeyModifiers.None), layout, document.Transcript);
 
         Assert.NotEmpty(actions);
-        Assert.NotNull(reducer.State.MouseCaptured);
-        Assert.True(reducer.State.IsSelecting);
+        Assert.NotNull(reducer.Snapshot.MouseCaptured);
+        Assert.True(reducer.Snapshot.IsSelecting);
     }
 
     [Fact]
@@ -109,21 +109,21 @@ public sealed class InteractionReducerSequenceTests
 
         var (x0, y0) = CellToPixel(layout, row: 0, col: 0);
         reducer.Handle(new InputEvent.MouseDown(x0, y0, MouseButton.Left, HostKeyModifiers.None), layout, document.Transcript);
-        Assert.True(reducer.State.IsSelecting);
-        Assert.NotNull(reducer.State.MouseCaptured);
+        Assert.True(reducer.Snapshot.IsSelecting);
+        Assert.NotNull(reducer.Snapshot.MouseCaptured);
 
         var (x1, y1) = CellToPixel(layout, row: 0, col: 4);
         reducer.Handle(new InputEvent.MouseMove(x1, y1, HostMouseButtons.Left, HostKeyModifiers.None), layout, document.Transcript);
-        Assert.True(reducer.State.IsSelecting);
+        Assert.True(reducer.Snapshot.IsSelecting);
 
         reducer.Handle(new InputEvent.MouseMove(x1, y1, HostMouseButtons.None, HostKeyModifiers.None), layout, document.Transcript);
-        Assert.False(reducer.State.IsSelecting);
-        Assert.Null(reducer.State.MouseCaptured);
+        Assert.False(reducer.Snapshot.IsSelecting);
+        Assert.Null(reducer.Snapshot.MouseCaptured);
 
         var actions = reducer.Handle(new InputEvent.MouseDown(x1, y1, MouseButton.Left, HostKeyModifiers.None), layout, document.Transcript);
         Assert.NotEmpty(actions);
-        Assert.True(reducer.State.IsSelecting);
-        Assert.NotNull(reducer.State.MouseCaptured);
+        Assert.True(reducer.Snapshot.IsSelecting);
+        Assert.NotNull(reducer.Snapshot.MouseCaptured);
     }
 
     [Fact]
@@ -274,7 +274,7 @@ public sealed class InteractionReducerSequenceTests
                     break;
                 case HostAction.PasteFromClipboardIntoLastPrompt:
                     if (!string.IsNullOrEmpty(clipboardText) &&
-                        reducer.State.LastPromptId is { } lastPromptId &&
+                        reducer.Snapshot.LastPromptId is { } lastPromptId &&
                         TryGetPrompt(document.Transcript, lastPromptId, out var pastePrompt))
                     {
                         pastePrompt.InsertText(clipboardText);

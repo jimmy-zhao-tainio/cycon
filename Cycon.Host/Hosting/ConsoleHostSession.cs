@@ -55,6 +55,8 @@ public sealed class ConsoleHostSession
     private readonly int _cellWidthPx;
     private readonly int _cellHeightPx;
     private bool _pendingContentRebuild;
+    private byte _lastCaretAlpha = 0xFF;
+    private long _lastCaretRenderTicks;
 
     private ConsoleHostSession(string text, IClipboard clipboard, int resizeSettleMs, int rebuildThrottleMs)
     {
@@ -63,7 +65,8 @@ public sealed class ConsoleHostSession
 
         _clipboard = clipboard;
         _document = CreateDocument(text);
-        FocusLastPrompt(_document, _interaction);
+        _interaction.Initialize(_document.Transcript);
+        SetCaretToEndOfLastPrompt(_document.Transcript);
         _layoutSettings = new LayoutSettings();
         var fontService = new FontService();
         _atlas = fontService.LoadVgaAtlas(_layoutSettings);
@@ -158,6 +161,8 @@ public sealed class ConsoleHostSession
             }
         }
 
+        var caretAlphaNow = ComputeCaretAlpha(nowTicks);
+
         var renderedGrid = _lastFrame?.BuiltGrid ?? default;
 
         var gridMismatch = _lastFrame is null || renderedGrid != currentGrid;
@@ -185,13 +190,16 @@ public sealed class ConsoleHostSession
                 var (frame, builtGrid, layout, renderFrame) = BuildFrameFor(
                     snapW,
                     snapH,
-                    restoreAnchor);
+                    restoreAnchor,
+                    caretAlphaNow);
 
                 _lastFrame = frame;
                 _renderedGrid = builtGrid;
                 _lastLayout = layout;
                 LogOnce(_atlas, layout, renderFrame, snapW, snapH);
                 _lastRebuildTicks = passNowTicks;
+                _lastCaretAlpha = caretAlphaNow;
+                _lastCaretRenderTicks = passNowTicks;
 
                 var verifyGrid = _latestGrid;
                 if (_renderedGrid == verifyGrid)
@@ -219,15 +227,20 @@ public sealed class ConsoleHostSession
             var (frame, builtGrid, layout, renderFrame) = BuildFrameFor(
                 framebufferWidth,
                 framebufferHeight,
-                restoreAnchor: false);
+                restoreAnchor: false,
+                caretAlpha: caretAlphaNow);
 
             _lastFrame = frame;
             _renderedGrid = builtGrid;
             _lastLayout = layout;
             LogOnce(_atlas, layout, renderFrame, framebufferWidth, framebufferHeight);
             _lastRebuildTicks = Stopwatch.GetTimestamp();
+            _lastCaretAlpha = caretAlphaNow;
+            _lastCaretRenderTicks = _lastRebuildTicks;
             _pendingContentRebuild = false;
         }
+
+        MaybeUpdateCaret(framebufferWidth, framebufferHeight, nowTicks, framebufferSettled);
 
         if (_lastFrame is null)
         {
@@ -237,6 +250,72 @@ public sealed class ConsoleHostSession
         var setVSync = _pendingSetVSync;
         _pendingSetVSync = null;
         return new FrameTickResult(framebufferWidth, framebufferHeight, _lastFrame, setVSync);
+    }
+
+    private void MaybeUpdateCaret(int framebufferWidth, int framebufferHeight, long nowTicks, bool framebufferSettled)
+    {
+        if (!framebufferSettled || _lastLayout is null)
+        {
+            return;
+        }
+
+        var elapsedSinceCaretMs = (nowTicks - _lastCaretRenderTicks) * 1000.0 / Stopwatch.Frequency;
+        if (_lastCaretRenderTicks != 0 && elapsedSinceCaretMs < 33)
+        {
+            return;
+        }
+
+        var caretAlpha = ComputeCaretAlpha(nowTicks);
+        if (caretAlpha == _lastCaretAlpha)
+        {
+            return;
+        }
+
+        var renderFrame = _renderer.Render(_document, _lastLayout, _atlas, _selectionStyle, caretAlpha);
+        var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
+        _lastFrame = backendFrame;
+        _renderedGrid = backendFrame.BuiltGrid;
+        _lastCaretAlpha = caretAlpha;
+        _lastCaretRenderTicks = nowTicks;
+    }
+
+    private static byte ComputeCaretAlpha(long nowTicks)
+    {
+        // Fade-in/out blink (gimmicky but readable): off → fade in → on → fade out → off.
+        const double periodSeconds = 1.2;
+        var t = nowTicks / (double)Stopwatch.Frequency;
+        var phase = t % periodSeconds;
+        var p = phase / periodSeconds; // 0..1
+
+        static double SmoothStep(double x)
+        {
+            x = Math.Clamp(x, 0.0, 1.0);
+            return x * x * (3.0 - 2.0 * x);
+        }
+
+        double a;
+        if (p < 0.15)
+        {
+            a = 0.0;
+        }
+        else if (p < 0.25)
+        {
+            a = SmoothStep((p - 0.15) / 0.10);
+        }
+        else if (p < 0.65)
+        {
+            a = 1.0;
+        }
+        else if (p < 0.75)
+        {
+            a = 1.0 - SmoothStep((p - 0.65) / 0.10);
+        }
+        else
+        {
+            a = 0.0;
+        }
+
+        return (byte)Math.Clamp((int)Math.Round(a * 255.0), 0, 255);
     }
 
     private void DrainPendingEvents(int framebufferWidth, int framebufferHeight)
@@ -286,16 +365,21 @@ public sealed class ConsoleHostSession
             return;
         }
 
+        var nowTicks = Stopwatch.GetTimestamp();
+        var caretAlphaNow = ComputeCaretAlpha(nowTicks);
         var (frame, builtGrid, layout, renderFrame) = BuildFrameFor(
             framebufferWidth,
             framebufferHeight,
-            restoreAnchor: false);
+            restoreAnchor: false,
+            caretAlpha: caretAlphaNow);
 
         _lastFrame = frame;
         _renderedGrid = builtGrid;
         _lastLayout = layout;
         LogOnce(_atlas, layout, renderFrame, framebufferWidth, framebufferHeight);
-        _lastRebuildTicks = Stopwatch.GetTimestamp();
+        _lastRebuildTicks = nowTicks;
+        _lastCaretAlpha = caretAlphaNow;
+        _lastCaretRenderTicks = nowTicks;
     }
 
     private InputEvent? Translate(PendingEvent e)
@@ -362,16 +446,14 @@ public sealed class ConsoleHostSession
             .Split('\n', StringSplitOptions.None);
     }
 
-    private static void FocusLastPrompt(ConsoleDocument document, InteractionReducer interaction)
+    private static void SetCaretToEndOfLastPrompt(Transcript transcript)
     {
-        var prompt = FindLastPrompt(document.Transcript);
+        var prompt = FindLastPrompt(transcript);
         if (prompt is null)
         {
-            interaction.State.Focused = null;
             return;
         }
 
-        interaction.State.Focused = prompt.Id;
         prompt.SetCaret(prompt.Input.Length);
     }
 
@@ -379,7 +461,7 @@ public sealed class ConsoleHostSession
     {
         if (actions.Count == 0)
         {
-            _document.Selection.ActiveRange = _interaction.State.Selection;
+            _document.Selection.ActiveRange = _interaction.Snapshot.Selection;
             return;
         }
 
@@ -438,7 +520,7 @@ public sealed class ConsoleHostSession
             }
         }
 
-        _document.Selection.ActiveRange = _interaction.State.Selection;
+        _document.Selection.ActiveRange = _interaction.Snapshot.Selection;
     }
 
     private void PasteIntoLastPrompt()
@@ -449,7 +531,7 @@ public sealed class ConsoleHostSession
             return;
         }
 
-        var promptId = _interaction.State.LastPromptId;
+        var promptId = _interaction.Snapshot.LastPromptId;
         if (promptId is null || !TryGetPrompt(promptId.Value, out var prompt))
         {
             return;
@@ -624,7 +706,8 @@ public sealed class ConsoleHostSession
         BuildFrameFor(
             int framebufferWidth,
             int framebufferHeight,
-            bool restoreAnchor)
+            bool restoreAnchor,
+            byte caretAlpha)
     {
         var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
         var layout = _layoutEngine.Layout(_document, _layoutSettings, viewport);
@@ -633,7 +716,7 @@ public sealed class ConsoleHostSession
             ScrollAnchoring.RestoreFromAnchor(_document.Scroll, layout);
         }
 
-        var renderFrame = _renderer.Render(_document, layout, _atlas, _selectionStyle);
+        var renderFrame = _renderer.Render(_document, layout, _atlas, _selectionStyle, caretAlpha: caretAlpha);
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         var builtGrid = backendFrame.BuiltGrid;
         return (backendFrame, builtGrid, layout, renderFrame);

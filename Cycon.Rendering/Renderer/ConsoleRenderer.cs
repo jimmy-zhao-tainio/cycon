@@ -15,7 +15,12 @@ namespace Cycon.Rendering.Renderer;
 
 public sealed class ConsoleRenderer
 {
-    public RenderFrame Render(ConsoleDocument document, LayoutFrame layout, GlyphAtlas atlas, SelectionStyle selectionStyle)
+    public RenderFrame Render(
+        ConsoleDocument document,
+        LayoutFrame layout,
+        GlyphAtlas atlas,
+        SelectionStyle selectionStyle,
+        byte caretAlpha = 0xFF)
     {
         var defaultForeground = document.Settings.DefaultTextStyle.ForegroundRgba;
         var frame = new RenderFrame();
@@ -111,7 +116,11 @@ public sealed class ConsoleRenderer
 
                     var glyphX = cellX + metrics.BearingX;
                     var glyphY = baselineY - metrics.BearingY;
-                    frame.Add(new DrawGlyphRun(0, 0, new[] { new GlyphInstance(caretCodepoint, glyphX, glyphY, defaultForeground) }));
+                    if (caretAlpha != 0)
+                    {
+                        var caretColor = WithAlpha(defaultForeground, caretAlpha);
+                        frame.Add(new DrawGlyphRun(0, 0, new[] { new GlyphInstance(caretCodepoint, glyphX, glyphY, caretColor) }));
+                    }
                 }
             }
         }
@@ -328,5 +337,10 @@ public sealed class ConsoleRenderer
 
             return true;
         }
+    }
+
+    private static int WithAlpha(int rgba, byte alpha)
+    {
+        return (rgba & unchecked((int)0xFFFFFF00)) | alpha;
     }
 }

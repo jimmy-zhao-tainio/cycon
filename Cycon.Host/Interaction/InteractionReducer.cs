@@ -16,7 +16,17 @@ public sealed class InteractionReducer
     private readonly InteractionState _state = new();
     private readonly HitTester _hitTester = new();
 
-    public InteractionState State => _state;
+    public InteractionSnapshot Snapshot =>
+        new(_state.Focused, _state.MouseCaptured, _state.IsSelecting, _state.Selection, _state.CurrentMods, _state.LastPromptId);
+
+    public void Initialize(Transcript transcript)
+    {
+        _state.LastPromptId = FindLastPromptId(transcript);
+        _state.Focused = _state.LastPromptId;
+        _state.MouseCaptured = null;
+        _state.IsSelecting = false;
+        _state.Selection = null;
+    }
 
     public IReadOnlyList<HostAction> Handle(InputEvent e, LayoutFrame frame, Transcript transcript)
     {
