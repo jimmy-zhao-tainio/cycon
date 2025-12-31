@@ -4,6 +4,7 @@ using System.Diagnostics;
 using Cycon.Backends.Abstractions;
 using Cycon.Backends.Abstractions.Rendering;
 using Cycon.Core;
+using Cycon.Core.Fonts;
 using Cycon.Core.Metrics;
 using Cycon.Core.Scrolling;
 using Cycon.Core.Selection;
@@ -30,7 +31,7 @@ public sealed class ConsoleHostSession
     private readonly LayoutSettings _layoutSettings;
     private readonly LayoutEngine _layoutEngine;
     private readonly ConsoleRenderer _renderer;
-    private readonly Cycon.Rendering.Glyphs.GlyphAtlas _atlas;
+    private readonly IConsoleFont _font;
     private readonly GlyphAtlasData _atlasData;
     private readonly SelectionStyle _selectionStyle;
     private readonly InteractionReducer _interaction = new();
@@ -52,8 +53,6 @@ public sealed class ConsoleHostSession
     private bool _logged;
     private bool _initialized;
     private bool? _pendingSetVSync;
-    private readonly int _cellWidthPx;
-    private readonly int _cellHeightPx;
     private bool _pendingContentRebuild;
     private byte _lastCaretAlpha = 0xFF;
     private long _lastCaretRenderTicks;
@@ -69,16 +68,12 @@ public sealed class ConsoleHostSession
         SetCaretToEndOfLastPrompt(_document.Transcript);
         _layoutSettings = new LayoutSettings();
         var fontService = new FontService();
-        _atlas = fontService.LoadVgaAtlas(_layoutSettings);
-        _layoutSettings.CellWidthPx = _atlas.CellWidthPx;
-        _layoutSettings.CellHeightPx = _atlas.CellHeightPx;
+        _font = fontService.CreateDefaultFont(_layoutSettings);
         _layoutSettings.PaddingPolicy = PaddingPolicy.None;
         _layoutSettings.BorderLeftRightPx = 5;
         _layoutSettings.BorderTopBottomPx = 3;
-        _cellWidthPx = _layoutSettings.CellWidthPx;
-        _cellHeightPx = _layoutSettings.CellHeightPx;
 
-        _atlasData = RenderFrameAdapter.Adapt(_atlas);
+        _atlasData = _font.Atlas;
         _renderer = new ConsoleRenderer();
         _selectionStyle = SelectionStyle.Default;
         _layoutEngine = new LayoutEngine();
@@ -196,7 +191,7 @@ public sealed class ConsoleHostSession
                 _lastFrame = frame;
                 _renderedGrid = builtGrid;
                 _lastLayout = layout;
-                LogOnce(_atlas, layout, renderFrame, snapW, snapH);
+                LogOnce(_atlasData, layout, renderFrame, snapW, snapH);
                 _lastRebuildTicks = passNowTicks;
                 _lastCaretAlpha = caretAlphaNow;
                 _lastCaretRenderTicks = passNowTicks;
@@ -233,7 +228,7 @@ public sealed class ConsoleHostSession
             _lastFrame = frame;
             _renderedGrid = builtGrid;
             _lastLayout = layout;
-            LogOnce(_atlas, layout, renderFrame, framebufferWidth, framebufferHeight);
+            LogOnce(_atlasData, layout, renderFrame, framebufferWidth, framebufferHeight);
             _lastRebuildTicks = Stopwatch.GetTimestamp();
             _lastCaretAlpha = caretAlphaNow;
             _lastCaretRenderTicks = _lastRebuildTicks;
@@ -271,7 +266,7 @@ public sealed class ConsoleHostSession
             return;
         }
 
-        var renderFrame = _renderer.Render(_document, _lastLayout, _atlas, _selectionStyle, caretAlpha);
+        var renderFrame = _renderer.Render(_document, _lastLayout, _font, _selectionStyle, caretAlpha);
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         _lastFrame = backendFrame;
         _renderedGrid = backendFrame.BuiltGrid;
@@ -376,7 +371,7 @@ public sealed class ConsoleHostSession
         _lastFrame = frame;
         _renderedGrid = builtGrid;
         _lastLayout = layout;
-        LogOnce(_atlas, layout, renderFrame, framebufferWidth, framebufferHeight);
+        LogOnce(_atlasData, layout, renderFrame, framebufferWidth, framebufferHeight);
         _lastRebuildTicks = nowTicks;
         _lastCaretAlpha = caretAlphaNow;
         _lastCaretRenderTicks = nowTicks;
@@ -404,7 +399,7 @@ public sealed class ConsoleHostSession
 
         var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
         var adjustedX = e.X;
-        var adjustedY = e.Y + (scrollOffsetRows * _cellHeightPx);
+        var adjustedY = e.Y + (scrollOffsetRows * _font.Metrics.CellHeightPx);
 
         return e.Kind switch
         {
@@ -603,7 +598,7 @@ public sealed class ConsoleHostSession
 
 
     private void LogOnce(
-        Cycon.Rendering.Glyphs.GlyphAtlas atlas,
+        GlyphAtlasData atlas,
         LayoutFrame layout,
         Cycon.Rendering.RenderFrame renderFrame,
         int framebufferWidth,
@@ -655,13 +650,9 @@ public sealed class ConsoleHostSession
 
     private static GridSize ComputeGrid(int framebufferWidth, int framebufferHeight, LayoutSettings settings)
     {
-        var cellW = settings.CellWidthPx;
-        var cellH = settings.CellHeightPx;
-
-        var cols = cellW > 0 ? framebufferWidth / cellW : 0;
-        var rows = cellH > 0 ? framebufferHeight / cellH : 0;
-
-        return new GridSize(cols, rows);
+        var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
+        var grid = FixedCellGrid.FromViewport(viewport, settings);
+        return new GridSize(grid.Cols, grid.Rows);
     }
 
     private void HandleFramebufferChanged(int width, int height, long nowTicks)
@@ -677,9 +668,7 @@ public sealed class ConsoleHostSession
 
         _lastFramebufferChangeTicks = nowTicks;
 
-        var cols = _cellWidthPx > 0 ? width / _cellWidthPx : 0;
-        var rows = _cellHeightPx > 0 ? height / _cellHeightPx : 0;
-        var newGrid = new GridSize(cols, rows);
+        var newGrid = ComputeGrid(width, height, _layoutSettings);
 
         if (newGrid != _latestGrid)
         {
@@ -716,7 +705,7 @@ public sealed class ConsoleHostSession
             ScrollAnchoring.RestoreFromAnchor(_document.Scroll, layout);
         }
 
-        var renderFrame = _renderer.Render(_document, layout, _atlas, _selectionStyle, caretAlpha: caretAlpha);
+        var renderFrame = _renderer.Render(_document, layout, _font, _selectionStyle, caretAlpha: caretAlpha);
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         var builtGrid = backendFrame.BuiltGrid;
         return (backendFrame, builtGrid, layout, renderFrame);

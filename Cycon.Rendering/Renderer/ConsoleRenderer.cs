@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Cycon.Core;
+using Cycon.Core.Fonts;
 using Cycon.Core.Metrics;
 using Cycon.Core.Selection;
 using Cycon.Core.Transcript;
@@ -8,7 +9,6 @@ using Cycon.Core.Transcript.Blocks;
 using Cycon.Layout;
 using Cycon.Layout.Metrics;
 using Cycon.Rendering.Commands;
-using Cycon.Rendering.Glyphs;
 using Cycon.Rendering.Styling;
 
 namespace Cycon.Rendering.Renderer;
@@ -18,7 +18,7 @@ public sealed class ConsoleRenderer
     public RenderFrame Render(
         ConsoleDocument document,
         LayoutFrame layout,
-        GlyphAtlas atlas,
+        IConsoleFont font,
         SelectionStyle selectionStyle,
         byte caretAlpha = 0xFF)
     {
@@ -30,6 +30,7 @@ public sealed class ConsoleRenderer
         var pendingCaret = default(CaretQuad?);
         var selection = ComputeSelectionBounds(document);
         var selectionBackground = selectionStyle.SelectedBackgroundRgba;
+        var fontMetrics = font.Metrics;
 
         foreach (var line in layout.Lines)
         {
@@ -78,22 +79,19 @@ public sealed class ConsoleRenderer
                 var charIndex = line.Start + i;
                 var codepoint = text[charIndex];
 
-                if (!atlas.TryGetMetrics(codepoint, out var metrics))
-                {
-                    continue;
-                }
+                var glyph = font.MapGlyph(codepoint);
 
                 var cellX = grid.PaddingLeftPx + (i * grid.CellWidthPx);
                 var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
-                var baselineY = cellY + atlas.BaselinePx;
+                var baselineY = cellY + fontMetrics.BaselinePx;
 
-                var glyphX = cellX + metrics.BearingX;
-                var glyphY = baselineY - metrics.BearingY;
+                var glyphX = cellX + glyph.BearingX;
+                var glyphY = baselineY - glyph.BearingY;
 
                 var color = selection is { } bounds && IsSelectablePromptChar(block, charIndex) && bounds.Contains(line.BlockIndex, charIndex)
                     ? selectionStyle.SelectedForegroundRgba
                     : defaultForeground;
-                glyphs.Add(new GlyphInstance(codepoint, glyphX, glyphY, color));
+                glyphs.Add(new GlyphInstance(glyph.Codepoint, glyphX, glyphY, color));
             }
 
             if (glyphs.Count > 0)
@@ -108,19 +106,17 @@ public sealed class ConsoleRenderer
             if (rowOnScreen >= 0 && rowOnScreen < grid.Rows)
             {
                 const int caretCodepoint = '_';
-                if (atlas.TryGetMetrics(caretCodepoint, out var metrics))
-                {
-                    var cellX = grid.PaddingLeftPx + (caretQuad.ColIndex * grid.CellWidthPx);
-                    var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
-                    var baselineY = cellY + atlas.BaselinePx;
+                var glyph = font.MapGlyph(caretCodepoint);
+                var cellX = grid.PaddingLeftPx + (caretQuad.ColIndex * grid.CellWidthPx);
+                var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
+                var baselineY = cellY + fontMetrics.BaselinePx;
 
-                    var glyphX = cellX + metrics.BearingX;
-                    var glyphY = baselineY - metrics.BearingY;
-                    if (caretAlpha != 0)
-                    {
-                        var caretColor = WithAlpha(defaultForeground, caretAlpha);
-                        frame.Add(new DrawGlyphRun(0, 0, new[] { new GlyphInstance(caretCodepoint, glyphX, glyphY, caretColor) }));
-                    }
+                var glyphX = cellX + glyph.BearingX;
+                var glyphY = baselineY - glyph.BearingY;
+                if (caretAlpha != 0)
+                {
+                    var caretColor = WithAlpha(defaultForeground, caretAlpha);
+                    frame.Add(new DrawGlyphRun(0, 0, new[] { new GlyphInstance(glyph.Codepoint, glyphX, glyphY, caretColor) }));
                 }
             }
         }
