@@ -1,0 +1,59 @@
+Cycon Blocks Direction (Native UI Bubble)
+
+Cycon is not an OS shell emulator. Cycon’s core abstraction is a Transcript: a list of Blocks.
+One block has input focus. Blocks can be inert or active. “Job/task/process” is not a Cycon-level concept.
+If something runs in the background, that is an implementation detail inside a block.
+
+Encoding
+This file must be UTF-8. Avoid smart quotes and avoid mojibake (â€œâ€ â€™).
+
+Block model (repo truth)
+Core interfaces:
+- IBlock: Id (BlockId), Kind (BlockKind)
+- ITextSelectable: selection/copy surface
+- ITextEditable: editing surface (PromptBlock input)
+
+Current BlockKind values include:
+Text, Prompt, Image, Scene3D
+(Only Text/Prompt are actively wired today; Image/Scene3D are stubs.)
+
+Stateful / active blocks
+Blocks can optionally implement capability interfaces. The framework should reason about capabilities, not “jobs”.
+
+Repo truth (current code):
+- BlockRunState: Idle, Running, Completed, Failed, Cancelled
+- StopLevel: Soft, Terminate, Kill
+- IRunnableBlock: exposes State and Tick(TimeSpan dt)
+- IStoppableBlock: can be stopped (StopLevel)
+- IProgressBlock: exposes a progress snapshot (fraction/phase)
+
+Tick semantics
+Tick is a UI-facing pump. It must remain cheap and deterministic from Cycon’s perspective:
+- Tick updates block-visible state and drives animations/progress visibility.
+- Heavy work should not be done inside Tick.
+- If a block needs heavy work, it should do it internally (e.g., Task) and feed deltas into state that Tick can apply.
+
+Focus and stopping
+Focus is block-level (InteractionState focuses blocks / caret / selection).
+Ctrl-C should operate at the block level:
+- If selection exists: copy selection (current behavior).
+- Else: attempt to stop the currently focused block if it implements IStoppableBlock.
+Cycon should not route Ctrl-C via job ids or scheduler concepts.
+
+Implemented so far (current repo)
+- Blocks: TextBlock, PromptBlock are wired and laid out/rendered.
+- PromptBlock supports job-owned prompts via PromptOwner, but the direction is to avoid “job” as a Cycon concept.
+- Ctrl-C routes to stopping the focused block (block capability based).
+- Command history navigation (Up/Down), clear, exit, and exit wiring through the runner exist.
+- Session ticks runnable blocks (repo ticks Running runnable blocks).
+
+Not implemented yet (planned)
+- Delta inbox helper pattern for non-native blocks (worker enqueues deltas; Tick applies them).
+- Command API that returns blocks directly (e.g., IBlockCommandHandler.CreateBlock(...)).
+- JobAdapterBlock or equivalent shim if legacy “job/event scheduler” remains temporarily as an implementation detail.
+- A demo non-native block proving the delta inbox + Tick-applies-deltas model (e.g., countdown/spinner/progress demo).
+
+Design rules (anti-drift)
+- Cycon framework code should not “know about jobs”.
+- Any scheduling/process/task semantics must live behind blocks as implementation detail.
+- UI behavior (focus, stop, progress display) must be expressed in terms of block capabilities only.

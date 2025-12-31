@@ -8,7 +8,6 @@ using Cycon.Core.Transcript.Blocks;
 using Cycon.Host.Input;
 using Cycon.Layout;
 using Cycon.Layout.HitTesting;
-using Cycon.Runtime.Jobs;
 
 namespace Cycon.Host.Interaction;
 
@@ -176,7 +175,8 @@ public sealed class InteractionReducer
             }
             else
             {
-                actions.Add(new HostAction.CancelFocusedJobWithLevel(CancelLevel.Kill));
+                actions.Add(new HostAction.StopFocusedBlockWithLevel(StopLevel.Kill));
+                actions.Add(new HostAction.RequestRebuild());
             }
 
             return actions;

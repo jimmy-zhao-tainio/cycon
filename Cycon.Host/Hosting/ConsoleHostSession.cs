@@ -16,6 +16,7 @@ using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Host.Commands;
+using Cycon.Host.Commands.Blocks;
 using Cycon.Host.Commands.Handlers;
 using Cycon.Host.Interaction;
 using Cycon.Host.Input;
@@ -48,12 +49,14 @@ public sealed class ConsoleHostSession
     private readonly object _pendingEventsLock = new();
     private readonly JobScheduler _jobScheduler;
     private readonly CommandDispatcher _commandDispatcher;
+    private readonly BlockCommandRegistry _blockCommands;
     private readonly Dictionary<JobId, JobProjection> _jobProjections = new();
-    private JobId? _focusedJobId;
     private readonly string _defaultPromptText;
     private long _nextPromptId;
     private readonly Dictionary<BlockId, JobPromptRef> _jobPromptRefs = new();
     private readonly Dictionary<JobId, BlockId> _activeJobPromptBlocks = new();
+    private long _nextOwnedPromptId;
+    private readonly Dictionary<BlockId, OwnedPromptRef> _ownedPromptRefs = new();
     private bool _pendingShellPrompt;
     private readonly Dictionary<(JobId JobId, TextStream Stream), ChunkAccumulator> _chunkAccumulators = new();
     private readonly List<string> _commandHistory = new();
@@ -115,6 +118,12 @@ public sealed class ConsoleHostSession
             EmptyServiceProvider.Instance,
             cwdProvider: () => Directory.GetCurrentDirectory(),
             envProvider: static () => new Dictionary<string, string>());
+
+        _blockCommands = new BlockCommandRegistry();
+        _blockCommands.Register(new EchoBlockCommandHandler());
+        _blockCommands.Register(new AskBlockCommandHandler());
+        _blockCommands.Register(new ClearBlockCommandHandler());
+        _blockCommands.Register(new ExitBlockCommandHandler());
     }
 
     public static ConsoleHostSession CreateVga(string text, IClipboard clipboard, int resizeSettleMs = 80, int rebuildThrottleMs = 80)
@@ -178,6 +187,9 @@ public sealed class ConsoleHostSession
             ? 0
             : (int)Math.Clamp((nowTicks - _lastTickTicks) * 1000.0 / Stopwatch.Frequency, 0, 250);
         _lastTickTicks = nowTicks;
+
+        TickRunnableBlocks(TimeSpan.FromMilliseconds(dtMs));
+
         var framebufferWidth = _latestFramebufferWidth;
         var framebufferHeight = _latestFramebufferHeight;
         var currentGrid = _latestGrid;
@@ -649,11 +661,11 @@ public sealed class ConsoleHostSession
                 case HostAction.PasteFromClipboardIntoLastPrompt:
                     PasteIntoLastPrompt();
                     break;
-                case HostAction.CancelFocusedJob:
-                    CancelFocusedJob();
+                case HostAction.StopFocusedBlock:
+                    StopFocusedBlock(null);
                     break;
-                case HostAction.CancelFocusedJobWithLevel cancelWithLevel:
-                    CancelFocusedJob(cancelWithLevel.Level);
+                case HostAction.StopFocusedBlockWithLevel stopWithLevel:
+                    StopFocusedBlock(stopWithLevel.Level);
                     break;
                 case HostAction.RequestRebuild:
                     _pendingContentRebuild = true;
@@ -664,37 +676,59 @@ public sealed class ConsoleHostSession
         _document.Selection.ActiveRange = _interaction.Snapshot.Selection;
     }
 
-    private void CancelFocusedJob()
+    private void StopFocusedBlock(StopLevel? levelOverride)
     {
-        CancelFocusedJob(null);
-    }
-
-    private void CancelFocusedJob(CancelLevel? levelOverride)
-    {
-        if (_focusedJobId is not { } jobId)
+        var focused = _interaction.Snapshot.Focused;
+        if (focused is null)
         {
             return;
         }
 
-        if (levelOverride is { } forcedLevel)
+        if (!TryGetBlock(focused.Value, out var block))
         {
-            if (OperatingSystem.IsWindows() && _jobScheduler.TryGetJob(jobId, out var focusedJob) && focusedJob.Kind == "process")
-            {
-                _jobScheduler.RequestCancel(jobId, forcedLevel);
-            }
-            else
-            {
-                _jobScheduler.RequestCancelWithEscalation(jobId);
-            }
-        }
-        else
-        {
-            _jobScheduler.RequestCancelWithEscalation(jobId);
+            return;
         }
 
-        AppendJobText(jobId, TextStream.System, "Cancel requested.");
+        if (block is not IStoppableBlock stoppable || !stoppable.CanStop)
+        {
+            return;
+        }
+
+        var level = levelOverride ?? StopLevel.Soft;
+        stoppable.RequestStop(level);
+
+        if (block is PromptBlock { Owner: not null } && _ownedPromptRefs.ContainsKey(focused.Value))
+        {
+            if (TryGetPrompt(focused.Value, out var ownedPrompt))
+            {
+                ReplacePromptWithArchivedText(focused.Value, ownedPrompt.Prompt + ownedPrompt.Input, ConsoleTextStream.Default);
+            }
+
+            _ownedPromptRefs.Remove(focused.Value);
+            _pendingShellPrompt = true;
+            EnsureShellPromptAtEndIfNeeded();
+        }
+
+        if (block is PromptBlock { Owner: not null } && _jobPromptRefs.TryGetValue(focused.Value, out var jobPrompt))
+        {
+            if (_jobScheduler.TryGetJob(jobPrompt.JobId, out var job))
+            {
+                var cancelLevel = MapStopLevel(level);
+                _ = job.RequestCancelAsync(cancelLevel, CancellationToken.None);
+            }
+        }
+
         _pendingContentRebuild = true;
     }
+
+    private static CancelLevel MapStopLevel(StopLevel level) =>
+        level switch
+        {
+            StopLevel.Soft => CancelLevel.Soft,
+            StopLevel.Terminate => CancelLevel.Terminate,
+            StopLevel.Kill => CancelLevel.Kill,
+            _ => CancelLevel.Soft
+        };
 
     private void PasteIntoLastPrompt()
     {
@@ -723,6 +757,20 @@ public sealed class ConsoleHostSession
 
         var command = prompt.Input;
 
+        if (_ownedPromptRefs.ContainsKey(promptId))
+        {
+            var promptLine = prompt.Prompt + command;
+            ReplacePromptWithArchivedText(promptId, promptLine, ConsoleTextStream.Default);
+
+            _ownedPromptRefs.Remove(promptId);
+            _pendingShellPrompt = true;
+            EnsureShellPromptAtEndIfNeeded();
+
+            _document.Scroll.IsFollowingTail = true;
+            _pendingContentRebuild = true;
+            return;
+        }
+
         if (_jobPromptRefs.TryGetValue(promptId, out var jobPrompt))
         {
             var promptLine = prompt.Prompt + command;
@@ -730,7 +778,6 @@ public sealed class ConsoleHostSession
 
             if (_jobScheduler.TryGetJob(jobPrompt.JobId, out var job))
             {
-                _focusedJobId = jobPrompt.JobId;
                 _ = job.SendInputAsync(command, CancellationToken.None);
             }
             else
@@ -763,32 +810,25 @@ public sealed class ConsoleHostSession
                 _historyDraft = string.Empty;
             }
 
-            if (string.Equals(trimmed, "clear", StringComparison.OrdinalIgnoreCase))
+            var request = CommandLineParser.Parse(command);
+            if (request is null)
             {
-                ClearTranscript();
+                prompt.Input = string.Empty;
+                prompt.SetCaret(0);
+                _historyIndex = _commandHistory.Count;
+                _historyDraft = string.Empty;
                 return;
             }
 
-            if (string.Equals(trimmed, "exit", StringComparison.OrdinalIgnoreCase))
+            var ctx = new BlockCommandContext(this, headerId, promptId);
+            if (_blockCommands.TryExecute(request, ctx))
             {
-                _pendingExit = true;
+                _document.Scroll.IsFollowingTail = true;
                 _pendingContentRebuild = true;
-                return;
             }
-
-            if (!string.IsNullOrWhiteSpace(command))
+            else if (!string.IsNullOrWhiteSpace(command))
             {
-                var dispatch = _commandDispatcher.Dispatch(command);
-                if (dispatch.IsUnknown)
-                {
-                    _document.Transcript.Insert(insertIndex + 1, new TextBlock(new BlockId(AllocateNewBlockId()), "Unrecognized command."));
-                }
-                else if (dispatch.JobId is { } jobId)
-                {
-                    _focusedJobId = jobId;
-                    _jobProjections[jobId] = new JobProjection(headerId, headerId);
-                }
- 
+                _document.Transcript.Insert(insertIndex + 1, new TextBlock(new BlockId(AllocateNewBlockId()), "Unrecognized command."));
                 _document.Scroll.IsFollowingTail = true;
                 _pendingContentRebuild = true;
             }
@@ -797,6 +837,81 @@ public sealed class ConsoleHostSession
             prompt.SetCaret(0);
             _historyIndex = _commandHistory.Count;
             _historyDraft = string.Empty;
+        }
+    }
+
+    private void AppendOwnedPrompt(string promptText)
+    {
+        var blocks = _document.Transcript.Blocks;
+        if (blocks.Count == 0)
+        {
+            return;
+        }
+
+        var lastIndex = blocks.Count - 1;
+        if (blocks[lastIndex] is PromptBlock existingShellPrompt && existingShellPrompt.Owner is null)
+        {
+            if (string.IsNullOrEmpty(existingShellPrompt.Input))
+            {
+                _document.Transcript.RemoveAt(lastIndex);
+            }
+            else
+            {
+                var archivedText = existingShellPrompt.Prompt + existingShellPrompt.Input;
+                var archived = new TextBlock(existingShellPrompt.Id, archivedText, ConsoleTextStream.Default);
+                _document.Transcript.ReplaceAt(lastIndex, archived);
+            }
+        }
+
+        var promptId = Interlocked.Increment(ref _nextOwnedPromptId);
+        var promptBlockId = new BlockId(AllocateNewBlockId());
+        var block = new PromptBlock(promptBlockId, promptText, new PromptOwner(OwnerId: 1, PromptId: promptId))
+        {
+            Input = string.Empty,
+            CaretIndex = 0
+        };
+
+        _document.Transcript.Add(block);
+        _ownedPromptRefs[promptBlockId] = new OwnedPromptRef(promptId);
+        _pendingShellPrompt = true;
+    }
+
+    private sealed class BlockCommandContext : IBlockCommandContext
+    {
+        private readonly ConsoleHostSession _session;
+        private readonly BlockId _commandEchoId;
+        private readonly BlockId _shellPromptId;
+
+        public BlockCommandContext(ConsoleHostSession session, BlockId commandEchoId, BlockId shellPromptId)
+        {
+            _session = session;
+            _commandEchoId = commandEchoId;
+            _shellPromptId = shellPromptId;
+        }
+
+        public void InsertTextAfterCommandEcho(string text, ConsoleTextStream stream)
+        {
+            var id = new BlockId(_session.AllocateNewBlockId());
+            _session.InsertBlockAfter(_commandEchoId, new TextBlock(id, text, stream));
+        }
+
+        public void AppendOwnedPrompt(string promptText)
+        {
+            if (_session.TryGetPrompt(_shellPromptId, out var prompt))
+            {
+                prompt.Input = string.Empty;
+                prompt.SetCaret(0);
+            }
+
+            _session.AppendOwnedPrompt(promptText);
+        }
+
+        public void ClearTranscript() => _session.ClearTranscript();
+
+        public void RequestExit()
+        {
+            _session._pendingExit = true;
+            _session._pendingContentRebuild = true;
         }
     }
 
@@ -870,8 +985,8 @@ public sealed class ConsoleHostSession
         _jobProjections.Clear();
         _jobPromptRefs.Clear();
         _activeJobPromptBlocks.Clear();
+        _ownedPromptRefs.Clear();
         _chunkAccumulators.Clear();
-        _focusedJobId = null;
 
         _document.Scroll.ScrollOffsetRows = 0;
         _document.Scroll.IsFollowingTail = true;
@@ -1124,7 +1239,6 @@ public sealed class ConsoleHostSession
         _document.Transcript.Add(block);
         _jobPromptRefs[promptBlockId] = new JobPromptRef(jobId, promptId);
         _activeJobPromptBlocks[jobId] = promptBlockId;
-        _focusedJobId = jobId;
         _pendingShellPrompt = true;
     }
 
@@ -1149,6 +1263,11 @@ public sealed class ConsoleHostSession
 
     private void EnsureShellPromptAtEndIfNeeded()
     {
+        if (_ownedPromptRefs.Count > 0)
+        {
+            return;
+        }
+
         if (_activeJobPromptBlocks.Count > 0)
         {
             return;
@@ -1273,6 +1392,7 @@ public sealed class ConsoleHostSession
     }
 
     private readonly record struct JobPromptRef(JobId JobId, long PromptId);
+    private readonly record struct OwnedPromptRef(long PromptId);
 
     private bool HandleScrollbarMouse(HostMouseEvent e)
     {
@@ -1476,6 +1596,37 @@ public sealed class ConsoleHostSession
 
         prompt = null!;
         return false;
+    }
+
+    private bool TryGetBlock(BlockId id, out IBlock block)
+    {
+        foreach (var candidate in _document.Transcript.Blocks)
+        {
+            if (candidate.Id == id)
+            {
+                block = candidate;
+                return true;
+            }
+        }
+
+        block = null!;
+        return false;
+    }
+
+    private void TickRunnableBlocks(TimeSpan dt)
+    {
+        if (dt <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        foreach (var block in _document.Transcript.Blocks)
+        {
+            if (block is IRunnableBlock runnable && runnable.State == BlockRunState.Running)
+            {
+                runnable.Tick(dt);
+            }
+        }
     }
 
 

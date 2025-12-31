@@ -1,8 +1,9 @@
 using System;
+using Cycon.Core.Transcript;
 
 namespace Cycon.Core.Transcript.Blocks;
 
-public sealed class PromptBlock : IBlock, ITextSelectable, ITextEditable
+public sealed class PromptBlock : IBlock, ITextSelectable, ITextEditable, IRunnableBlock, IStoppableBlock
 {
     public PromptBlock(BlockId id, string prompt = "> ")
         : this(id, prompt, owner: null)
@@ -25,8 +26,29 @@ public sealed class PromptBlock : IBlock, ITextSelectable, ITextEditable
     public string Input { get; set; } = string.Empty;
     public int CaretIndex { get; set; }
 
+    public BlockRunState State { get; private set; } = BlockRunState.Running;
+    public StopLevel? StopRequestedLevel { get; private set; }
+
     public bool CanSelect => true;
     public int TextLength => Prompt.Length + Input.Length;
+
+    public bool CanStop => Owner is not null && State == BlockRunState.Running;
+
+    public void RequestStop(StopLevel level)
+    {
+        if (!CanStop)
+        {
+            return;
+        }
+
+        StopRequestedLevel = level;
+        State = BlockRunState.Cancelled;
+    }
+
+    public void Tick(TimeSpan dt)
+    {
+        // No-op for now. Prompt input is driven by host input events.
+    }
 
     public string ExportText(int start, int length)
     {
@@ -46,6 +68,11 @@ public sealed class PromptBlock : IBlock, ITextSelectable, ITextEditable
 
     public void InsertText(string s)
     {
+        if (State != BlockRunState.Running)
+        {
+            return;
+        }
+
         if (string.IsNullOrEmpty(s))
         {
             return;
@@ -58,6 +85,11 @@ public sealed class PromptBlock : IBlock, ITextSelectable, ITextEditable
 
     public void Backspace()
     {
+        if (State != BlockRunState.Running)
+        {
+            return;
+        }
+
         if (CaretIndex <= 0 || Input.Length == 0)
         {
             return;
@@ -70,13 +102,23 @@ public sealed class PromptBlock : IBlock, ITextSelectable, ITextEditable
 
     public void MoveCaret(int delta)
     {
+        if (State != BlockRunState.Running)
+        {
+            return;
+        }
+
         SetCaret(CaretIndex + delta);
     }
 
     public void SetCaret(int index)
     {
+        if (State != BlockRunState.Running)
+        {
+            return;
+        }
+
         CaretIndex = Math.Clamp(index, 0, Input.Length);
     }
 }
 
-public readonly record struct PromptOwner(long JobId, long PromptId);
+public readonly record struct PromptOwner(long OwnerId, long PromptId);
