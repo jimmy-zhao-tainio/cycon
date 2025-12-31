@@ -177,6 +177,11 @@ public static class SilkNetCyconRunner
             executor.Resize(tick.FramebufferWidth, tick.FramebufferHeight);
             executor.Execute(tick.Frame, session.Atlas);
             swapchain.Present();
+
+            if (tick.RequestExit)
+            {
+                window.Close();
+            }
         };
 
         window.Run();
@@ -226,6 +231,8 @@ public static class SilkNetCyconRunner
             Key.KeypadEnter => HostKey.Enter,
             Key.Left => HostKey.Left,
             Key.Right => HostKey.Right,
+            Key.Up => HostKey.Up,
+            Key.Down => HostKey.Down,
             Key.Escape => HostKey.Escape,
             Key.C => HostKey.C,
             Key.V => HostKey.V,

@@ -11,4 +11,10 @@ public sealed class Transcript
     public void Add(IBlock block) => _blocks.Add(block);
 
     public void Insert(int index, IBlock block) => _blocks.Insert(index, block);
+
+    public void RemoveAt(int index) => _blocks.RemoveAt(index);
+
+    public void ReplaceAt(int index, IBlock block) => _blocks[index] = block;
+
+    public void Clear() => _blocks.Clear();
 }

@@ -48,6 +48,8 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
     public void Show() => _window.IsVisible = true;
 
+    public void Close() => _window.Close();
+
     internal Silk.NET.Windowing.IWindow Native => _window;
 
     public static SilkWindow Create(int width, int height, string title)
@@ -161,4 +163,3 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         }
     }
 }
-

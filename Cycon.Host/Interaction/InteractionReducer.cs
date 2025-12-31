@@ -8,6 +8,7 @@ using Cycon.Core.Transcript.Blocks;
 using Cycon.Host.Input;
 using Cycon.Layout;
 using Cycon.Layout.HitTesting;
+using Cycon.Runtime.Jobs;
 
 namespace Cycon.Host.Interaction;
 
@@ -41,6 +42,8 @@ public sealed class InteractionReducer
             InputEvent.MouseWheel mw => mw.Mods,
             _ => _state.CurrentMods
         };
+
+        HealStateAfterTranscriptChange(transcript);
 
         var actions = e switch
         {
@@ -171,6 +174,10 @@ public sealed class InteractionReducer
             {
                 actions.Add(new HostAction.CopySelectionToClipboard());
             }
+            else
+            {
+                actions.Add(new HostAction.CancelFocusedJobWithLevel(CancelLevel.Kill));
+            }
 
             return actions;
         }
@@ -220,6 +227,14 @@ public sealed class InteractionReducer
                 break;
             case HostKey.Right:
                 actions.Add(new HostAction.MoveCaret(promptId, 1));
+                actions.Add(new HostAction.RequestRebuild());
+                break;
+            case HostKey.Up:
+                actions.Add(new HostAction.NavigateHistory(promptId, -1));
+                actions.Add(new HostAction.RequestRebuild());
+                break;
+            case HostKey.Down:
+                actions.Add(new HostAction.NavigateHistory(promptId, 1));
                 actions.Add(new HostAction.RequestRebuild());
                 break;
             case HostKey.Enter:
@@ -442,6 +457,31 @@ public sealed class InteractionReducer
 
         blockIndex = -1;
         return false;
+    }
+
+    private void HealStateAfterTranscriptChange(Transcript transcript)
+    {
+        // Host mutates the transcript outside the reducer (e.g., job prompts replacing/removing blocks).
+        // Self-heal references so DEBUG invariants don't explode on the next input event.
+
+        if (_state.Focused is { } focused && !ContainsBlock(transcript, focused))
+        {
+            _state.Focused = _state.LastPromptId;
+        }
+
+        if (_state.MouseCaptured is { } captured && !ContainsBlock(transcript, captured))
+        {
+            _state.MouseCaptured = null;
+            _state.IsSelecting = false;
+        }
+
+        if (_state.Selection is { } range &&
+            (!ContainsBlock(transcript, range.Anchor.BlockId) || !ContainsBlock(transcript, range.Caret.BlockId)))
+        {
+            _state.Selection = null;
+            _state.IsSelecting = false;
+            _state.MouseCaptured = null;
+        }
     }
 
     [Conditional("DEBUG")]

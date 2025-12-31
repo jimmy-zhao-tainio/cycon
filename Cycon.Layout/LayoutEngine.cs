@@ -1,9 +1,11 @@
 using System.Collections.Generic;
 using Cycon.Core;
+using Cycon.Core.Scrolling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Layout.HitTesting;
 using Cycon.Layout.Metrics;
+using Cycon.Layout.Scrolling;
 using Cycon.Layout.Wrapping;
 
 namespace Cycon.Layout;
@@ -32,7 +34,10 @@ public sealed class LayoutEngine
         }
 
         var hitMap = new HitTestMap(grid, hitLines);
-        return new LayoutFrame(grid, lines, hitMap, rowIndex);
+        var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, rowIndex - grid.Rows);
+        var clampedScrollOffsetRows = Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
+        var scrollbar = ScrollbarLayouter.Layout(grid, rowIndex, clampedScrollOffsetRows, document.Settings.Scrollbar);
+        return new LayoutFrame(grid, lines, hitMap, rowIndex, scrollbar);
     }
 
     private static string GetBlockText(IBlock block)

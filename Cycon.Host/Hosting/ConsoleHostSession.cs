@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Threading;
+using Cycon.Commands;
 using Cycon.Backends.Abstractions;
 using Cycon.Backends.Abstractions.Rendering;
 using Cycon.Core;
@@ -9,8 +12,11 @@ using Cycon.Core.Metrics;
 using Cycon.Core.Scrolling;
 using Cycon.Core.Selection;
 using Cycon.Core.Settings;
+using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
+using Cycon.Host.Commands;
+using Cycon.Host.Commands.Handlers;
 using Cycon.Host.Interaction;
 using Cycon.Host.Input;
 using Cycon.Host.Services;
@@ -19,6 +25,8 @@ using Cycon.Layout.Metrics;
 using Cycon.Layout.Scrolling;
 using Cycon.Rendering.Renderer;
 using Cycon.Rendering.Styling;
+using Cycon.Runtime.Events;
+using Cycon.Runtime.Jobs;
 
 namespace Cycon.Host.Hosting;
 
@@ -38,6 +46,20 @@ public sealed class ConsoleHostSession
     private readonly IClipboard _clipboard;
     private readonly Queue<PendingEvent> _pendingEvents = new();
     private readonly object _pendingEventsLock = new();
+    private readonly JobScheduler _jobScheduler;
+    private readonly CommandDispatcher _commandDispatcher;
+    private readonly Dictionary<JobId, JobProjection> _jobProjections = new();
+    private JobId? _focusedJobId;
+    private readonly string _defaultPromptText;
+    private long _nextPromptId;
+    private readonly Dictionary<BlockId, JobPromptRef> _jobPromptRefs = new();
+    private readonly Dictionary<JobId, BlockId> _activeJobPromptBlocks = new();
+    private bool _pendingShellPrompt;
+    private readonly Dictionary<(JobId JobId, TextStream Stream), ChunkAccumulator> _chunkAccumulators = new();
+    private readonly List<string> _commandHistory = new();
+    private int _historyIndex;
+    private string _historyDraft = string.Empty;
+    private bool _pendingExit;
 
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
@@ -56,6 +78,10 @@ public sealed class ConsoleHostSession
     private bool _pendingContentRebuild;
     private byte _lastCaretAlpha = 0xFF;
     private long _lastCaretRenderTicks;
+    private byte _lastScrollbarTrackAlpha;
+    private byte _lastScrollbarThumbAlpha;
+    private long _lastTickTicks;
+    private bool _scrollbarInteractedThisTick;
 
     private ConsoleHostSession(string text, IClipboard clipboard, int resizeSettleMs, int rebuildThrottleMs)
     {
@@ -66,6 +92,7 @@ public sealed class ConsoleHostSession
         _document = CreateDocument(text);
         _interaction.Initialize(_document.Transcript);
         SetCaretToEndOfLastPrompt(_document.Transcript);
+        _defaultPromptText = FindLastPrompt(_document.Transcript)?.Prompt ?? "> ";
         _layoutSettings = new LayoutSettings();
         var fontService = new FontService();
         _font = fontService.CreateDefaultFont(_layoutSettings);
@@ -77,6 +104,17 @@ public sealed class ConsoleHostSession
         _renderer = new ConsoleRenderer();
         _selectionStyle = SelectionStyle.Default;
         _layoutEngine = new LayoutEngine();
+
+        _jobScheduler = new JobScheduler();
+        var registry = new CommandRegistry();
+        registry.Register(new EchoCommandHandler());
+        registry.Register(new AskCommandHandler());
+        _commandDispatcher = new CommandDispatcher(
+            registry,
+            _jobScheduler,
+            EmptyServiceProvider.Instance,
+            cwdProvider: () => Directory.GetCurrentDirectory(),
+            envProvider: static () => new Dictionary<string, string>());
     }
 
     public static ConsoleHostSession CreateVga(string text, IClipboard clipboard, int resizeSettleMs = 80, int rebuildThrottleMs = 80)
@@ -135,6 +173,11 @@ public sealed class ConsoleHostSession
         }
 
         var nowTicks = Stopwatch.GetTimestamp();
+        _scrollbarInteractedThisTick = false;
+        var dtMs = _lastTickTicks == 0
+            ? 0
+            : (int)Math.Clamp((nowTicks - _lastTickTicks) * 1000.0 / Stopwatch.Frequency, 0, 250);
+        _lastTickTicks = nowTicks;
         var framebufferWidth = _latestFramebufferWidth;
         var framebufferHeight = _latestFramebufferHeight;
         var currentGrid = _latestGrid;
@@ -194,6 +237,9 @@ public sealed class ConsoleHostSession
                 LogOnce(_atlasData, layout, renderFrame, snapW, snapH);
                 _lastRebuildTicks = passNowTicks;
                 _lastCaretAlpha = caretAlphaNow;
+                var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
+                _lastScrollbarTrackAlpha = trackAlpha;
+                _lastScrollbarThumbAlpha = thumbAlpha;
                 _lastCaretRenderTicks = passNowTicks;
 
                 var verifyGrid = _latestGrid;
@@ -217,6 +263,10 @@ public sealed class ConsoleHostSession
 
         DrainPendingEvents(framebufferWidth, framebufferHeight);
 
+        DrainJobEvents();
+
+        AdvanceScrollbarAnimation(dtMs);
+
         if (_pendingContentRebuild)
         {
             var (frame, builtGrid, layout, renderFrame) = BuildFrameFor(
@@ -231,11 +281,14 @@ public sealed class ConsoleHostSession
             LogOnce(_atlasData, layout, renderFrame, framebufferWidth, framebufferHeight);
             _lastRebuildTicks = Stopwatch.GetTimestamp();
             _lastCaretAlpha = caretAlphaNow;
+            var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
+            _lastScrollbarTrackAlpha = trackAlpha;
+            _lastScrollbarThumbAlpha = thumbAlpha;
             _lastCaretRenderTicks = _lastRebuildTicks;
             _pendingContentRebuild = false;
         }
 
-        MaybeUpdateCaret(framebufferWidth, framebufferHeight, nowTicks, framebufferSettled);
+        MaybeUpdateOverlays(framebufferWidth, framebufferHeight, nowTicks, framebufferSettled);
 
         if (_lastFrame is null)
         {
@@ -244,10 +297,12 @@ public sealed class ConsoleHostSession
 
         var setVSync = _pendingSetVSync;
         _pendingSetVSync = null;
-        return new FrameTickResult(framebufferWidth, framebufferHeight, _lastFrame, setVSync);
+        var requestExit = _pendingExit;
+        _pendingExit = false;
+        return new FrameTickResult(framebufferWidth, framebufferHeight, _lastFrame, setVSync, requestExit);
     }
 
-    private void MaybeUpdateCaret(int framebufferWidth, int framebufferHeight, long nowTicks, bool framebufferSettled)
+    private void MaybeUpdateOverlays(int framebufferWidth, int framebufferHeight, long nowTicks, bool framebufferSettled)
     {
         if (!framebufferSettled || _lastLayout is null)
         {
@@ -261,7 +316,8 @@ public sealed class ConsoleHostSession
         }
 
         var caretAlpha = ComputeCaretAlpha(nowTicks);
-        if (caretAlpha == _lastCaretAlpha)
+        var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
+        if (caretAlpha == _lastCaretAlpha && trackAlpha == _lastScrollbarTrackAlpha && thumbAlpha == _lastScrollbarThumbAlpha)
         {
             return;
         }
@@ -271,6 +327,8 @@ public sealed class ConsoleHostSession
         _lastFrame = backendFrame;
         _renderedGrid = backendFrame.BuiltGrid;
         _lastCaretAlpha = caretAlpha;
+        _lastScrollbarTrackAlpha = trackAlpha;
+        _lastScrollbarThumbAlpha = thumbAlpha;
         _lastCaretRenderTicks = nowTicks;
     }
 
@@ -313,6 +371,74 @@ public sealed class ConsoleHostSession
         return (byte)Math.Clamp((int)Math.Round(a * 255.0), 0, 255);
     }
 
+    private void AdvanceScrollbarAnimation(int dtMs)
+    {
+        var ui = _document.Scroll.ScrollbarUi;
+        if (_scrollbarInteractedThisTick)
+        {
+            ui.MsSinceInteraction = 0;
+        }
+        else if (dtMs > 0)
+        {
+            ui.MsSinceInteraction = (int)Math.Min(int.MaxValue, (long)ui.MsSinceInteraction + dtMs);
+        }
+
+        var settings = _document.Settings.Scrollbar;
+        var wantsVisible = ui.IsDragging || ui.IsHovering || ui.MsSinceInteraction < settings.AutoHideDelayMs;
+        var target = wantsVisible ? 1f : 0f;
+        var fadeMs = wantsVisible ? settings.FadeInMs : settings.FadeOutMs;
+
+        if (fadeMs <= 0)
+        {
+            ui.Visibility = target;
+            return;
+        }
+
+        var step = dtMs / (float)fadeMs;
+        if (step <= 0f)
+        {
+            return;
+        }
+
+        ui.Visibility = MoveTowards(ui.Visibility, target, step);
+    }
+
+    private static float MoveTowards(float value, float target, float maxDelta)
+    {
+        if (value < target)
+        {
+            return Math.Min(value + maxDelta, target);
+        }
+
+        if (value > target)
+        {
+            return Math.Max(value - maxDelta, target);
+        }
+
+        return value;
+    }
+
+    private (byte TrackAlpha, byte ThumbAlpha) ComputeScrollbarAlphas()
+    {
+        var ui = _document.Scroll.ScrollbarUi;
+        var settings = _document.Settings.Scrollbar;
+        var visibility = Math.Clamp(ui.Visibility, 0f, 1f);
+
+        var thumbOpacity = ui.IsDragging
+            ? settings.ThumbOpacityDrag
+            : ui.IsHovering
+                ? settings.ThumbOpacityHover
+                : settings.ThumbOpacityIdle;
+
+        return (ToAlpha(visibility * settings.TrackOpacityIdle), ToAlpha(visibility * thumbOpacity));
+    }
+
+    private static byte ToAlpha(float alpha01)
+    {
+        alpha01 = Math.Clamp(alpha01, 0f, 1f);
+        return (byte)Math.Clamp((int)Math.Round(alpha01 * 255f), 0, 255);
+    }
+
     private void DrainPendingEvents(int framebufferWidth, int framebufferHeight)
     {
         List<PendingEvent> events;
@@ -334,6 +460,15 @@ public sealed class ConsoleHostSession
 
         for (var i = 0; i < events.Count; i++)
         {
+            if (events[i] is PendingEvent.Mouse mouseRaw && _lastLayout is not null)
+            {
+                var consumed = HandleScrollbarMouse(mouseRaw.Event);
+                if (consumed)
+                {
+                    continue;
+                }
+            }
+
             var ev = Translate(events[i]);
             if (ev is null || _lastLayout is null)
             {
@@ -374,6 +509,9 @@ public sealed class ConsoleHostSession
         LogOnce(_atlasData, layout, renderFrame, framebufferWidth, framebufferHeight);
         _lastRebuildTicks = nowTicks;
         _lastCaretAlpha = caretAlphaNow;
+        var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
+        _lastScrollbarTrackAlpha = trackAlpha;
+        _lastScrollbarThumbAlpha = thumbAlpha;
         _lastCaretRenderTicks = nowTicks;
     }
 
@@ -409,8 +547,7 @@ public sealed class ConsoleHostSession
                 new InputEvent.MouseMove(adjustedX, adjustedY, e.Buttons, e.Mods),
             HostMouseEventKind.Up when (e.Buttons & HostMouseButtons.Left) != 0 =>
                 new InputEvent.MouseUp(adjustedX, adjustedY, MouseButton.Left, e.Mods),
-            HostMouseEventKind.Wheel =>
-                new InputEvent.MouseWheel(adjustedX, adjustedY, e.WheelDelta, e.Mods),
+            HostMouseEventKind.Wheel => null,
             _ => null
         };
     }
@@ -500,6 +637,9 @@ public sealed class ConsoleHostSession
                     CommitPromptIfAny(submit.PromptId);
                     _document.Scroll.IsFollowingTail = true;
                     break;
+                case HostAction.NavigateHistory nav:
+                    NavigateHistory(nav.PromptId, nav.Delta);
+                    break;
                 case HostAction.CopySelectionToClipboard:
                     if (_interaction.TryGetSelectedText(_document.Transcript, out var selected))
                     {
@@ -509,6 +649,12 @@ public sealed class ConsoleHostSession
                 case HostAction.PasteFromClipboardIntoLastPrompt:
                     PasteIntoLastPrompt();
                     break;
+                case HostAction.CancelFocusedJob:
+                    CancelFocusedJob();
+                    break;
+                case HostAction.CancelFocusedJobWithLevel cancelWithLevel:
+                    CancelFocusedJob(cancelWithLevel.Level);
+                    break;
                 case HostAction.RequestRebuild:
                     _pendingContentRebuild = true;
                     break;
@@ -516,6 +662,38 @@ public sealed class ConsoleHostSession
         }
 
         _document.Selection.ActiveRange = _interaction.Snapshot.Selection;
+    }
+
+    private void CancelFocusedJob()
+    {
+        CancelFocusedJob(null);
+    }
+
+    private void CancelFocusedJob(CancelLevel? levelOverride)
+    {
+        if (_focusedJobId is not { } jobId)
+        {
+            return;
+        }
+
+        if (levelOverride is { } forcedLevel)
+        {
+            if (OperatingSystem.IsWindows() && _jobScheduler.TryGetJob(jobId, out var focusedJob) && focusedJob.Kind == "process")
+            {
+                _jobScheduler.RequestCancel(jobId, forcedLevel);
+            }
+            else
+            {
+                _jobScheduler.RequestCancelWithEscalation(jobId);
+            }
+        }
+        else
+        {
+            _jobScheduler.RequestCancelWithEscalation(jobId);
+        }
+
+        AppendJobText(jobId, TextStream.System, "Cancel requested.");
+        _pendingContentRebuild = true;
     }
 
     private void PasteIntoLastPrompt()
@@ -544,16 +722,721 @@ public sealed class ConsoleHostSession
         }
 
         var command = prompt.Input;
-        var insertIndex = Math.Max(0, _document.Transcript.Blocks.Count - 1);
-        _document.Transcript.Insert(insertIndex, new TextBlock(new BlockId(AllocateNewBlockId()), prompt.Prompt + command));
 
-        if (!string.IsNullOrWhiteSpace(command))
+        if (_jobPromptRefs.TryGetValue(promptId, out var jobPrompt))
         {
-            _document.Transcript.Insert(insertIndex + 1, new TextBlock(new BlockId(AllocateNewBlockId()), "Unrecognized command."));
+            var promptLine = prompt.Prompt + command;
+            ReplacePromptWithArchivedText(promptId, promptLine, ConsoleTextStream.Default);
+
+            if (_jobScheduler.TryGetJob(jobPrompt.JobId, out var job))
+            {
+                _focusedJobId = jobPrompt.JobId;
+                _ = job.SendInputAsync(command, CancellationToken.None);
+            }
+            else
+            {
+                AppendJobText(jobPrompt.JobId, TextStream.System, "Interactive job is no longer running.");
+            }
+
+            _jobPromptRefs.Remove(promptId);
+            _activeJobPromptBlocks.Remove(jobPrompt.JobId);
+            _pendingShellPrompt = true;
+
+            _document.Scroll.IsFollowingTail = true;
+            _pendingContentRebuild = true;
+        }
+        else
+        {
+            var insertIndex = Math.Max(0, _document.Transcript.Blocks.Count - 1);
+            var headerId = new BlockId(AllocateNewBlockId());
+            _document.Transcript.Insert(insertIndex, new TextBlock(headerId, prompt.Prompt + command));
+
+            var trimmed = command.Trim();
+            if (!string.IsNullOrWhiteSpace(trimmed))
+            {
+                if (_commandHistory.Count == 0 || !string.Equals(_commandHistory[^1], command, StringComparison.Ordinal))
+                {
+                    _commandHistory.Add(command);
+                }
+
+                _historyIndex = _commandHistory.Count;
+                _historyDraft = string.Empty;
+            }
+
+            if (string.Equals(trimmed, "clear", StringComparison.OrdinalIgnoreCase))
+            {
+                ClearTranscript();
+                return;
+            }
+
+            if (string.Equals(trimmed, "exit", StringComparison.OrdinalIgnoreCase))
+            {
+                _pendingExit = true;
+                _pendingContentRebuild = true;
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(command))
+            {
+                var dispatch = _commandDispatcher.Dispatch(command);
+                if (dispatch.IsUnknown)
+                {
+                    _document.Transcript.Insert(insertIndex + 1, new TextBlock(new BlockId(AllocateNewBlockId()), "Unrecognized command."));
+                }
+                else if (dispatch.JobId is { } jobId)
+                {
+                    _focusedJobId = jobId;
+                    _jobProjections[jobId] = new JobProjection(headerId, headerId);
+                }
+ 
+                _document.Scroll.IsFollowingTail = true;
+                _pendingContentRebuild = true;
+            }
+
+            prompt.Input = string.Empty;
+            prompt.SetCaret(0);
+            _historyIndex = _commandHistory.Count;
+            _historyDraft = string.Empty;
+        }
+    }
+
+    private void NavigateHistory(BlockId promptId, int delta)
+    {
+        if (delta == 0 || !TryGetPrompt(promptId, out var prompt))
+        {
+            return;
         }
 
-        prompt.Input = string.Empty;
-        prompt.SetCaret(0);
+        if (prompt.Owner is not null)
+        {
+            return;
+        }
+
+        if (_commandHistory.Count == 0)
+        {
+            return;
+        }
+
+        _historyIndex = Math.Clamp(_historyIndex, 0, _commandHistory.Count);
+
+        if (delta < 0)
+        {
+            if (_historyIndex == _commandHistory.Count)
+            {
+                _historyDraft = prompt.Input;
+            }
+
+            if (_historyIndex == 0)
+            {
+                return;
+            }
+
+            _historyIndex--;
+            prompt.Input = _commandHistory[_historyIndex];
+            prompt.SetCaret(prompt.Input.Length);
+            return;
+        }
+
+        if (delta > 0)
+        {
+            if (_historyIndex == _commandHistory.Count)
+            {
+                return;
+            }
+
+            _historyIndex++;
+            if (_historyIndex == _commandHistory.Count)
+            {
+                prompt.Input = _historyDraft;
+            }
+            else
+            {
+                prompt.Input = _commandHistory[_historyIndex];
+            }
+
+            prompt.SetCaret(prompt.Input.Length);
+        }
+    }
+
+    private void ClearTranscript()
+    {
+        _document.Transcript.Clear();
+        _document.Transcript.Add(new PromptBlock(new BlockId(AllocateNewBlockId()), _defaultPromptText));
+
+        _document.Selection.ActiveRange = null;
+        _interaction.Initialize(_document.Transcript);
+        SetCaretToEndOfLastPrompt(_document.Transcript);
+
+        _jobProjections.Clear();
+        _jobPromptRefs.Clear();
+        _activeJobPromptBlocks.Clear();
+        _chunkAccumulators.Clear();
+        _focusedJobId = null;
+
+        _document.Scroll.ScrollOffsetRows = 0;
+        _document.Scroll.IsFollowingTail = true;
+        _document.Scroll.ScrollRowsFromBottom = 0;
+        _document.Scroll.TopVisualLineAnchor = null;
+        _document.Scroll.ScrollbarUi.Visibility = 0;
+        _document.Scroll.ScrollbarUi.IsHovering = false;
+        _document.Scroll.ScrollbarUi.IsDragging = false;
+        _document.Scroll.ScrollbarUi.MsSinceInteraction = 0;
+        _document.Scroll.ScrollbarUi.DragGrabOffsetYPx = 0;
+
+        _pendingShellPrompt = false;
+        _pendingContentRebuild = true;
+
+        _historyIndex = _commandHistory.Count;
+        _historyDraft = string.Empty;
+    }
+
+    private void DrainJobEvents()
+    {
+        var events = _jobScheduler.DrainEvents();
+        if (events.Count == 0)
+        {
+            return;
+        }
+
+        var changed = false;
+        foreach (var ev in events)
+        {
+            changed |= ApplyJobEvent(ev);
+        }
+
+        if (changed)
+        {
+            _document.Scroll.IsFollowingTail = true;
+            _pendingContentRebuild = true;
+        }
+    }
+
+    private bool ApplyJobEvent(JobScheduler.PublishedEvent published)
+    {
+        var jobId = published.JobId;
+        EnsureJobProjection(jobId);
+
+        var e = published.Event;
+        switch (e)
+        {
+            case TextEvent text:
+                AppendJobText(jobId, text.Stream, text.Text);
+                return true;
+            case ProgressEvent progress:
+                var pct = progress.Fraction is { } f ? $"{Math.Round(f * 100.0)}%" : string.Empty;
+                var phase = string.IsNullOrWhiteSpace(progress.Phase) ? "Progress" : progress.Phase;
+                AppendJobText(jobId, TextStream.System, $"{phase} {pct}".Trim());
+                return true;
+            case PromptEvent prompt:
+                AppendJobPrompt(jobId, prompt.Prompt);
+                return true;
+            case ResultEvent result:
+                if (result.ExitCode != 0 || !string.IsNullOrWhiteSpace(result.Summary))
+                {
+                    var summary = string.IsNullOrWhiteSpace(result.Summary) ? string.Empty : $": {result.Summary}";
+                    AppendJobText(jobId, TextStream.System, $"(exit {result.ExitCode}){summary}");
+                }
+
+                FinalizeActiveJobPromptIfAny(jobId);
+                ClearChunkAccumulatorsForJob(jobId);
+                _pendingShellPrompt = true;
+                EnsureShellPromptAtEndIfNeeded();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void EnsureJobProjection(JobId jobId)
+    {
+        if (_jobProjections.ContainsKey(jobId))
+        {
+            return;
+        }
+
+        var headerId = new BlockId(AllocateNewBlockId());
+        var insertIndex = Math.Max(0, _document.Transcript.Blocks.Count - 1);
+        _document.Transcript.Insert(insertIndex, new TextBlock(headerId, $"$ [job {jobId}]"));
+        _jobProjections[jobId] = new JobProjection(headerId, headerId);
+    }
+
+    private void AppendJobText(JobId jobId, TextStream stream, string text)
+    {
+        if (!_jobProjections.TryGetValue(jobId, out var proj))
+        {
+            EnsureJobProjection(jobId);
+            proj = _jobProjections[jobId];
+        }
+
+        var mappedStream = MapTextStream(stream);
+
+        if (stream == TextStream.System)
+        {
+            foreach (var line in SplitLines(text ?? string.Empty))
+            {
+                var id = new BlockId(AllocateNewBlockId());
+                InsertBlockAfter(proj.LastId, new TextBlock(id, line, mappedStream));
+                proj = proj with { LastId = id };
+            }
+
+            _jobProjections[jobId] = proj;
+            return;
+        }
+
+        AppendChunkedJobText(jobId, stream, text ?? string.Empty, mappedStream, proj);
+    }
+
+    private void InsertBlockAfter(BlockId afterId, IBlock block)
+    {
+        var blocks = _document.Transcript.Blocks;
+        var insertAt = Math.Max(0, blocks.Count - 1);
+
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            if (blocks[i].Id == afterId)
+            {
+                insertAt = i + 1;
+                break;
+            }
+        }
+
+        insertAt = Math.Min(insertAt, Math.Max(0, blocks.Count - 1));
+        _document.Transcript.Insert(insertAt, block);
+    }
+
+    private void AppendChunkedJobText(
+        JobId jobId,
+        TextStream stream,
+        string text,
+        ConsoleTextStream mappedStream,
+        JobProjection proj)
+    {
+        var key = (jobId, stream);
+        if (!_chunkAccumulators.TryGetValue(key, out var acc))
+        {
+            acc = new ChunkAccumulator();
+            _chunkAccumulators[key] = acc;
+        }
+
+        if (acc.PendingCR && text.Length > 0 && text[0] == '\n')
+        {
+            text = text.Substring(1);
+            acc.PendingCR = false;
+        }
+
+        var combined = acc.Pending + text;
+        var (lines, remainder, endsWithCR) = SplitLinesAndRemainder(combined);
+        acc.PendingCR = endsWithCR;
+
+        if (lines.Count == 0 && string.IsNullOrEmpty(remainder))
+        {
+            acc.Pending = string.Empty;
+            _chunkAccumulators[key] = acc;
+            _jobProjections[jobId] = proj;
+            return;
+        }
+
+        if (lines.Count == 0)
+        {
+            if (acc.ActiveBlockId is { } activeId)
+            {
+                ReplaceTextBlock(activeId, remainder, mappedStream);
+                proj = proj with { LastId = activeId };
+            }
+            else
+            {
+                var id = new BlockId(AllocateNewBlockId());
+                InsertBlockAfter(proj.LastId, new TextBlock(id, remainder, mappedStream));
+                proj = proj with { LastId = id };
+                acc.ActiveBlockId = id;
+            }
+
+            acc.Pending = remainder;
+            _chunkAccumulators[key] = acc;
+            _jobProjections[jobId] = proj;
+            return;
+        }
+
+        if (acc.ActiveBlockId is { } existingActiveId)
+        {
+            ReplaceTextBlock(existingActiveId, lines[0], mappedStream);
+            proj = proj with { LastId = existingActiveId };
+            acc.ActiveBlockId = null;
+        }
+        else
+        {
+            var firstId = new BlockId(AllocateNewBlockId());
+            InsertBlockAfter(proj.LastId, new TextBlock(firstId, lines[0], mappedStream));
+            proj = proj with { LastId = firstId };
+        }
+
+        for (var i = 1; i < lines.Count; i++)
+        {
+            var id = new BlockId(AllocateNewBlockId());
+            InsertBlockAfter(proj.LastId, new TextBlock(id, lines[i], mappedStream));
+            proj = proj with { LastId = id };
+        }
+
+        if (!string.IsNullOrEmpty(remainder))
+        {
+            var id = new BlockId(AllocateNewBlockId());
+            InsertBlockAfter(proj.LastId, new TextBlock(id, remainder, mappedStream));
+            proj = proj with { LastId = id };
+            acc.ActiveBlockId = id;
+        }
+
+        acc.Pending = remainder;
+        _chunkAccumulators[key] = acc;
+        _jobProjections[jobId] = proj;
+    }
+
+    private void AppendJobPrompt(JobId jobId, string promptText)
+    {
+        var blocks = _document.Transcript.Blocks;
+        if (blocks.Count == 0)
+        {
+            return;
+        }
+
+        var lastIndex = blocks.Count - 1;
+        if (blocks[lastIndex] is PromptBlock existingShellPrompt && existingShellPrompt.Owner is null)
+        {
+            if (string.IsNullOrEmpty(existingShellPrompt.Input))
+            {
+                _document.Transcript.RemoveAt(lastIndex);
+            }
+            else
+            {
+                var archivedText = existingShellPrompt.Prompt + existingShellPrompt.Input;
+                var archived = new TextBlock(existingShellPrompt.Id, archivedText, ConsoleTextStream.Default);
+                _document.Transcript.ReplaceAt(lastIndex, archived);
+            }
+        }
+
+        var promptId = Interlocked.Increment(ref _nextPromptId);
+        var promptBlockId = new BlockId(AllocateNewBlockId());
+        var block = new PromptBlock(promptBlockId, promptText, new PromptOwner(jobId.Value, promptId))
+        {
+            Input = string.Empty,
+            CaretIndex = 0
+        };
+
+        _document.Transcript.Add(block);
+        _jobPromptRefs[promptBlockId] = new JobPromptRef(jobId, promptId);
+        _activeJobPromptBlocks[jobId] = promptBlockId;
+        _focusedJobId = jobId;
+        _pendingShellPrompt = true;
+    }
+
+    private void FinalizeActiveJobPromptIfAny(JobId jobId)
+    {
+        if (!_activeJobPromptBlocks.TryGetValue(jobId, out var promptBlockId))
+        {
+            return;
+        }
+
+        if (!TryGetPrompt(promptBlockId, out var prompt))
+        {
+            _activeJobPromptBlocks.Remove(jobId);
+            _jobPromptRefs.Remove(promptBlockId);
+            return;
+        }
+
+        ReplacePromptWithArchivedText(promptBlockId, prompt.Prompt + prompt.Input, ConsoleTextStream.Default);
+        _activeJobPromptBlocks.Remove(jobId);
+        _jobPromptRefs.Remove(promptBlockId);
+    }
+
+    private void EnsureShellPromptAtEndIfNeeded()
+    {
+        if (_activeJobPromptBlocks.Count > 0)
+        {
+            return;
+        }
+
+        var blocks = _document.Transcript.Blocks;
+        if (blocks.Count > 0 && blocks[^1] is PromptBlock prompt && prompt.Owner is null)
+        {
+            _pendingShellPrompt = false;
+            return;
+        }
+
+        if (!_pendingShellPrompt && blocks.Count > 0)
+        {
+            return;
+        }
+
+        _document.Transcript.Add(new PromptBlock(new BlockId(AllocateNewBlockId()), _defaultPromptText));
+        _pendingShellPrompt = false;
+    }
+
+    private void ClearChunkAccumulatorsForJob(JobId jobId)
+    {
+        if (_chunkAccumulators.Count == 0)
+        {
+            return;
+        }
+
+        List<(JobId, TextStream)>? toRemove = null;
+        foreach (var key in _chunkAccumulators.Keys)
+        {
+            if (key.JobId == jobId)
+            {
+                toRemove ??= new List<(JobId, TextStream)>();
+                toRemove.Add(key);
+            }
+        }
+
+        if (toRemove is null)
+        {
+            return;
+        }
+
+        foreach (var key in toRemove)
+        {
+            _chunkAccumulators.Remove(key);
+        }
+    }
+
+    private void ReplacePromptWithArchivedText(BlockId promptId, string line, ConsoleTextStream stream)
+    {
+        var blocks = _document.Transcript.Blocks;
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            if (blocks[i].Id == promptId)
+            {
+                _document.Transcript.ReplaceAt(i, new TextBlock(promptId, line, stream));
+                return;
+            }
+        }
+    }
+
+    private void ReplaceTextBlock(BlockId id, string newText, ConsoleTextStream stream)
+    {
+        var blocks = _document.Transcript.Blocks;
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            if (blocks[i].Id == id && blocks[i] is TextBlock)
+            {
+                _document.Transcript.ReplaceAt(i, new TextBlock(id, newText, stream));
+                return;
+            }
+        }
+    }
+
+    private static ConsoleTextStream MapTextStream(TextStream stream) =>
+        stream switch
+        {
+            TextStream.Stdout => ConsoleTextStream.Stdout,
+            TextStream.Stderr => ConsoleTextStream.Stderr,
+            TextStream.System => ConsoleTextStream.System,
+            _ => ConsoleTextStream.Default
+        };
+
+    private static (List<string> Lines, string Remainder, bool EndsWithCR) SplitLinesAndRemainder(string text)
+    {
+        var lines = new List<string>();
+        var start = 0;
+        var endsWithCR = false;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (ch != '\r' && ch != '\n')
+            {
+                continue;
+            }
+
+            lines.Add(text.Substring(start, i - start));
+            start = i + 1;
+
+            if (ch == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
+            {
+                start++;
+                i++;
+            }
+            else if (ch == '\r' && i == text.Length - 1)
+            {
+                endsWithCR = true;
+            }
+        }
+
+        var remainder = start >= text.Length ? string.Empty : text.Substring(start);
+        return (lines, remainder, endsWithCR);
+    }
+
+    private sealed class ChunkAccumulator
+    {
+        public BlockId? ActiveBlockId;
+        public string Pending = string.Empty;
+        public bool PendingCR;
+    }
+
+    private readonly record struct JobPromptRef(JobId JobId, long PromptId);
+
+    private bool HandleScrollbarMouse(HostMouseEvent e)
+    {
+        var layout = _lastLayout;
+        if (layout is null)
+        {
+            return false;
+        }
+
+        var ui = _document.Scroll.ScrollbarUi;
+        var sb = layout.Scrollbar;
+        if (!sb.IsScrollable && !ui.IsDragging)
+        {
+            return false;
+        }
+
+        if (!ui.IsDragging && _interaction.Snapshot.MouseCaptured is not null)
+        {
+            return false;
+        }
+
+        if (e.Kind == HostMouseEventKind.Move && !ui.IsDragging)
+        {
+            var inTrack = sb.HitTrackRectPx.Contains(e.X, e.Y);
+            var wasHovering = ui.IsHovering;
+            ui.IsHovering = inTrack;
+            if (ui.IsHovering && !wasHovering)
+            {
+                _scrollbarInteractedThisTick = true;
+            }
+
+            return false;
+        }
+
+        return e.Kind switch
+        {
+            HostMouseEventKind.Wheel => HandleWheel(e.WheelDelta, layout),
+            HostMouseEventKind.Down => HandleScrollbarMouseDown(e, layout),
+            HostMouseEventKind.Move => HandleScrollbarMouseMove(e, layout),
+            HostMouseEventKind.Up => HandleScrollbarMouseUp(e),
+            _ => false
+        };
+    }
+
+    private bool HandleWheel(int wheelDelta, LayoutFrame layout)
+    {
+        if (wheelDelta == 0)
+        {
+            return false;
+        }
+
+        var maxScrollOffsetRows = layout.Grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
+        if (maxScrollOffsetRows == 0)
+        {
+            return false;
+        }
+
+        var deltaRows = -wheelDelta * 3;
+        _document.Scroll.ApplyUserScrollDelta(deltaRows, maxScrollOffsetRows);
+        _pendingContentRebuild = true;
+        _scrollbarInteractedThisTick = true;
+        return true;
+    }
+
+    private bool HandleScrollbarMouseDown(HostMouseEvent e, LayoutFrame layout)
+    {
+        if ((e.Buttons & HostMouseButtons.Left) == 0)
+        {
+            return false;
+        }
+
+        var ui = _document.Scroll.ScrollbarUi;
+        var sb = layout.Scrollbar;
+        if (!sb.IsScrollable)
+        {
+            return false;
+        }
+
+        if (sb.HitThumbRectPx.Contains(e.X, e.Y))
+        {
+            ui.IsDragging = true;
+            ui.IsHovering = true;
+            ui.DragGrabOffsetYPx = e.Y - sb.ThumbRectPx.Y;
+            _scrollbarInteractedThisTick = true;
+            return true;
+        }
+
+        if (!sb.HitTrackRectPx.Contains(e.X, e.Y))
+        {
+            return false;
+        }
+
+        var pageRows = Math.Max(1, layout.Grid.Rows);
+        var deltaRows = e.Y < sb.ThumbRectPx.Y
+            ? -pageRows
+            : e.Y >= sb.ThumbRectPx.Y + sb.ThumbRectPx.Height
+                ? pageRows
+                : 0;
+
+        var maxScrollOffsetRows = layout.Grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
+        _document.Scroll.ApplyUserScrollDelta(deltaRows, maxScrollOffsetRows);
+        _pendingContentRebuild = true;
+        _scrollbarInteractedThisTick = true;
+        return true;
+    }
+
+    private bool HandleScrollbarMouseMove(HostMouseEvent e, LayoutFrame layout)
+    {
+        var ui = _document.Scroll.ScrollbarUi;
+        if (!ui.IsDragging)
+        {
+            return false;
+        }
+
+        var sb = layout.Scrollbar;
+        var track = sb.TrackRectPx;
+        var thumb = sb.ThumbRectPx;
+
+        var grab = Math.Clamp(ui.DragGrabOffsetYPx, 0, thumb.Height);
+        var maxThumbTop = track.Y + Math.Max(0, track.Height - thumb.Height);
+        var desiredThumbTop = Math.Clamp(e.Y - grab, track.Y, maxThumbTop);
+
+        var cellH = layout.Grid.CellHeightPx;
+        var contentHeightPx = layout.TotalRows * cellH;
+        var viewportHeightPx = layout.Grid.Rows * cellH;
+        var maxScrollYPx = Math.Max(0, contentHeightPx - viewportHeightPx);
+        var thumbTravel = Math.Max(0, track.Height - thumb.Height);
+
+        var newScrollYPx = (thumbTravel <= 0 || maxScrollYPx <= 0)
+            ? 0
+            : (int)((long)(desiredThumbTop - track.Y) * maxScrollYPx / thumbTravel);
+
+        var maxScrollOffsetRows = layout.Grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
+        var newScrollRows = cellH <= 0 ? 0 : (newScrollYPx + (cellH / 2)) / cellH;
+        SetScrollOffsetRows(newScrollRows, maxScrollOffsetRows);
+        _pendingContentRebuild = true;
+        _scrollbarInteractedThisTick = true;
+        return true;
+    }
+
+    private bool HandleScrollbarMouseUp(HostMouseEvent e)
+    {
+        var ui = _document.Scroll.ScrollbarUi;
+        if (!ui.IsDragging)
+        {
+            return false;
+        }
+
+        if ((e.Buttons & HostMouseButtons.Left) == 0)
+        {
+            return false;
+        }
+
+        ui.IsDragging = false;
+        _scrollbarInteractedThisTick = true;
+        return true;
+    }
+
+    private void SetScrollOffsetRows(int scrollOffsetRows, int maxScrollOffsetRows)
+    {
+        var clamped = Math.Clamp(scrollOffsetRows, 0, maxScrollOffsetRows);
+        _document.Scroll.ScrollOffsetRows = clamped;
+        _document.Scroll.IsFollowingTail = clamped >= maxScrollOffsetRows;
+        _document.Scroll.ScrollRowsFromBottom = maxScrollOffsetRows - clamped;
     }
 
     private int AllocateNewBlockId()
@@ -705,6 +1588,35 @@ public sealed class ConsoleHostSession
             ScrollAnchoring.RestoreFromAnchor(_document.Scroll, layout);
         }
 
+        var maxScrollOffsetRows = layout.Grid.Rows <= 0
+            ? 0
+            : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
+
+        if (_document.Scroll.IsFollowingTail)
+        {
+            if (_document.Scroll.ScrollOffsetRows != maxScrollOffsetRows)
+            {
+                _document.Scroll.ScrollOffsetRows = maxScrollOffsetRows;
+                _document.Scroll.ScrollRowsFromBottom = 0;
+            }
+        }
+        else
+        {
+            _document.Scroll.ScrollOffsetRows = Math.Clamp(_document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
+            _document.Scroll.ScrollRowsFromBottom = maxScrollOffsetRows - _document.Scroll.ScrollOffsetRows;
+        }
+
+        var scrollbar = ScrollbarLayouter.Layout(
+            layout.Grid,
+            layout.TotalRows,
+            _document.Scroll.ScrollOffsetRows,
+            _document.Settings.Scrollbar);
+
+        if (scrollbar != layout.Scrollbar)
+        {
+            layout = new LayoutFrame(layout.Grid, layout.Lines, layout.HitTestMap, layout.TotalRows, scrollbar);
+        }
+
         var renderFrame = _renderer.Render(_document, layout, _font, _selectionStyle, caretAlpha: caretAlpha);
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         var builtGrid = backendFrame.BuiltGrid;
@@ -728,10 +1640,19 @@ public sealed class ConsoleHostSession
 
         public sealed record Mouse(HostMouseEvent Event) : PendingEvent;
     }
+
+    private sealed record JobProjection(BlockId HeaderId, BlockId LastId);
+
+    private sealed class EmptyServiceProvider : IServiceProvider
+    {
+        public static readonly EmptyServiceProvider Instance = new();
+        public object? GetService(Type serviceType) => null;
+    }
 }
 
 public readonly record struct FrameTickResult(
     int FramebufferWidth,
     int FramebufferHeight,
     RenderFrame Frame,
-    bool? SetVSync);
+    bool? SetVSync,
+    bool RequestExit);

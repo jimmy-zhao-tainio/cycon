@@ -1,5 +1,6 @@
 using Cycon.Core.Transcript;
 using Cycon.Host.Input;
+using Cycon.Runtime.Jobs;
 
 namespace Cycon.Host.Interaction;
 
@@ -21,10 +22,15 @@ public abstract record HostAction
 
     public sealed record SubmitPrompt(BlockId PromptId) : HostAction;
 
+    public sealed record NavigateHistory(BlockId PromptId, int Delta) : HostAction;
+
     public sealed record CopySelectionToClipboard() : HostAction;
 
     public sealed record PasteFromClipboardIntoLastPrompt() : HostAction;
 
+    public sealed record CancelFocusedJob() : HostAction;
+
+    public sealed record CancelFocusedJobWithLevel(CancelLevel Level) : HostAction;
+
     public sealed record RequestRebuild() : HostAction;
 }
-

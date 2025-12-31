@@ -5,15 +5,22 @@ namespace Cycon.Core.Transcript.Blocks;
 public sealed class PromptBlock : IBlock, ITextSelectable, ITextEditable
 {
     public PromptBlock(BlockId id, string prompt = "> ")
+        : this(id, prompt, owner: null)
+    {
+    }
+
+    public PromptBlock(BlockId id, string prompt, PromptOwner? owner)
     {
         Id = id;
         Prompt = prompt;
+        Owner = owner;
     }
 
     public BlockId Id { get; }
     public BlockKind Kind => BlockKind.Prompt;
 
     public string Prompt { get; }
+    public PromptOwner? Owner { get; }
     public int PromptPrefixLength => Prompt.Length;
     public string Input { get; set; } = string.Empty;
     public int CaretIndex { get; set; }
@@ -71,3 +78,5 @@ public sealed class PromptBlock : IBlock, ITextSelectable, ITextEditable
         CaretIndex = Math.Clamp(index, 0, Input.Length);
     }
 }
+
+public readonly record struct PromptOwner(long JobId, long PromptId);

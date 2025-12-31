@@ -7,8 +7,9 @@ public enum HostKey
     Enter,
     Left,
     Right,
+    Up,
+    Down,
     Escape,
     C,
     V
 }
-

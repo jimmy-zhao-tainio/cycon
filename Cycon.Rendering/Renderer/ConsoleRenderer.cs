@@ -4,6 +4,8 @@ using Cycon.Core;
 using Cycon.Core.Fonts;
 using Cycon.Core.Metrics;
 using Cycon.Core.Selection;
+using Cycon.Core.Settings;
+using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Layout;
@@ -46,6 +48,8 @@ public sealed class ConsoleRenderer
             {
                 continue;
             }
+
+            var lineForeground = GetBlockForeground(document.Settings, block);
 
             if (block is PromptBlock prompt && pendingCaret is null)
             {
@@ -90,7 +94,7 @@ public sealed class ConsoleRenderer
 
                 var color = selection is { } bounds && IsSelectablePromptChar(block, charIndex) && bounds.Contains(line.BlockIndex, charIndex)
                     ? selectionStyle.SelectedForegroundRgba
-                    : defaultForeground;
+                    : lineForeground;
                 glyphs.Add(new GlyphInstance(glyph.Codepoint, glyphX, glyphY, color));
             }
 
@@ -121,7 +125,25 @@ public sealed class ConsoleRenderer
             }
         }
 
+        ScrollbarRenderer.Add(frame, document, layout);
+
         return frame;
+    }
+
+    private static int GetBlockForeground(ConsoleSettings settings, IBlock block)
+    {
+        if (block is TextBlock textBlock)
+        {
+            return textBlock.Stream switch
+            {
+                ConsoleTextStream.Stdout => settings.StdoutTextStyle.ForegroundRgba,
+                ConsoleTextStream.Stderr => settings.StderrTextStyle.ForegroundRgba,
+                ConsoleTextStream.System => settings.SystemTextStyle.ForegroundRgba,
+                _ => settings.DefaultTextStyle.ForegroundRgba
+            };
+        }
+
+        return settings.DefaultTextStyle.ForegroundRgba;
     }
 
     private static int GetScrollOffsetRows(ConsoleDocument document, LayoutFrame layout)

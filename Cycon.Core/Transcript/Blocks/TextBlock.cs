@@ -1,18 +1,26 @@
 using System;
+using Cycon.Core.Styling;
 
 namespace Cycon.Core.Transcript.Blocks;
 
 public sealed class TextBlock : IBlock, ITextSelectable
 {
     public TextBlock(BlockId id, string text)
+        : this(id, text, ConsoleTextStream.Default)
+    {
+    }
+
+    public TextBlock(BlockId id, string text, ConsoleTextStream stream)
     {
         Id = id;
         Text = text;
+        Stream = stream;
     }
 
     public BlockId Id { get; }
     public BlockKind Kind => BlockKind.Text;
     public string Text { get; }
+    public ConsoleTextStream Stream { get; }
 
     public bool CanSelect => true;
     public int TextLength => Text.Length;

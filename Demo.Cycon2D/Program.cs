@@ -18,10 +18,8 @@ public static class Program
     private static string BuildDemoText()
     {
         return string.Join('\n',
-            "HELLO VGA",
-            "Resize window; should stay pinned.",
-            "0123456789 ABCDEFGHIJKLMNOPQRST",
-            "abcdefghijklmnopqrstuvwxyz",
-            "!\"#$%&'()*+,-./:;<=>?@[\\]^_`");
+            "Cycon [Version 0.0]",
+            "(c) Cycon Corporation. No rights reserved.",
+            "");
     }
 }

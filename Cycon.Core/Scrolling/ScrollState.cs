@@ -9,6 +9,7 @@ public sealed class ScrollState
     public bool IsFollowingTail { get; set; } = true;
     public int ScrollRowsFromBottom { get; set; }
     public TopVisualLineAnchor? TopVisualLineAnchor { get; set; }
+    public ScrollbarUiState ScrollbarUi { get; } = new();
 
     public void ApplyUserScrollDelta(int deltaRows, int maxScrollOffsetRows)
     {

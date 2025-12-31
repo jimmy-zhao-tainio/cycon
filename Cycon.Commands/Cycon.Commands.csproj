@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Cycon.Core\Cycon.Core.csproj" />
     <ProjectReference Include="..\Cycon.Text\Cycon.Text.csproj" />
+    <ProjectReference Include="..\Cycon.Runtime\Cycon.Runtime.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
