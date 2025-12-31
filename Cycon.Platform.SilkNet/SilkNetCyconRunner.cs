@@ -24,6 +24,7 @@ public static class SilkNetCyconRunner
         var ctrlDown = false;
         var shiftDown = false;
         var altDown = false;
+        var buttonsDown = HostMouseButtons.None;
 
         var pressedKeys = new HashSet<Key>();
         var repeatKeys = new Dictionary<HostKey, long>();
@@ -79,11 +80,17 @@ public static class SilkNetCyconRunner
         {
             if (button == MouseButton.Left)
             {
+                if ((buttonsDown & HostMouseButtons.Left) != 0)
+                {
+                    return;
+                }
+
+                buttonsDown |= HostMouseButtons.Left;
                 session.OnMouseEvent(new HostMouseEvent(
                     HostMouseEventKind.Down,
                     x,
                     y,
-                    HostMouseButtons.Left,
+                    buttonsDown,
                     GetModifiers(ctrlDown, shiftDown, altDown),
                     0));
             }
@@ -95,7 +102,7 @@ public static class SilkNetCyconRunner
                 HostMouseEventKind.Move,
                 x,
                 y,
-                HostMouseButtons.None,
+                buttonsDown,
                 GetModifiers(ctrlDown, shiftDown, altDown),
                 0));
         };
@@ -104,6 +111,11 @@ public static class SilkNetCyconRunner
         {
             if (button == MouseButton.Left)
             {
+                if ((buttonsDown & HostMouseButtons.Left) == 0)
+                {
+                    return;
+                }
+
                 session.OnMouseEvent(new HostMouseEvent(
                     HostMouseEventKind.Up,
                     x,
@@ -111,7 +123,19 @@ public static class SilkNetCyconRunner
                     HostMouseButtons.Left,
                     GetModifiers(ctrlDown, shiftDown, altDown),
                     0));
+                buttonsDown &= ~HostMouseButtons.Left;
             }
+        };
+
+        window.MouseWheel += (x, y, delta) =>
+        {
+            session.OnMouseEvent(new HostMouseEvent(
+                HostMouseEventKind.Wheel,
+                x,
+                y,
+                buttonsDown,
+                GetModifiers(ctrlDown, shiftDown, altDown),
+                delta));
         };
 
         window.Render += _ =>

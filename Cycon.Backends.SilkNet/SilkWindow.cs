@@ -28,7 +28,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     public event Action<int, int>? MouseMoved;
     public event Action<int, int, MouseButton>? MouseDown;
     public event Action<int, int, MouseButton>? MouseUp;
-    public event Action<int, int>? MouseWheel;
+    public event Action<int, int, int>? MouseWheel;
 
     public int Width => _window.Size.X;
     public int Height => _window.Size.Y;
@@ -152,7 +152,13 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
             };
 
             mouse.MouseMove += (_, pos) => MouseMoved?.Invoke((int)pos.X, (int)pos.Y);
-            mouse.Scroll += (_, wheel) => MouseWheel?.Invoke((int)wheel.X, (int)wheel.Y);
+            mouse.Scroll += (_, wheel) =>
+            {
+                var pos = mouse.Position;
+                var delta = (int)MathF.Round(wheel.Y);
+                MouseWheel?.Invoke((int)pos.X, (int)pos.Y, delta);
+            };
         }
     }
 }
+

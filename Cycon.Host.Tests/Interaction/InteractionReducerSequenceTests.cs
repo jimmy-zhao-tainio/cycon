@@ -96,9 +96,34 @@ public sealed class InteractionReducerSequenceTests
         var (x1, y1) = CellToPixel(layout, row: 0, col: 2);
         var actions = reducer.Handle(new InputEvent.MouseDown(x1, y1, MouseButton.Left, HostKeyModifiers.None), layout, document.Transcript);
 
-        Assert.Empty(actions);
+        Assert.NotEmpty(actions);
         Assert.NotNull(reducer.State.MouseCaptured);
         Assert.True(reducer.State.IsSelecting);
+    }
+
+    [Fact]
+    public void MissedMouseUp_SelfHealsCaptureAndAllowsNextSelection()
+    {
+        var (document, _, layout) = CreateDocument(text: "HELLO");
+        var reducer = new InteractionReducer();
+
+        var (x0, y0) = CellToPixel(layout, row: 0, col: 0);
+        reducer.Handle(new InputEvent.MouseDown(x0, y0, MouseButton.Left, HostKeyModifiers.None), layout, document.Transcript);
+        Assert.True(reducer.State.IsSelecting);
+        Assert.NotNull(reducer.State.MouseCaptured);
+
+        var (x1, y1) = CellToPixel(layout, row: 0, col: 4);
+        reducer.Handle(new InputEvent.MouseMove(x1, y1, HostMouseButtons.Left, HostKeyModifiers.None), layout, document.Transcript);
+        Assert.True(reducer.State.IsSelecting);
+
+        reducer.Handle(new InputEvent.MouseMove(x1, y1, HostMouseButtons.None, HostKeyModifiers.None), layout, document.Transcript);
+        Assert.False(reducer.State.IsSelecting);
+        Assert.Null(reducer.State.MouseCaptured);
+
+        var actions = reducer.Handle(new InputEvent.MouseDown(x1, y1, MouseButton.Left, HostKeyModifiers.None), layout, document.Transcript);
+        Assert.NotEmpty(actions);
+        Assert.True(reducer.State.IsSelecting);
+        Assert.NotNull(reducer.State.MouseCaptured);
     }
 
     [Fact]
@@ -144,7 +169,7 @@ public sealed class InteractionReducerSequenceTests
         var (x0, y0) = CellToPixel(layout, row, colStart);
         var (x1, y1) = CellToPixel(layout, row, colEnd);
         reducer.Handle(new InputEvent.MouseDown(x0, y0, MouseButton.Left, HostKeyModifiers.None), layout, transcript);
-        reducer.Handle(new InputEvent.MouseMove(x1, y1, HostKeyModifiers.None), layout, transcript);
+        reducer.Handle(new InputEvent.MouseMove(x1, y1, HostMouseButtons.Left, HostKeyModifiers.None), layout, transcript);
         reducer.Handle(new InputEvent.MouseUp(x1, y1, MouseButton.Left, HostKeyModifiers.None), layout, transcript);
     }
 

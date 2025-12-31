@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using Cycon.Backends.Abstractions;
 using Cycon.Backends.Abstractions.Rendering;
@@ -34,6 +35,8 @@ public sealed class ConsoleHostSession
     private readonly SelectionStyle _selectionStyle;
     private readonly InteractionReducer _interaction = new();
     private readonly IClipboard _clipboard;
+    private readonly Queue<PendingEvent> _pendingEvents = new();
+    private readonly object _pendingEventsLock = new();
 
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
@@ -87,54 +90,26 @@ public sealed class ConsoleHostSession
 
     public void OnTextInput(HostTextInputEvent e)
     {
-        if (_lastLayout is null)
+        lock (_pendingEventsLock)
         {
-            return;
+            _pendingEvents.Enqueue(new PendingEvent.Text(e.Ch));
         }
-
-        ApplyActions(_interaction.Handle(new InputEvent.Text(e.Ch), _lastLayout, _document.Transcript));
     }
 
     public void OnKeyEvent(HostKeyEvent e)
     {
-        if (!e.IsDown)
+        lock (_pendingEventsLock)
         {
-            return;
+            _pendingEvents.Enqueue(new PendingEvent.Key(e.Key, e.Mods, e.IsDown));
         }
-
-        if (_lastLayout is null)
-        {
-            return;
-        }
-
-        ApplyActions(_interaction.Handle(new InputEvent.KeyDown(e.Key, e.Mods), _lastLayout, _document.Transcript));
     }
 
     public void OnMouseEvent(HostMouseEvent e)
     {
-        if (_lastLayout is null)
+        lock (_pendingEventsLock)
         {
-            return;
+            _pendingEvents.Enqueue(new PendingEvent.Mouse(e));
         }
-
-        var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
-        var adjustedX = e.X;
-        var adjustedY = e.Y + (scrollOffsetRows * _cellHeightPx);
-
-        var actions = e.Kind switch
-        {
-            HostMouseEventKind.Down when (e.Buttons & HostMouseButtons.Left) != 0 =>
-                _interaction.Handle(new InputEvent.MouseDown(adjustedX, adjustedY, MouseButton.Left, e.Mods), _lastLayout, _document.Transcript),
-            HostMouseEventKind.Move =>
-                _interaction.Handle(new InputEvent.MouseMove(adjustedX, adjustedY, e.Mods), _lastLayout, _document.Transcript),
-            HostMouseEventKind.Up when (e.Buttons & HostMouseButtons.Left) != 0 =>
-                _interaction.Handle(new InputEvent.MouseUp(adjustedX, adjustedY, MouseButton.Left, e.Mods), _lastLayout, _document.Transcript),
-            HostMouseEventKind.Wheel =>
-                _interaction.Handle(new InputEvent.MouseWheel(adjustedX, adjustedY, e.WheelDelta, e.Mods), _lastLayout, _document.Transcript),
-            _ => Array.Empty<HostAction>()
-        };
-
-        ApplyActions(actions);
     }
 
     public void Initialize(int initialFbW, int initialFbH)
@@ -237,6 +212,23 @@ public sealed class ConsoleHostSession
             currentGrid = snapGrid;
         }
 
+        DrainPendingEvents(framebufferWidth, framebufferHeight);
+
+        if (_pendingContentRebuild)
+        {
+            var (frame, builtGrid, layout, renderFrame) = BuildFrameFor(
+                framebufferWidth,
+                framebufferHeight,
+                restoreAnchor: false);
+
+            _lastFrame = frame;
+            _renderedGrid = builtGrid;
+            _lastLayout = layout;
+            LogOnce(_atlas, layout, renderFrame, framebufferWidth, framebufferHeight);
+            _lastRebuildTicks = Stopwatch.GetTimestamp();
+            _pendingContentRebuild = false;
+        }
+
         if (_lastFrame is null)
         {
             throw new InvalidOperationException("Tick invariant violated: frame must be available.");
@@ -245,6 +237,103 @@ public sealed class ConsoleHostSession
         var setVSync = _pendingSetVSync;
         _pendingSetVSync = null;
         return new FrameTickResult(framebufferWidth, framebufferHeight, _lastFrame, setVSync);
+    }
+
+    private void DrainPendingEvents(int framebufferWidth, int framebufferHeight)
+    {
+        List<PendingEvent> events;
+        lock (_pendingEventsLock)
+        {
+            if (_pendingEvents.Count == 0)
+            {
+                return;
+            }
+
+            events = new List<PendingEvent>(_pendingEvents.Count);
+            while (_pendingEvents.Count > 0)
+            {
+                events.Add(_pendingEvents.Dequeue());
+            }
+        }
+
+        EnsureLayoutExists(framebufferWidth, framebufferHeight);
+
+        for (var i = 0; i < events.Count; i++)
+        {
+            var ev = Translate(events[i]);
+            if (ev is null || _lastLayout is null)
+            {
+                continue;
+            }
+
+            var actions = _interaction.Handle(ev, _lastLayout, _document.Transcript);
+            ApplyActions(actions);
+
+            if (_pendingContentRebuild &&
+                i + 1 < events.Count &&
+                events[i + 1] is PendingEvent.Mouse)
+            {
+                EnsureLayoutExists(framebufferWidth, framebufferHeight);
+                _pendingContentRebuild = false;
+            }
+        }
+    }
+
+    private void EnsureLayoutExists(int framebufferWidth, int framebufferHeight)
+    {
+        if (_lastLayout is not null && _lastFrame is not null && !_pendingContentRebuild)
+        {
+            return;
+        }
+
+        var (frame, builtGrid, layout, renderFrame) = BuildFrameFor(
+            framebufferWidth,
+            framebufferHeight,
+            restoreAnchor: false);
+
+        _lastFrame = frame;
+        _renderedGrid = builtGrid;
+        _lastLayout = layout;
+        LogOnce(_atlas, layout, renderFrame, framebufferWidth, framebufferHeight);
+        _lastRebuildTicks = Stopwatch.GetTimestamp();
+    }
+
+    private InputEvent? Translate(PendingEvent e)
+    {
+        return e switch
+        {
+            PendingEvent.Text text => new InputEvent.Text(text.Ch),
+            PendingEvent.Key key => key.IsDown
+                ? new InputEvent.KeyDown(key.KeyCode, key.Mods)
+                : new InputEvent.KeyUp(key.KeyCode, key.Mods),
+            PendingEvent.Mouse mouse => TranslateMouse(mouse.Event),
+            _ => null
+        };
+    }
+
+    private InputEvent? TranslateMouse(HostMouseEvent e)
+    {
+        if (_lastLayout is null)
+        {
+            return null;
+        }
+
+        var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
+        var adjustedX = e.X;
+        var adjustedY = e.Y + (scrollOffsetRows * _cellHeightPx);
+
+        return e.Kind switch
+        {
+            HostMouseEventKind.Down when (e.Buttons & HostMouseButtons.Left) != 0 =>
+                new InputEvent.MouseDown(adjustedX, adjustedY, MouseButton.Left, e.Mods),
+            HostMouseEventKind.Move =>
+                new InputEvent.MouseMove(adjustedX, adjustedY, e.Buttons, e.Mods),
+            HostMouseEventKind.Up when (e.Buttons & HostMouseButtons.Left) != 0 =>
+                new InputEvent.MouseUp(adjustedX, adjustedY, MouseButton.Left, e.Mods),
+            HostMouseEventKind.Wheel =>
+                new InputEvent.MouseWheel(adjustedX, adjustedY, e.WheelDelta, e.Mods),
+            _ => null
+        };
     }
 
     private static ConsoleDocument CreateDocument(string text)
@@ -557,6 +646,15 @@ public sealed class ConsoleHostSession
             : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
 
         return Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
+    }
+
+    private abstract record PendingEvent
+    {
+        public sealed record Text(char Ch) : PendingEvent;
+
+        public sealed record Key(HostKey KeyCode, HostKeyModifiers Mods, bool IsDown) : PendingEvent;
+
+        public sealed record Mouse(HostMouseEvent Event) : PendingEvent;
     }
 }
 

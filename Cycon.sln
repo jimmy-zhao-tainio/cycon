@@ -37,6 +37,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cycon.App.Abstractions", "C
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cycon.Host.Tests", "Cycon.Host.Tests\Cycon.Host.Tests.csproj", "{1CCA4FA9-193B-4B63-8515-94F5A8F03A1D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cycon.Backends.Abstractions.Tests", "Cycon.Backends.Abstractions.Tests\Cycon.Backends.Abstractions.Tests.csproj", "{DA1F3C47-AB3A-438E-9FF5-5C0A3AFD4634}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -114,5 +116,9 @@ Global
 		{1CCA4FA9-193B-4B63-8515-94F5A8F03A1D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{1CCA4FA9-193B-4B63-8515-94F5A8F03A1D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{1CCA4FA9-193B-4B63-8515-94F5A8F03A1D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DA1F3C47-AB3A-438E-9FF5-5C0A3AFD4634}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DA1F3C47-AB3A-438E-9FF5-5C0A3AFD4634}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DA1F3C47-AB3A-438E-9FF5-5C0A3AFD4634}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DA1F3C47-AB3A-438E-9FF5-5C0A3AFD4634}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

@@ -253,7 +253,6 @@ Timing/FrameTimer.cs
 
 Cycon.Backends.SilkNet:
 SilkWindow.cs
-SilkInputSource.cs
 SilkGraphicsDeviceGl.cs
 SilkSwapchainGl.cs
 SilkTextureGl.cs

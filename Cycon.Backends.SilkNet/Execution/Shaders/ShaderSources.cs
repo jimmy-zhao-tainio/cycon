@@ -22,7 +22,7 @@ void main()
 }
 ";
 
-    public const string Fragment = @"#version 330 core
+    public const string FragmentGlyph = @"#version 330 core
 in vec2 vTexCoord;
 in vec4 vColor;
 
@@ -32,14 +32,20 @@ uniform sampler2D uAtlas;
 
 void main()
 {
-    float alpha = 1.0;
-    if (vTexCoord.x >= 0.0)
-    {
-        vec4 t = texture(uAtlas, vTexCoord);
-        alpha = max(t.r, max(t.g, t.b));
-    }
-
+    vec4 t = texture(uAtlas, vTexCoord);
+    float alpha = max(t.r, max(t.g, t.b));
     FragColor = vec4(vColor.rgb, vColor.a * alpha);
+}
+";
+
+    public const string FragmentQuad = @"#version 330 core
+in vec4 vColor;
+
+out vec4 FragColor;
+
+void main()
+{
+    FragColor = vColor;
 }
 ";
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text;
 using Cycon.Core.Selection;
 using Cycon.Core.Transcript;
@@ -31,7 +32,7 @@ public sealed class InteractionReducer
             _ => _state.CurrentMods
         };
 
-        return e switch
+        var actions = e switch
         {
             InputEvent.Text text => HandleText(text, transcript),
             InputEvent.KeyDown keyDown => HandleKeyDown(keyDown, transcript),
@@ -42,6 +43,9 @@ public sealed class InteractionReducer
             InputEvent.MouseWheel => Array.Empty<HostAction>(),
             _ => Array.Empty<HostAction>()
         };
+
+        ValidateState(transcript);
+        return actions;
     }
 
     public bool TryGetSelectedText(Transcript transcript, out string text)
@@ -219,9 +223,12 @@ public sealed class InteractionReducer
 
     private IReadOnlyList<HostAction> HandleMouseDown(InputEvent.MouseDown e, LayoutFrame frame, Transcript transcript)
     {
+        var actions = new List<HostAction>();
         if (_state.MouseCaptured is not null)
         {
-            return Array.Empty<HostAction>();
+            _state.MouseCaptured = null;
+            _state.IsSelecting = false;
+            actions.Add(new HostAction.SetMouseCapture(null));
         }
 
         if (e.Button != MouseButton.Left)
@@ -229,7 +236,6 @@ public sealed class InteractionReducer
             return Array.Empty<HostAction>();
         }
 
-        var actions = new List<HostAction>();
         var pos = _hitTester.HitTest(frame.HitTestMap, e.X, e.Y);
         if (pos is null)
         {
@@ -265,6 +271,13 @@ public sealed class InteractionReducer
 
     private IReadOnlyList<HostAction> HandleMouseMove(InputEvent.MouseMove e, LayoutFrame frame, Transcript transcript)
     {
+        if (_state.IsSelecting && (e.Buttons & HostMouseButtons.Left) == 0)
+        {
+            _state.IsSelecting = false;
+            _state.MouseCaptured = null;
+            return new HostAction[] { new HostAction.SetMouseCapture(null), new HostAction.RequestRebuild() };
+        }
+
         if (!_state.IsSelecting || _state.MouseCaptured is null)
         {
             return Array.Empty<HostAction>();
@@ -420,5 +433,77 @@ public sealed class InteractionReducer
         blockIndex = -1;
         return false;
     }
-}
 
+    [Conditional("DEBUG")]
+    private void ValidateState(Transcript transcript)
+    {
+        // Invariants (debug-only):
+        // 1) MouseCaptured <-> IsSelecting must match (capture is used only for selection today)
+        // 2) IsSelecting implies Selection != null
+        // 3) Focused != null must exist in transcript
+        // 4) If Selection != null, anchor/caret block ids must exist in transcript
+        // 5) Prompt prefix rule: selection indices into PromptBlock must be >= PromptPrefixLength
+        // 6) If not selecting, selection must not be empty (anchor != caret)
+
+        if (_state.IsSelecting != (_state.MouseCaptured is not null))
+        {
+            throw new InvalidOperationException($"Interaction invariant failed (capture/select mismatch). {FormatStateForDebug()}");
+        }
+
+        if (_state.IsSelecting && _state.Selection is null)
+        {
+            throw new InvalidOperationException($"Interaction invariant failed (selecting requires selection). {FormatStateForDebug()}");
+        }
+
+        if (_state.Focused is { } focused && !ContainsBlock(transcript, focused))
+        {
+            throw new InvalidOperationException($"Interaction invariant failed (focused block missing). {FormatStateForDebug()}");
+        }
+
+        if (_state.Selection is { } range)
+        {
+            if (!ContainsBlock(transcript, range.Anchor.BlockId) || !ContainsBlock(transcript, range.Caret.BlockId))
+            {
+                throw new InvalidOperationException($"Interaction invariant failed (selection block missing). {FormatStateForDebug()}");
+            }
+
+            if (TryGetPrompt(transcript, range.Anchor.BlockId, out var anchorPrompt) &&
+                range.Anchor.Index < anchorPrompt.PromptPrefixLength)
+            {
+                throw new InvalidOperationException($"Interaction invariant failed (anchor in prompt prefix). {FormatStateForDebug()}");
+            }
+
+            if (TryGetPrompt(transcript, range.Caret.BlockId, out var caretPrompt) &&
+                range.Caret.Index < caretPrompt.PromptPrefixLength)
+            {
+                throw new InvalidOperationException($"Interaction invariant failed (caret in prompt prefix). {FormatStateForDebug()}");
+            }
+
+            if (!_state.IsSelecting && range.Anchor == range.Caret)
+            {
+                throw new InvalidOperationException($"Interaction invariant failed (empty selection while not selecting). {FormatStateForDebug()}");
+            }
+        }
+    }
+
+    private static bool ContainsBlock(Transcript transcript, BlockId id)
+    {
+        foreach (var block in transcript.Blocks)
+        {
+            if (block.Id == id)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private string FormatStateForDebug()
+    {
+        var focused = _state.Focused?.ToString() ?? "null";
+        var captured = _state.MouseCaptured?.ToString() ?? "null";
+        var selection = _state.Selection?.ToString() ?? "null";
+        return $"State: Focused={focused} Captured={captured} IsSelecting={_state.IsSelecting} Selection={selection}";
+    }
+}

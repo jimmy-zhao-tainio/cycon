@@ -12,7 +12,7 @@ public abstract record InputEvent
 
     public sealed record MouseDown(int X, int Y, MouseButton Button, HostKeyModifiers Mods) : InputEvent;
 
-    public sealed record MouseMove(int X, int Y, HostKeyModifiers Mods) : InputEvent;
+    public sealed record MouseMove(int X, int Y, HostMouseButtons Buttons, HostKeyModifiers Mods) : InputEvent;
 
     public sealed record MouseUp(int X, int Y, MouseButton Button, HostKeyModifiers Mods) : InputEvent;
 
@@ -25,4 +25,3 @@ public enum MouseButton
     Right,
     Middle
 }
-

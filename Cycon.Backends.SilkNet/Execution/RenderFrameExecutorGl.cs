@@ -11,16 +11,19 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private const int FloatsPerVertex = 8;
 
     private readonly GL _gl;
-    private uint _program;
+    private uint _glyphProgram;
+    private uint _quadProgram;
     private uint _vao;
     private uint _vbo;
     private uint _atlasTexture;
     private int _viewportWidth;
     private int _viewportHeight;
-    private int _uViewportLocation;
-    private int _uAtlasLocation;
+    private int _uViewportLocationGlyph;
+    private int _uAtlasLocationGlyph;
+    private int _uViewportLocationQuad;
     private bool _initialized;
     private bool _disposed;
+    private readonly bool _trace = Environment.GetEnvironmentVariable("CYCON_GL_TRACE") == "1";
 
     public RenderFrameExecutorGl(GL gl)
     {
@@ -34,9 +37,12 @@ public sealed class RenderFrameExecutorGl : IDisposable
             return;
         }
 
-        _program = CreateProgram(ShaderSources.Vertex, ShaderSources.Fragment);
-        _uViewportLocation = _gl.GetUniformLocation(_program, "uViewport");
-        _uAtlasLocation = _gl.GetUniformLocation(_program, "uAtlas");
+        _glyphProgram = CreateProgram(ShaderSources.Vertex, ShaderSources.FragmentGlyph);
+        _uViewportLocationGlyph = _gl.GetUniformLocation(_glyphProgram, "uViewport");
+        _uAtlasLocationGlyph = _gl.GetUniformLocation(_glyphProgram, "uAtlas");
+
+        _quadProgram = CreateProgram(ShaderSources.Vertex, ShaderSources.FragmentQuad);
+        _uViewportLocationQuad = _gl.GetUniformLocation(_quadProgram, "uViewport");
 
         _vao = _gl.GenVertexArray();
         _vbo = _gl.GenBuffer();
@@ -75,8 +81,11 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         if (_initialized)
         {
-            _gl.UseProgram(_program);
-            _gl.Uniform2(_uViewportLocation, (float)_viewportWidth, (float)_viewportHeight);
+            _gl.UseProgram(_glyphProgram);
+            _gl.Uniform2(_uViewportLocationGlyph, (float)_viewportWidth, (float)_viewportHeight);
+
+            _gl.UseProgram(_quadProgram);
+            _gl.Uniform2(_uViewportLocationQuad, (float)_viewportWidth, (float)_viewportHeight);
         }
     }
 
@@ -94,29 +103,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         _gl.Clear(ClearBufferMask.ColorBufferBit);
 
-        var vertices = BuildVertices(frame, atlas);
-        if (vertices.Count == 0)
-        {
-            return;
-        }
-
-        _gl.UseProgram(_program);
-        _gl.Uniform2(_uViewportLocation, (float)_viewportWidth, (float)_viewportHeight);
-        _gl.ActiveTexture(TextureUnit.Texture0);
-        _gl.BindTexture(TextureTarget.Texture2D, _atlasTexture);
-        _gl.Uniform1(_uAtlasLocation, 0);
-
-        _gl.BindVertexArray(_vao);
-        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
-        var data = vertices.ToArray();
-        unsafe
-        {
-            fixed (float* ptr = data)
-            {
-                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), ptr, BufferUsageARB.StreamDraw);
-            }
-        }
-        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(vertices.Count / FloatsPerVertex));
+        ExecuteBatched(frame, atlas);
     }
 
     public void ClearOnly()
@@ -152,6 +139,83 @@ public sealed class RenderFrameExecutorGl : IDisposable
         }
 
         return vertices;
+    }
+
+    private enum DrawBatchKind
+    {
+        Glyph,
+        Quad
+    }
+
+    private void ExecuteBatched(RenderFrame frame, GlyphAtlasData atlas)
+    {
+        var commands = frame.Commands;
+        var batches = DrawCommandBatcher.ComputeBatches(commands);
+
+        DrawBatchKind? lastKind = null;
+        foreach (var batch in batches)
+        {
+            var kind = batch.Kind == DrawCommandBatchKind.Glyph ? DrawBatchKind.Glyph : DrawBatchKind.Quad;
+            if (_trace && (lastKind is null || lastKind.Value != kind))
+            {
+                Console.WriteLine($"[CYCON_GL_TRACE] switch -> {kind}");
+            }
+
+            if (_trace)
+            {
+                Console.WriteLine($"[CYCON_GL_TRACE] batch {kind} start={batch.StartIndex} count={batch.Count}");
+            }
+
+            var vertices = new List<float>();
+            for (var i = batch.StartIndex; i < batch.StartIndex + batch.Count; i++)
+            {
+                switch (commands[i])
+                {
+                    case DrawGlyphRun glyphRun:
+                        AddGlyphRunVertices(vertices, glyphRun, atlas);
+                        break;
+                    case DrawQuad quad:
+                        AddQuadVertices(vertices, quad);
+                        break;
+                }
+            }
+
+            DrawVertices(kind, vertices, atlas);
+            lastKind = kind;
+        }
+    }
+
+    private void DrawVertices(DrawBatchKind kind, List<float> vertices, GlyphAtlasData atlas)
+    {
+        if (vertices.Count == 0)
+        {
+            return;
+        }
+
+        var program = kind == DrawBatchKind.Glyph ? _glyphProgram : _quadProgram;
+        var uViewportLocation = kind == DrawBatchKind.Glyph ? _uViewportLocationGlyph : _uViewportLocationQuad;
+
+        _gl.UseProgram(program);
+        _gl.Uniform2(uViewportLocation, (float)_viewportWidth, (float)_viewportHeight);
+
+        if (kind == DrawBatchKind.Glyph)
+        {
+            _gl.ActiveTexture(TextureUnit.Texture0);
+            _gl.BindTexture(TextureTarget.Texture2D, _atlasTexture);
+            _gl.Uniform1(_uAtlasLocationGlyph, 0);
+        }
+
+        _gl.BindVertexArray(_vao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
+        var data = vertices.ToArray();
+        unsafe
+        {
+            fixed (float* ptr = data)
+            {
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), ptr, BufferUsageARB.StreamDraw);
+            }
+        }
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(vertices.Count / FloatsPerVertex));
     }
 
     private void AddGlyphRunVertices(List<float> vertices, DrawGlyphRun glyphRun, GlyphAtlasData atlas)
@@ -202,17 +266,17 @@ public sealed class RenderFrameExecutorGl : IDisposable
         var x1 = x0 + quad.Width;
         var y1 = y0 + quad.Height;
 
-        const float solidU = -1f;
-        const float solidV = -1f;
+        const float u = 0f;
+        const float v = 0f;
         var (r, g, b, a) = ToColor(quad.Rgba);
 
-        AddVertex(vertices, x0, y0, solidU, solidV, r, g, b, a);
-        AddVertex(vertices, x1, y0, solidU, solidV, r, g, b, a);
-        AddVertex(vertices, x1, y1, solidU, solidV, r, g, b, a);
+        AddVertex(vertices, x0, y0, u, v, r, g, b, a);
+        AddVertex(vertices, x1, y0, u, v, r, g, b, a);
+        AddVertex(vertices, x1, y1, u, v, r, g, b, a);
 
-        AddVertex(vertices, x0, y0, solidU, solidV, r, g, b, a);
-        AddVertex(vertices, x1, y1, solidU, solidV, r, g, b, a);
-        AddVertex(vertices, x0, y1, solidU, solidV, r, g, b, a);
+        AddVertex(vertices, x0, y0, u, v, r, g, b, a);
+        AddVertex(vertices, x1, y1, u, v, r, g, b, a);
+        AddVertex(vertices, x0, y1, u, v, r, g, b, a);
     }
 
     private static void AddVertex(List<float> vertices, float x, float y, float u, float v, float r, float g, float b, float a)
@@ -330,10 +394,8 @@ public sealed class RenderFrameExecutorGl : IDisposable
             _gl.DeleteVertexArray(_vao);
         }
 
-        if (_program != 0)
-        {
-            _gl.DeleteProgram(_program);
-        }
+        if (_glyphProgram != 0) _gl.DeleteProgram(_glyphProgram);
+        if (_quadProgram != 0) _gl.DeleteProgram(_quadProgram);
 
         _disposed = true;
     }
