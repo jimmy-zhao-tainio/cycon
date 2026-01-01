@@ -9,6 +9,8 @@ public sealed class ConsoleSettings
 
     public ScrollbarSettings Scrollbar { get; init; } = new();
 
+    public ActivityIndicatorSettings Indicators { get; init; } = new();
+
     public TextStyle DefaultTextStyle { get; init; } = new()
     {
         ForegroundRgba = unchecked((int)0xEEEEEEFF),

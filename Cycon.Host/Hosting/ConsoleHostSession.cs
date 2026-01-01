@@ -57,6 +57,9 @@ public sealed class ConsoleHostSession
     private readonly Dictionary<JobId, BlockId> _activeJobPromptBlocks = new();
     private long _nextOwnedPromptId;
     private readonly Dictionary<BlockId, OwnedPromptRef> _ownedPromptRefs = new();
+    private readonly Dictionary<BlockId, BlockId> _commandIndicators = new();
+    private readonly Dictionary<BlockId, long> _commandIndicatorStartTicks = new();
+    private readonly Dictionary<BlockId, BlockId> _visibleCommandIndicators = new();
     private bool _pendingShellPrompt;
     private readonly Dictionary<(JobId JobId, TextStream Stream), ChunkAccumulator> _chunkAccumulators = new();
     private readonly List<string> _commandHistory = new();
@@ -83,6 +86,7 @@ public sealed class ConsoleHostSession
     private long _lastCaretRenderTicks;
     private byte _lastScrollbarTrackAlpha;
     private byte _lastScrollbarThumbAlpha;
+    private int _lastSpinnerFrameIndex = -1;
     private long _lastTickTicks;
     private bool _scrollbarInteractedThisTick;
 
@@ -195,6 +199,7 @@ public sealed class ConsoleHostSession
             _pendingContentRebuild = true;
         }
 
+        UpdateVisibleCommandIndicators(nowTicks);
         EnsureShellPromptAtEndIfNeeded();
 
         var framebufferWidth = _latestFramebufferWidth;
@@ -219,6 +224,7 @@ public sealed class ConsoleHostSession
         }
 
         var caretAlphaNow = ComputeCaretAlpha(nowTicks);
+        var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
 
         var renderedGrid = _lastFrame?.BuiltGrid ?? default;
 
@@ -248,7 +254,8 @@ public sealed class ConsoleHostSession
                     snapW,
                     snapH,
                     restoreAnchor,
-                    caretAlphaNow);
+                    caretAlphaNow,
+                    timeSeconds);
 
                 _lastFrame = frame;
                 _renderedGrid = builtGrid;
@@ -259,6 +266,7 @@ public sealed class ConsoleHostSession
                 var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
                 _lastScrollbarTrackAlpha = trackAlpha;
                 _lastScrollbarThumbAlpha = thumbAlpha;
+                _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(passNowTicks);
                 _lastCaretRenderTicks = passNowTicks;
 
                 var verifyGrid = _latestGrid;
@@ -292,7 +300,8 @@ public sealed class ConsoleHostSession
                 framebufferWidth,
                 framebufferHeight,
                 restoreAnchor: false,
-                caretAlpha: caretAlphaNow);
+                caretAlpha: caretAlphaNow,
+                timeSeconds: timeSeconds);
 
             _lastFrame = frame;
             _renderedGrid = builtGrid;
@@ -303,6 +312,7 @@ public sealed class ConsoleHostSession
             var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
             _lastScrollbarTrackAlpha = trackAlpha;
             _lastScrollbarThumbAlpha = thumbAlpha;
+            _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(_lastRebuildTicks);
             _lastCaretRenderTicks = _lastRebuildTicks;
             _pendingContentRebuild = false;
         }
@@ -328,27 +338,130 @@ public sealed class ConsoleHostSession
             return;
         }
 
+        UpdateVisibleCommandIndicators(nowTicks);
+        var spinnerIndex = ComputeSpinnerFrameIndex(nowTicks);
+        var minIntervalMs = 33;
+        if (spinnerIndex != -1)
+        {
+            var indicators = _document.Settings.Indicators;
+            var fps = Math.Max(1, indicators.AnimationFps);
+            minIntervalMs = (int)Math.Clamp(Math.Floor(1000.0 / fps), 1.0, 33.0);
+        }
+
         var elapsedSinceCaretMs = (nowTicks - _lastCaretRenderTicks) * 1000.0 / Stopwatch.Frequency;
-        if (_lastCaretRenderTicks != 0 && elapsedSinceCaretMs < 33)
+        if (_lastCaretRenderTicks != 0 && elapsedSinceCaretMs < minIntervalMs)
         {
             return;
         }
 
         var caretAlpha = ComputeCaretAlpha(nowTicks);
         var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
-        if (caretAlpha == _lastCaretAlpha && trackAlpha == _lastScrollbarTrackAlpha && thumbAlpha == _lastScrollbarThumbAlpha)
+        if (caretAlpha == _lastCaretAlpha &&
+            trackAlpha == _lastScrollbarTrackAlpha &&
+            thumbAlpha == _lastScrollbarThumbAlpha &&
+            spinnerIndex == _lastSpinnerFrameIndex)
         {
             return;
         }
 
-        var renderFrame = _renderer.Render(_document, _lastLayout, _font, _selectionStyle, caretAlpha);
+        var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
+        var renderFrame = _renderer.Render(_document, _lastLayout, _font, _selectionStyle, timeSeconds: timeSeconds, commandIndicators: _visibleCommandIndicators, caretAlpha: caretAlpha);
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         _lastFrame = backendFrame;
         _renderedGrid = backendFrame.BuiltGrid;
         _lastCaretAlpha = caretAlpha;
         _lastScrollbarTrackAlpha = trackAlpha;
         _lastScrollbarThumbAlpha = thumbAlpha;
+        _lastSpinnerFrameIndex = spinnerIndex;
         _lastCaretRenderTicks = nowTicks;
+    }
+
+    private void UpdateVisibleCommandIndicators(long nowTicks)
+    {
+        _visibleCommandIndicators.Clear();
+
+        if (_commandIndicators.Count == 0)
+        {
+            _commandIndicatorStartTicks.Clear();
+            return;
+        }
+
+        var delaySeconds = Math.Max(0.0, _document.Settings.Indicators.ShowDelaySeconds);
+        var delayTicks = (long)Math.Round(delaySeconds * Stopwatch.Frequency);
+
+        List<BlockId>? removeKeys = null;
+        foreach (var kvp in _commandIndicators)
+        {
+            var commandEchoId = kvp.Key;
+            var activityBlockId = kvp.Value;
+
+            if (!TryGetBlock(commandEchoId, out var commandBlock) || commandBlock is not TextBlock)
+            {
+                removeKeys ??= new List<BlockId>();
+                removeKeys.Add(commandEchoId);
+                continue;
+            }
+
+            if (!TryGetBlock(activityBlockId, out var activityBlock) || activityBlock is not IRunnableBlock runnable)
+            {
+                removeKeys ??= new List<BlockId>();
+                removeKeys.Add(commandEchoId);
+                continue;
+            }
+
+            if (runnable.State != BlockRunState.Running)
+            {
+                removeKeys ??= new List<BlockId>();
+                removeKeys.Add(commandEchoId);
+                continue;
+            }
+
+            if (!_commandIndicatorStartTicks.TryGetValue(commandEchoId, out var startTicks))
+            {
+                startTicks = nowTicks;
+                _commandIndicatorStartTicks[commandEchoId] = startTicks;
+            }
+
+            if (nowTicks - startTicks >= delayTicks)
+            {
+                _visibleCommandIndicators[commandEchoId] = activityBlockId;
+            }
+        }
+
+        if (removeKeys is null)
+        {
+            return;
+        }
+
+        foreach (var key in removeKeys)
+        {
+            _commandIndicators.Remove(key);
+            _commandIndicatorStartTicks.Remove(key);
+        }
+    }
+
+    private int ComputeSpinnerFrameIndex(long nowTicks)
+    {
+        if (!HasIndeterminateSpinner())
+        {
+            return -1;
+        }
+
+        var indicators = _document.Settings.Indicators;
+        var fps = Math.Max(1, indicators.AnimationFps);
+        var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
+        return (int)Math.Floor(timeSeconds * fps);
+    }
+
+    private bool HasIndeterminateSpinner()
+    {
+        if (_visibleCommandIndicators.Count == 0)
+        {
+            return false;
+        }
+
+        // Any visible indicator implies we need overlay animation ticks (pulse + progress fill updates).
+        return true;
     }
 
     private static byte ComputeCaretAlpha(long nowTicks)
@@ -515,12 +628,15 @@ public sealed class ConsoleHostSession
         }
 
         var nowTicks = Stopwatch.GetTimestamp();
+        UpdateVisibleCommandIndicators(nowTicks);
         var caretAlphaNow = ComputeCaretAlpha(nowTicks);
+        var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
         var (frame, builtGrid, layout, renderFrame) = BuildFrameFor(
             framebufferWidth,
             framebufferHeight,
             restoreAnchor: false,
-            caretAlpha: caretAlphaNow);
+            caretAlpha: caretAlphaNow,
+            timeSeconds: timeSeconds);
 
         _lastFrame = frame;
         _renderedGrid = builtGrid;
@@ -531,6 +647,7 @@ public sealed class ConsoleHostSession
         var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
         _lastScrollbarTrackAlpha = trackAlpha;
         _lastScrollbarThumbAlpha = thumbAlpha;
+        _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(nowTicks);
         _lastCaretRenderTicks = nowTicks;
     }
 
@@ -703,6 +820,7 @@ public sealed class ConsoleHostSession
 
         var level = levelOverride ?? StopLevel.Soft;
         stoppable.RequestStop(level);
+        UpdateVisibleCommandIndicators(Stopwatch.GetTimestamp());
 
         _document.Scroll.IsFollowingTail = true;
 
@@ -912,6 +1030,8 @@ public sealed class ConsoleHostSession
 
         public bool StartedBlockingActivity => _startedBlockingActivity;
 
+        public BlockId CommandEchoId => _commandEchoId;
+
         public void InsertTextAfterCommandEcho(string text, ConsoleTextStream stream)
         {
             var id = new BlockId(_session.AllocateNewBlockId());
@@ -930,6 +1050,12 @@ public sealed class ConsoleHostSession
             {
                 _startedBlockingActivity = true;
             }
+        }
+
+        public void AttachIndicator(BlockId activityBlockId)
+        {
+            _session._commandIndicators[_commandEchoId] = activityBlockId;
+            _session._pendingContentRebuild = true;
         }
 
         public void AppendOwnedPrompt(string promptText)
@@ -1023,6 +1149,9 @@ public sealed class ConsoleHostSession
         _jobPromptRefs.Clear();
         _activeJobPromptBlocks.Clear();
         _ownedPromptRefs.Clear();
+        _commandIndicators.Clear();
+        _commandIndicatorStartTicks.Clear();
+        _visibleCommandIndicators.Clear();
         _chunkAccumulators.Clear();
 
         _document.Scroll.ScrollOffsetRows = 0;
@@ -1819,7 +1948,8 @@ public sealed class ConsoleHostSession
             int framebufferWidth,
             int framebufferHeight,
             bool restoreAnchor,
-            byte caretAlpha)
+            byte caretAlpha,
+            double timeSeconds)
     {
         var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
         var layout = _layoutEngine.Layout(_document, _layoutSettings, viewport);
@@ -1857,7 +1987,7 @@ public sealed class ConsoleHostSession
             layout = new LayoutFrame(layout.Grid, layout.Lines, layout.HitTestMap, layout.TotalRows, scrollbar);
         }
 
-        var renderFrame = _renderer.Render(_document, layout, _font, _selectionStyle, caretAlpha: caretAlpha);
+        var renderFrame = _renderer.Render(_document, layout, _font, _selectionStyle, timeSeconds: timeSeconds, commandIndicators: _visibleCommandIndicators, caretAlpha: caretAlpha);
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         var builtGrid = backendFrame.BuiltGrid;
         return (backendFrame, builtGrid, layout, renderFrame);

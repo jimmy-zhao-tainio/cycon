@@ -22,6 +22,8 @@ public sealed class ConsoleRenderer
         LayoutFrame layout,
         IConsoleFont font,
         SelectionStyle selectionStyle,
+        double timeSeconds,
+        IReadOnlyDictionary<BlockId, BlockId>? commandIndicators = null,
         byte caretAlpha = 0xFF)
     {
         var defaultForeground = document.Settings.DefaultTextStyle.ForegroundRgba;
@@ -33,9 +35,13 @@ public sealed class ConsoleRenderer
         var selection = ComputeSelectionBounds(document);
         var selectionBackground = selectionStyle.SelectedBackgroundRgba;
         var fontMetrics = font.Metrics;
+        var indicators = document.Settings.Indicators;
+        var indicatedCommandBlocks = new HashSet<BlockId>();
 
-        foreach (var line in layout.Lines)
+        var lines = layout.Lines;
+        for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
         {
+            var line = lines[lineIndex];
             var rowOnScreen = line.RowIndex - scrollOffsetRows;
             if (rowOnScreen < 0 || rowOnScreen >= grid.Rows)
             {
@@ -50,6 +56,19 @@ public sealed class ConsoleRenderer
             }
 
             var lineForeground = GetBlockForeground(document.Settings, block);
+
+            if (commandIndicators is not null &&
+                block is TextBlock &&
+                commandIndicators.TryGetValue(block.Id, out var activityBlockId) &&
+                indicatedCommandBlocks.Add(block.Id) &&
+                IsLastLineForBlock(lines, lineIndex))
+            {
+                if (TryGetBlockById(document.Transcript.Blocks, activityBlockId, out var activityBlock) &&
+                    activityBlock is IRunnableBlock runnable)
+                {
+                    AddActivityIndicator(frame, indicators, fontMetrics, activityBlock, runnable, grid, rowOnScreen, lineForeground, timeSeconds, line.Length);
+                }
+            }
 
             if (block is PromptBlock prompt && pendingCaret is null)
             {
@@ -109,18 +128,15 @@ public sealed class ConsoleRenderer
             var rowOnScreen = caretQuad.RowIndex - scrollOffsetRows;
             if (rowOnScreen >= 0 && rowOnScreen < grid.Rows)
             {
-                const int caretCodepoint = '_';
-                var glyph = font.MapGlyph(caretCodepoint);
-                var cellX = grid.PaddingLeftPx + (caretQuad.ColIndex * grid.CellWidthPx);
-                var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
-                var baselineY = cellY + fontMetrics.BaselinePx;
-
-                var glyphX = cellX + glyph.BearingX;
-                var glyphY = baselineY - glyph.BearingY;
                 if (caretAlpha != 0)
                 {
+                    var cellX = grid.PaddingLeftPx + (caretQuad.ColIndex * grid.CellWidthPx);
+                    var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
+                    var underlineY = fontMetrics.GetUnderlineTopY(cellY);
+                    var underlineH = Math.Max(1, fontMetrics.UnderlineThicknessPx);
+
                     var caretColor = WithAlpha(defaultForeground, caretAlpha);
-                    frame.Add(new DrawGlyphRun(0, 0, new[] { new GlyphInstance(glyph.Codepoint, glyphX, glyphY, caretColor) }));
+                    frame.Add(new DrawQuad(cellX, underlineY, grid.CellWidthPx, underlineH, caretColor));
                 }
             }
         }
@@ -128,6 +144,120 @@ public sealed class ConsoleRenderer
         ScrollbarRenderer.Add(frame, document, layout);
 
         return frame;
+    }
+
+    private static void AddActivityIndicator(
+        RenderFrame frame,
+        Cycon.Core.Settings.ActivityIndicatorSettings settings,
+        Cycon.Core.Fonts.FontMetrics fontMetrics,
+        IBlock block,
+        IRunnableBlock runnable,
+        FixedCellGrid grid,
+        int rowOnScreen,
+        int blockForegroundRgba,
+        double timeSeconds,
+        int lineLengthCols)
+    {
+        if (runnable.State != BlockRunState.Running)
+        {
+            return;
+        }
+
+        var rectY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
+        var rectW = grid.CellWidthPx;
+        if (rectW <= 0 || lineLengthCols >= grid.Cols)
+        {
+            return;
+        }
+
+        // Place in the caret cell immediately after the command text.
+        // (Aligned to the fixed grid to feel like a "block caret".)
+        var rectX = grid.PaddingLeftPx + (lineLengthCols * grid.CellWidthPx);
+        var underlineBottomExclusiveY = fontMetrics.GetUnderlineBottomExclusiveY(rectY);
+        var capBottomExclusiveY = Math.Clamp(underlineBottomExclusiveY, rectY, rectY + grid.CellHeightPx);
+        var rectH = capBottomExclusiveY - rectY;
+        if (rectH <= 0)
+        {
+            return;
+        }
+
+        var fraction = (block as IProgressBlock)?.Progress.Fraction;
+        if (IsDeterminateFraction(fraction))
+        {
+            AddProgressCaret(frame, rectX, rectY, rectW, rectH, blockForegroundRgba, settings, fraction!.Value);
+            return;
+        }
+
+        AddPulsingCaret(frame, rectX, rectY, rectW, rectH, blockForegroundRgba, settings, timeSeconds);
+    }
+
+    private static bool IsDeterminateFraction(double? fraction)
+    {
+        if (fraction is null)
+        {
+            return false;
+        }
+
+        if (double.IsNaN(fraction.Value) || double.IsInfinity(fraction.Value))
+        {
+            return false;
+        }
+
+        return fraction.Value >= 0.0 && fraction.Value <= 1.0;
+    }
+
+    private static void AddProgressCaret(
+        RenderFrame frame,
+        int x,
+        int y,
+        int w,
+        int h,
+        int rgba,
+        Cycon.Core.Settings.ActivityIndicatorSettings settings,
+        double fraction)
+    {
+        if (w <= 0 || h <= 0)
+        {
+            return;
+        }
+
+        var clamped = Math.Clamp(fraction, 0, 1);
+        var track = WithAlpha(rgba, settings.ProgressTrackAlpha);
+        frame.Add(new DrawQuad(x, y, w, h, track));
+
+        var fillH = (int)Math.Round(h * clamped);
+        if (fillH <= 0)
+        {
+            return;
+        }
+
+        var fill = WithAlpha(rgba, settings.ProgressFillAlpha);
+        frame.Add(new DrawQuad(x, y + (h - fillH), w, fillH, fill));
+    }
+
+    private static void AddPulsingCaret(
+        RenderFrame frame,
+        int x,
+        int y,
+        int w,
+        int h,
+        int rgba,
+        Cycon.Core.Settings.ActivityIndicatorSettings settings,
+        double timeSeconds)
+    {
+        if (w <= 0 || h <= 0)
+        {
+            return;
+        }
+
+        var period = settings.PulsePeriodSeconds <= 0 ? 1.0 : settings.PulsePeriodSeconds;
+        var phase = (timeSeconds % period) / period; // 0..1
+        var pulse = 0.5 - (0.5 * Math.Cos(phase * Math.PI * 2.0)); // 0..1
+
+        var minA = settings.PulseMinAlpha;
+        var maxA = settings.PulseMaxAlpha;
+        var alpha = (byte)Math.Clamp((int)Math.Round(minA + ((maxA - minA) * pulse)), 0, 255);
+        frame.Add(new DrawQuad(x, y, w, h, WithAlpha(rgba, alpha)));
     }
 
     private static int GetBlockForeground(ConsoleSettings settings, IBlock block)
@@ -211,6 +341,36 @@ public sealed class ConsoleRenderer
         {
             AddRun(frame, grid, rowOnScreen, runStart, line.Length - runStart, backgroundRgba);
         }
+    }
+
+    private static bool IsLastLineForBlock(IReadOnlyList<LayoutLine> lines, int lineIndex)
+    {
+        if (lineIndex < 0 || lineIndex >= lines.Count)
+        {
+            return false;
+        }
+
+        if (lineIndex == lines.Count - 1)
+        {
+            return true;
+        }
+
+        return lines[lineIndex + 1].BlockId != lines[lineIndex].BlockId;
+    }
+
+    private static bool TryGetBlockById(IReadOnlyList<IBlock> blocks, BlockId id, out IBlock block)
+    {
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            if (blocks[i].Id == id)
+            {
+                block = blocks[i];
+                return true;
+            }
+        }
+
+        block = null!;
+        return false;
     }
 
     private static void AddRun(

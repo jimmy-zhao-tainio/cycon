@@ -21,12 +21,14 @@ public sealed class ProgressBlockCommandHandler : IBlockCommandHandler
             return true;
         }
 
+        var activityId = ctx.AllocateBlockId();
         ctx.InsertBlockAfterCommandEcho(new ActivityBlock(
-            id: ctx.AllocateBlockId(),
+            id: activityId,
             label: "progress",
             kind: ActivityKind.Progress,
             duration: duration.Value,
             stream: ConsoleTextStream.System));
+        ctx.AttachIndicator(activityId);
         return true;
     }
 
@@ -46,4 +48,3 @@ public sealed class ProgressBlockCommandHandler : IBlockCommandHandler
         return null;
     }
 }
-

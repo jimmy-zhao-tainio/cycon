@@ -106,14 +106,18 @@ public sealed class BlockCommandRegistryTests
         public List<(string Text, ConsoleTextStream Stream)> Inserted { get; } = new();
         public List<string> OwnedPrompts { get; } = new();
         public List<IBlock> InsertedBlocks { get; } = new();
+        public List<(BlockId CommandEchoId, BlockId ActivityId)> Indicators { get; } = new();
         public int ClearCount { get; private set; }
         public int ExitCount { get; private set; }
         private int _nextBlockId;
+
+        public BlockId CommandEchoId { get; } = new(1000);
 
         public BlockId AllocateBlockId() => new(++_nextBlockId);
 
         public void InsertTextAfterCommandEcho(string text, ConsoleTextStream stream) => Inserted.Add((text, stream));
         public void InsertBlockAfterCommandEcho(IBlock block) => InsertedBlocks.Add(block);
+        public void AttachIndicator(BlockId activityBlockId) => Indicators.Add((CommandEchoId, activityBlockId));
         public void AppendOwnedPrompt(string promptText) => OwnedPrompts.Add(promptText);
         public void ClearTranscript() => ClearCount++;
         public void RequestExit() => ExitCount++;

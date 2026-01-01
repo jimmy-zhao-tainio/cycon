@@ -22,12 +22,14 @@ public sealed class WaitBlockCommandHandler : IBlockCommandHandler
             return true;
         }
 
+        var activityId = ctx.AllocateBlockId();
         ctx.InsertBlockAfterCommandEcho(new ActivityBlock(
-            id: ctx.AllocateBlockId(),
+            id: activityId,
             label: "wait",
             kind: ActivityKind.Wait,
             duration: duration.Value,
             stream: ConsoleTextStream.System));
+        ctx.AttachIndicator(activityId);
         return true;
     }
 
