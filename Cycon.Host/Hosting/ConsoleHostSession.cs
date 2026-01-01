@@ -124,6 +124,8 @@ public sealed class ConsoleHostSession
         _blockCommands.Register(new AskBlockCommandHandler());
         _blockCommands.Register(new ClearBlockCommandHandler());
         _blockCommands.Register(new ExitBlockCommandHandler());
+        _blockCommands.Register(new WaitBlockCommandHandler());
+        _blockCommands.Register(new ProgressBlockCommandHandler());
     }
 
     public static ConsoleHostSession CreateVga(string text, IClipboard clipboard, int resizeSettleMs = 80, int rebuildThrottleMs = 80)
@@ -188,7 +190,12 @@ public sealed class ConsoleHostSession
             : (int)Math.Clamp((nowTicks - _lastTickTicks) * 1000.0 / Stopwatch.Frequency, 0, 250);
         _lastTickTicks = nowTicks;
 
-        TickRunnableBlocks(TimeSpan.FromMilliseconds(dtMs));
+        if (TickRunnableBlocks(TimeSpan.FromMilliseconds(dtMs)))
+        {
+            _pendingContentRebuild = true;
+        }
+
+        EnsureShellPromptAtEndIfNeeded();
 
         var framebufferWidth = _latestFramebufferWidth;
         var framebufferHeight = _latestFramebufferHeight;
@@ -697,19 +704,26 @@ public sealed class ConsoleHostSession
         var level = levelOverride ?? StopLevel.Soft;
         stoppable.RequestStop(level);
 
-        if (block is PromptBlock { Owner: not null } && _ownedPromptRefs.ContainsKey(focused.Value))
+        _document.Scroll.IsFollowingTail = true;
+
+        if (_pendingShellPrompt)
         {
-            if (TryGetPrompt(focused.Value, out var ownedPrompt))
+            EnsureShellPromptAtEndIfNeeded();
+        }
+
+        if (block is PromptBlock { Owner: not null } && _ownedPromptRefs.ContainsKey(block.Id))
+        {
+            if (TryGetPrompt(block.Id, out var ownedPrompt))
             {
-                ReplacePromptWithArchivedText(focused.Value, ownedPrompt.Prompt + ownedPrompt.Input, ConsoleTextStream.Default);
+                ReplacePromptWithArchivedText(block.Id, ownedPrompt.Prompt + ownedPrompt.Input, ConsoleTextStream.Default);
             }
 
-            _ownedPromptRefs.Remove(focused.Value);
+            _ownedPromptRefs.Remove(block.Id);
             _pendingShellPrompt = true;
             EnsureShellPromptAtEndIfNeeded();
         }
 
-        if (block is PromptBlock { Owner: not null } && _jobPromptRefs.TryGetValue(focused.Value, out var jobPrompt))
+        if (block is PromptBlock { Owner: not null } && _jobPromptRefs.TryGetValue(block.Id, out var jobPrompt))
         {
             if (_jobScheduler.TryGetJob(jobPrompt.JobId, out var job))
             {
@@ -825,6 +839,12 @@ public sealed class ConsoleHostSession
             {
                 _document.Scroll.IsFollowingTail = true;
                 _pendingContentRebuild = true;
+
+                if (ctx.StartedBlockingActivity)
+                {
+                    RemoveShellPromptIfPresent(promptId);
+                    _pendingShellPrompt = true;
+                }
             }
             else if (!string.IsNullOrWhiteSpace(command))
             {
@@ -881,6 +901,7 @@ public sealed class ConsoleHostSession
         private readonly ConsoleHostSession _session;
         private readonly BlockId _commandEchoId;
         private readonly BlockId _shellPromptId;
+        private bool _startedBlockingActivity;
 
         public BlockCommandContext(ConsoleHostSession session, BlockId commandEchoId, BlockId shellPromptId)
         {
@@ -889,10 +910,26 @@ public sealed class ConsoleHostSession
             _shellPromptId = shellPromptId;
         }
 
+        public bool StartedBlockingActivity => _startedBlockingActivity;
+
         public void InsertTextAfterCommandEcho(string text, ConsoleTextStream stream)
         {
             var id = new BlockId(_session.AllocateNewBlockId());
             _session.InsertBlockAfter(_commandEchoId, new TextBlock(id, text, stream));
+        }
+
+        public BlockId AllocateBlockId() => new(_session.AllocateNewBlockId());
+
+        public void InsertBlockAfterCommandEcho(IBlock block)
+        {
+            _session.InsertBlockAfter(_commandEchoId, block);
+
+            if (block is IRunnableBlock runnable &&
+                runnable.State == BlockRunState.Running &&
+                block is not PromptBlock)
+            {
+                _startedBlockingActivity = true;
+            }
         }
 
         public void AppendOwnedPrompt(string promptText)
@@ -1273,6 +1310,11 @@ public sealed class ConsoleHostSession
             return;
         }
 
+        if (HasBlockingActiveBlock())
+        {
+            return;
+        }
+
         var blocks = _document.Transcript.Blocks;
         if (blocks.Count > 0 && blocks[^1] is PromptBlock prompt && prompt.Owner is null)
         {
@@ -1287,6 +1329,41 @@ public sealed class ConsoleHostSession
 
         _document.Transcript.Add(new PromptBlock(new BlockId(AllocateNewBlockId()), _defaultPromptText));
         _pendingShellPrompt = false;
+        _pendingContentRebuild = true;
+    }
+
+    private bool HasBlockingActiveBlock()
+    {
+        foreach (var block in _document.Transcript.Blocks)
+        {
+            if (block is PromptBlock)
+            {
+                continue;
+            }
+
+            if (block is IRunnableBlock runnable && runnable.State == BlockRunState.Running)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void RemoveShellPromptIfPresent(BlockId promptId)
+    {
+        var blocks = _document.Transcript.Blocks;
+        if (blocks.Count == 0)
+        {
+            return;
+        }
+
+        var lastIndex = blocks.Count - 1;
+        if (blocks[lastIndex] is PromptBlock prompt && prompt.Id == promptId && prompt.Owner is null)
+        {
+            _document.Transcript.RemoveAt(lastIndex);
+            _pendingContentRebuild = true;
+        }
     }
 
     private void ClearChunkAccumulatorsForJob(JobId jobId)
@@ -1613,20 +1690,32 @@ public sealed class ConsoleHostSession
         return false;
     }
 
-    private void TickRunnableBlocks(TimeSpan dt)
+    private bool TickRunnableBlocks(TimeSpan dt)
     {
         if (dt <= TimeSpan.Zero)
         {
-            return;
+            return false;
         }
 
+        var changed = false;
         foreach (var block in _document.Transcript.Blocks)
         {
             if (block is IRunnableBlock runnable && runnable.State == BlockRunState.Running)
             {
+                var stateBefore = runnable.State;
+                var textBefore = block is ActivityBlock activity ? activity.ExportText(0, activity.TextLength) : null;
                 runnable.Tick(dt);
+                var stateAfter = runnable.State;
+                var textAfter = block is ActivityBlock activityAfter ? activityAfter.ExportText(0, activityAfter.TextLength) : null;
+
+                if (stateBefore != stateAfter || !string.Equals(textBefore, textAfter, StringComparison.Ordinal))
+                {
+                    changed = true;
+                }
             }
         }
+
+        return changed;
     }
 
 

@@ -143,6 +143,17 @@ public sealed class ConsoleRenderer
             };
         }
 
+        if (block is ActivityBlock activityBlock)
+        {
+            return activityBlock.Stream switch
+            {
+                ConsoleTextStream.Stdout => settings.StdoutTextStyle.ForegroundRgba,
+                ConsoleTextStream.Stderr => settings.StderrTextStyle.ForegroundRgba,
+                ConsoleTextStream.System => settings.SystemTextStyle.ForegroundRgba,
+                _ => settings.DefaultTextStyle.ForegroundRgba
+            };
+        }
+
         return settings.DefaultTextStyle.ForegroundRgba;
     }
 
@@ -160,6 +171,7 @@ public sealed class ConsoleRenderer
         return block switch
         {
             TextBlock textBlock => textBlock.Text,
+            ActivityBlock activityBlock => activityBlock.ExportText(0, activityBlock.TextLength),
             PromptBlock promptBlock => promptBlock.Prompt + promptBlock.Input,
             ImageBlock => throw new NotSupportedException("ImageBlock rendering not implemented in Blocks v0."),
             Scene3DBlock => throw new NotSupportedException("Scene3DBlock rendering not implemented in Blocks v0."),

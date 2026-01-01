@@ -2,6 +2,7 @@ using Cycon.Core;
 using Cycon.Core.Scrolling;
 using Cycon.Core.Selection;
 using Cycon.Core.Settings;
+using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Host.Interaction;
@@ -13,6 +14,66 @@ namespace Cycon.Host.Tests.Interaction;
 
 public sealed class InteractionReducerSequenceTests
 {
+    [Fact]
+    public void CtrlC_WhenActivityBlockFocused_StopsIt()
+    {
+        var (document, activity, layout) = CreateDocumentWithActivity(ActivityKind.Wait);
+        var reducer = new InteractionReducer();
+
+        var row = FindFirstRowForBlock(layout, activity.Id);
+        var (x, y) = CellToPixel(layout, row: row, col: 0);
+        reducer.Handle(new InputEvent.MouseDown(x, y, MouseButton.Left, HostKeyModifiers.None), layout, document.Transcript);
+        reducer.Handle(new InputEvent.MouseUp(x, y, MouseButton.Left, HostKeyModifiers.None), layout, document.Transcript);
+
+        Assert.Equal(activity.Id, reducer.Snapshot.Focused);
+        Assert.Equal(BlockRunState.Running, activity.State);
+
+        var actions = reducer.Handle(new InputEvent.KeyDown(HostKey.C, HostKeyModifiers.Control), layout, document.Transcript);
+        ApplyActions(actions, reducer, document, clipboardText: null);
+
+        Assert.Equal(BlockRunState.Cancelled, activity.State);
+    }
+
+    [Fact]
+    public void CtrlC_WhenNoPromptExists_FocusHealsToLastBlockAndStopsIt()
+    {
+        var transcript = new Transcript();
+        var activity = new ActivityBlock(
+            id: new BlockId(1),
+            label: "wait",
+            kind: ActivityKind.Wait,
+            duration: TimeSpan.FromSeconds(1),
+            stream: ConsoleTextStream.System);
+        transcript.Add(activity);
+
+        var document = new ConsoleDocument(
+            transcript,
+            new InputState(),
+            new ScrollState(),
+            new SelectionState(),
+            new ConsoleSettings());
+
+        var settings = new LayoutSettings
+        {
+            CellWidthPx = 8,
+            CellHeightPx = 16,
+            PaddingPolicy = PaddingPolicy.None
+        };
+
+        var viewport = new ConsoleViewport(40 * settings.CellWidthPx, 10 * settings.CellHeightPx);
+        var layout = new LayoutEngine().Layout(document, settings, viewport);
+
+        var reducer = new InteractionReducer();
+        reducer.Initialize(transcript);
+
+        Assert.Equal(activity.Id, reducer.Snapshot.Focused);
+
+        var actions = reducer.Handle(new InputEvent.KeyDown(HostKey.C, HostKeyModifiers.Control), layout, transcript);
+        ApplyActions(actions, reducer, document, clipboardText: null);
+
+        Assert.Equal(BlockRunState.Cancelled, activity.State);
+    }
+
     [Fact]
     public void DragSelectThenType_ClearsSelectionAndTargetsLastPrompt()
     {
@@ -280,10 +341,36 @@ public sealed class InteractionReducerSequenceTests
                         pastePrompt.InsertText(clipboardText);
                     }
                     break;
+                case HostAction.StopFocusedBlock:
+                    StopFocusedBlock(document, reducer, StopLevel.Soft);
+                    break;
+                case HostAction.StopFocusedBlockWithLevel stopWithLevel:
+                    StopFocusedBlock(document, reducer, stopWithLevel.Level);
+                    break;
             }
         }
 
         return clipboardText;
+    }
+
+    private static void StopFocusedBlock(ConsoleDocument document, InteractionReducer reducer, StopLevel level)
+    {
+        if (reducer.Snapshot.Focused is not { } focused)
+        {
+            return;
+        }
+
+        if (!TryGetBlock(document.Transcript, focused, out var block))
+        {
+            return;
+        }
+
+        if (block is not IStoppableBlock stoppable || !stoppable.CanStop)
+        {
+            return;
+        }
+
+        stoppable.RequestStop(level);
     }
 
     private static void CommitPrompt(Transcript transcript, BlockId promptId)
@@ -316,6 +403,21 @@ public sealed class InteractionReducerSequenceTests
         return max + 1;
     }
 
+    private static bool TryGetBlock(Transcript transcript, BlockId id, out IBlock block)
+    {
+        foreach (var candidate in transcript.Blocks)
+        {
+            if (candidate.Id == id)
+            {
+                block = candidate;
+                return true;
+            }
+        }
+
+        block = null!;
+        return false;
+    }
+
     private static bool TryGetPrompt(Transcript transcript, BlockId id, out PromptBlock prompt)
     {
         foreach (var block in transcript.Blocks)
@@ -329,5 +431,39 @@ public sealed class InteractionReducerSequenceTests
 
         prompt = null!;
         return false;
+    }
+
+    private static (ConsoleDocument Document, ActivityBlock Activity, LayoutFrame Layout) CreateDocumentWithActivity(
+        ActivityKind kind,
+        int cols = 40,
+        int rows = 10)
+    {
+        var transcript = new Transcript();
+        var activity = new ActivityBlock(
+            id: new BlockId(1),
+            label: kind.ToString().ToLowerInvariant(),
+            kind: kind,
+            duration: TimeSpan.FromSeconds(1),
+            stream: ConsoleTextStream.System);
+        transcript.Add(activity);
+        transcript.Add(new PromptBlock(new BlockId(2), "> "));
+
+        var document = new ConsoleDocument(
+            transcript,
+            new InputState(),
+            new ScrollState(),
+            new SelectionState(),
+            new ConsoleSettings());
+
+        var settings = new LayoutSettings
+        {
+            CellWidthPx = 8,
+            CellHeightPx = 16,
+            PaddingPolicy = PaddingPolicy.None
+        };
+
+        var viewport = new ConsoleViewport(cols * settings.CellWidthPx, rows * settings.CellHeightPx);
+        var layout = new LayoutEngine().Layout(document, settings, viewport);
+        return (document, activity, layout);
     }
 }

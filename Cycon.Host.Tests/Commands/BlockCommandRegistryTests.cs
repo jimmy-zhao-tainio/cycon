@@ -1,5 +1,7 @@
 using Cycon.Commands;
 using Cycon.Core.Styling;
+using Cycon.Core.Transcript;
+using Cycon.Core.Transcript.Blocks;
 using Cycon.Host.Commands.Blocks;
 
 namespace Cycon.Host.Tests.Commands;
@@ -39,6 +41,39 @@ public sealed class BlockCommandRegistryTests
     }
 
     [Fact]
+    public void Wait_InsertsActivityBlock()
+    {
+        var registry = new BlockCommandRegistry();
+        registry.Register(new WaitBlockCommandHandler());
+
+        var ctx = new FakeContext();
+        var request = new CommandRequest("wait", Array.Empty<string>(), "wait");
+
+        var handled = registry.TryExecute(request, ctx);
+
+        Assert.True(handled);
+        Assert.Single(ctx.InsertedBlocks);
+        Assert.IsType<ActivityBlock>(ctx.InsertedBlocks[0]);
+    }
+
+    [Fact]
+    public void Progress_InsertsActivityBlock()
+    {
+        var registry = new BlockCommandRegistry();
+        registry.Register(new ProgressBlockCommandHandler());
+
+        var ctx = new FakeContext();
+        var request = new CommandRequest("progress", Array.Empty<string>(), "progress");
+
+        var handled = registry.TryExecute(request, ctx);
+
+        Assert.True(handled);
+        Assert.Single(ctx.InsertedBlocks);
+        var block = Assert.IsType<ActivityBlock>(ctx.InsertedBlocks[0]);
+        Assert.Equal(ActivityKind.Progress, block.ActivityKind);
+    }
+
+    [Fact]
     public void Clear_RequiresNoArgs()
     {
         var registry = new BlockCommandRegistry();
@@ -70,13 +105,17 @@ public sealed class BlockCommandRegistryTests
     {
         public List<(string Text, ConsoleTextStream Stream)> Inserted { get; } = new();
         public List<string> OwnedPrompts { get; } = new();
+        public List<IBlock> InsertedBlocks { get; } = new();
         public int ClearCount { get; private set; }
         public int ExitCount { get; private set; }
+        private int _nextBlockId;
+
+        public BlockId AllocateBlockId() => new(++_nextBlockId);
 
         public void InsertTextAfterCommandEcho(string text, ConsoleTextStream stream) => Inserted.Add((text, stream));
+        public void InsertBlockAfterCommandEcho(IBlock block) => InsertedBlocks.Add(block);
         public void AppendOwnedPrompt(string promptText) => OwnedPrompts.Add(promptText);
         public void ClearTranscript() => ClearCount++;
         public void RequestExit() => ExitCount++;
     }
 }
-

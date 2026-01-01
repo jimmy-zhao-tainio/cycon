@@ -22,7 +22,7 @@ public sealed class InteractionReducer
     public void Initialize(Transcript transcript)
     {
         _state.LastPromptId = FindLastPromptId(transcript);
-        _state.Focused = _state.LastPromptId;
+        _state.Focused = _state.LastPromptId ?? FindLastBlockId(transcript);
         _state.MouseCaptured = null;
         _state.IsSelecting = false;
         _state.Selection = null;
@@ -466,7 +466,7 @@ public sealed class InteractionReducer
 
         if (_state.Focused is { } focused && !ContainsBlock(transcript, focused))
         {
-            _state.Focused = _state.LastPromptId;
+            _state.Focused = _state.LastPromptId ?? FindLastBlockId(transcript);
         }
 
         if (_state.MouseCaptured is { } captured && !ContainsBlock(transcript, captured))
@@ -482,6 +482,12 @@ public sealed class InteractionReducer
             _state.IsSelecting = false;
             _state.MouseCaptured = null;
         }
+    }
+
+    private static BlockId? FindLastBlockId(Transcript transcript)
+    {
+        var blocks = transcript.Blocks;
+        return blocks.Count == 0 ? null : blocks[^1].Id;
     }
 
     [Conditional("DEBUG")]

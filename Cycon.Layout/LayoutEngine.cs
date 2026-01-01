@@ -45,6 +45,7 @@ public sealed class LayoutEngine
         return block switch
         {
             TextBlock textBlock => textBlock.Text,
+            ActivityBlock activityBlock => activityBlock.ExportText(0, activityBlock.TextLength),
             PromptBlock promptBlock => promptBlock.Prompt + promptBlock.Input,
             ImageBlock => throw new NotSupportedException("ImageBlock layout not implemented in Blocks v0."),
             Scene3DBlock => throw new NotSupportedException("Scene3DBlock layout not implemented in Blocks v0."),
