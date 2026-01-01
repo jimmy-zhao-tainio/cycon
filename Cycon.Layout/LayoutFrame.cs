@@ -13,13 +13,15 @@ public sealed class LayoutFrame
         IReadOnlyList<LayoutLine> lines,
         HitTestMap hitTestMap,
         int totalRows,
-        ScrollbarLayout scrollbar)
+        ScrollbarLayout scrollbar,
+        IReadOnlyList<Scene3DViewportLayout> scene3DViewports)
     {
         Grid = grid;
         Lines = lines;
         HitTestMap = hitTestMap;
         TotalRows = totalRows;
         Scrollbar = scrollbar;
+        Scene3DViewports = scene3DViewports;
     }
 
     public FixedCellGrid Grid { get; }
@@ -27,6 +29,14 @@ public sealed class LayoutFrame
     public HitTestMap HitTestMap { get; }
     public int TotalRows { get; }
     public ScrollbarLayout Scrollbar { get; }
+    public IReadOnlyList<Scene3DViewportLayout> Scene3DViewports { get; }
 }
 
 public readonly record struct LayoutLine(BlockId BlockId, int BlockIndex, int Start, int Length, int RowIndex);
+
+public readonly record struct Scene3DViewportLayout(
+    BlockId BlockId,
+    int BlockIndex,
+    int RowIndex,
+    PxRect ViewportRectPx,
+    double PreferredAspectRatio);

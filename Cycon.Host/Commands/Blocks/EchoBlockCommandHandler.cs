@@ -1,4 +1,5 @@
 using System;
+using Cycon.BlockCommands;
 using Cycon.Commands;
 using Cycon.Core.Styling;
 
@@ -19,4 +20,3 @@ public sealed class EchoBlockCommandHandler : IBlockCommandHandler
         return true;
     }
 }
-

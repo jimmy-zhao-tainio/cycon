@@ -17,6 +17,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         _window = window;
         _window.FramebufferResize += OnFramebufferResize;
         _window.Closing += HandleClosing;
+        _window.FileDrop += OnFileDrop;
     }
 
     public event Action? Loaded;
@@ -29,6 +30,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     public event Action<int, int, MouseButton>? MouseDown;
     public event Action<int, int, MouseButton>? MouseUp;
     public event Action<int, int, int>? MouseWheel;
+    public event Action<string>? FileDropped;
 
     public int Width => _window.Size.X;
     public int Height => _window.Size.Y;
@@ -59,8 +61,11 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         options.Title = title;
         options.IsVisible = false;
         options.API = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.ForwardCompatible, new APIVersion(3, 3));
+        options.PreferredDepthBufferBits = 24;
+        options.PreferredStencilBufferBits = 8;
         options.WindowBorder = WindowBorder.Resizable;
         options.ShouldSwapAutomatically = false;
+        TrySetMsaaSamples(ref options, 4);
 
         var window = Window.Create(options);
         window.VSync = true;
@@ -68,6 +73,39 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         window.Load += wrapper.HandleLoad;
         window.Render += wrapper.HandleRender;
         return wrapper;
+    }
+
+    private static void TrySetMsaaSamples(ref WindowOptions options, int samples)
+    {
+        try
+        {
+            var prop = typeof(WindowOptions).GetProperty("Samples") ??
+                       typeof(WindowOptions).GetProperty("SampleCount");
+            if (prop is null || !prop.CanWrite)
+            {
+                return;
+            }
+
+            object boxed = options;
+            var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+            object value = targetType == typeof(uint) ? (uint)samples :
+                           targetType == typeof(int) ? samples :
+                           targetType == typeof(ushort) ? (ushort)samples :
+                           targetType == typeof(short) ? (short)samples :
+                           targetType == typeof(byte) ? (byte)samples :
+                           targetType == typeof(sbyte) ? (sbyte)samples :
+                           samples;
+
+            prop.SetValue(boxed, value);
+            if (typeof(WindowOptions).IsValueType)
+            {
+                options = (WindowOptions)boxed;
+            }
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     public void Run() => _window.Run();
@@ -123,6 +161,23 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     private void OnFramebufferResize(Vector2D<int> size)
     {
         FramebufferResized?.Invoke(size.X, size.Y);
+    }
+
+    private void OnFileDrop(string[] paths)
+    {
+        var handler = FileDropped;
+        if (handler is null)
+        {
+            return;
+        }
+
+        foreach (var path in paths)
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                handler.Invoke(path);
+            }
+        }
     }
 
     private void WireInput(IInputContext? input)

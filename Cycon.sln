@@ -41,6 +41,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cycon.Backends.Abstractions
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cycon.Runtime", "Cycon.Runtime\Cycon.Runtime.csproj", "{8FAF2D76-49EF-49D9-B513-6A315620F4F3}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cycon.BlockCommands", "Cycon.BlockCommands\Cycon.BlockCommands.csproj", "{F5809DC6-91D5-40A5-920B-E8AE76DC5EE6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Extensions.Deconstruction", "Extensions.Deconstruction\Extensions.Deconstruction.csproj", "{7499E66E-9F2A-47EC-A29A-D7318421D77A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -126,5 +130,13 @@ Global
 		{8FAF2D76-49EF-49D9-B513-6A315620F4F3}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8FAF2D76-49EF-49D9-B513-6A315620F4F3}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8FAF2D76-49EF-49D9-B513-6A315620F4F3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F5809DC6-91D5-40A5-920B-E8AE76DC5EE6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F5809DC6-91D5-40A5-920B-E8AE76DC5EE6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F5809DC6-91D5-40A5-920B-E8AE76DC5EE6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F5809DC6-91D5-40A5-920B-E8AE76DC5EE6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7499E66E-9F2A-47EC-A29A-D7318421D77A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7499E66E-9F2A-47EC-A29A-D7318421D77A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7499E66E-9F2A-47EC-A29A-D7318421D77A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7499E66E-9F2A-47EC-A29A-D7318421D77A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

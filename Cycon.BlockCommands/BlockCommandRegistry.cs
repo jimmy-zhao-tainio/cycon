@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Cycon.Commands;
 
-namespace Cycon.Host.Commands.Blocks;
+namespace Cycon.BlockCommands;
 
 public sealed class BlockCommandRegistry
 {

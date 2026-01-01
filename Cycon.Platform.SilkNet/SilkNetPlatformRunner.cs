@@ -6,13 +6,7 @@ public sealed class SilkNetPlatformRunner : IPlatformRunner
 {
     public void Run2D(Cycon.App.CyconAppOptions options)
     {
-        SilkNetCyconRunner.Run2D(new Cycon.Platform.SilkNet.CyconAppOptions
-        {
-            Title = options.Title,
-            Width = options.Width,
-            Height = options.Height,
-            InitialText = options.InitialText
-        });
+        SilkNetCyconRunner.Run2D(options);
     }
 
     public void Run3D(Cycon.App.CyconAppOptions options)

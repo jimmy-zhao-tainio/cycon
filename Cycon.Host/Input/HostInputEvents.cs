@@ -4,6 +4,8 @@ public readonly record struct HostKeyEvent(HostKey Key, HostKeyModifiers Mods, b
 
 public readonly record struct HostTextInputEvent(char Ch);
 
+public readonly record struct HostFileDropEvent(string Path);
+
 public enum HostMouseEventKind
 {
     Move,
@@ -28,4 +30,3 @@ public readonly record struct HostMouseEvent(
     HostMouseButtons Buttons,
     HostKeyModifiers Mods,
     int WheelDelta);
-

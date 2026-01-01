@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Cycon.Core\Cycon.Core.csproj" />
@@ -8,6 +8,7 @@
     <ProjectReference Include="..\Cycon.Commands\Cycon.Commands.csproj" />
     <ProjectReference Include="..\Cycon.Runtime\Cycon.Runtime.csproj" />
     <ProjectReference Include="..\Cycon.Backends.Abstractions\Cycon.Backends.Abstractions.csproj" />
+    <ProjectReference Include="..\Cycon.BlockCommands\Cycon.BlockCommands.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

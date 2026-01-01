@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Cycon.Text\Cycon.Text.csproj" />
     <ProjectReference Include="..\Cycon.Backends.Abstractions\Cycon.Backends.Abstractions.csproj" />
+    <ProjectReference Include="..\Cycon.Render.Abstractions\Cycon.Render.Abstractions.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -1,6 +1,6 @@
 using Cycon.Commands;
 
-namespace Cycon.Host.Commands.Blocks;
+namespace Cycon.BlockCommands;
 
 public interface IBlockCommandHandler
 {

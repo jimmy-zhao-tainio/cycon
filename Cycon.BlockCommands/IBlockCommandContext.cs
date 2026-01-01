@@ -1,7 +1,7 @@
 using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 
-namespace Cycon.Host.Commands.Blocks;
+namespace Cycon.BlockCommands;
 
 public interface IBlockCommandContext
 {
@@ -14,3 +14,4 @@ public interface IBlockCommandContext
     void ClearTranscript();
     void RequestExit();
 }
+

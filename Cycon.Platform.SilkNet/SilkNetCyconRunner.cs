@@ -1,3 +1,4 @@
+using Cycon.App;
 using Cycon.Backends.SilkNet;
 using Cycon.Backends.SilkNet.Execution;
 using Cycon.Host.Hosting;
@@ -19,7 +20,7 @@ public static class SilkNetCyconRunner
         SilkGraphicsDeviceGl? device = null;
         RenderFrameExecutorGl? executor = null;
         var clipboard = new SilkClipboard();
-        var session = ConsoleHostSession.CreateVga(options.InitialText, clipboard);
+        var session = ConsoleHostSession.CreateVga(options.InitialText, clipboard, configureBlockCommands: options.ConfigureBlockCommands);
 
         var ctrlDown = false;
         var shiftDown = false;
@@ -94,6 +95,23 @@ public static class SilkNetCyconRunner
                     GetModifiers(ctrlDown, shiftDown, altDown),
                     0));
             }
+
+            if (button == MouseButton.Right)
+            {
+                if ((buttonsDown & HostMouseButtons.Right) != 0)
+                {
+                    return;
+                }
+
+                buttonsDown |= HostMouseButtons.Right;
+                session.OnMouseEvent(new HostMouseEvent(
+                    HostMouseEventKind.Down,
+                    x,
+                    y,
+                    buttonsDown,
+                    GetModifiers(ctrlDown, shiftDown, altDown),
+                    0));
+            }
         };
 
         window.MouseMoved += (x, y) =>
@@ -125,6 +143,23 @@ public static class SilkNetCyconRunner
                     0));
                 buttonsDown &= ~HostMouseButtons.Left;
             }
+
+            if (button == MouseButton.Right)
+            {
+                if ((buttonsDown & HostMouseButtons.Right) == 0)
+                {
+                    return;
+                }
+
+                session.OnMouseEvent(new HostMouseEvent(
+                    HostMouseEventKind.Up,
+                    x,
+                    y,
+                    HostMouseButtons.Right,
+                    GetModifiers(ctrlDown, shiftDown, altDown),
+                    0));
+                buttonsDown &= ~HostMouseButtons.Right;
+            }
         };
 
         window.MouseWheel += (x, y, delta) =>
@@ -137,6 +172,8 @@ public static class SilkNetCyconRunner
                 GetModifiers(ctrlDown, shiftDown, altDown),
                 delta));
         };
+
+        window.FileDropped += path => session.OnFileDrop(new HostFileDropEvent(path));
 
         window.Render += _ =>
         {

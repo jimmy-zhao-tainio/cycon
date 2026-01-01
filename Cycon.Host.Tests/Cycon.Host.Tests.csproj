@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cycon.Host\Cycon.Host.csproj" />
+    <ProjectReference Include="..\Extensions.Deconstruction\Extensions.Deconstruction.csproj" />
   </ItemGroup>
 
   <ItemGroup>

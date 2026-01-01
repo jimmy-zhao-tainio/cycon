@@ -11,6 +11,8 @@ public sealed class ConsoleSettings
 
     public ActivityIndicatorSettings Indicators { get; init; } = new();
 
+    public Scene3DSettings Scene3D { get; init; } = new();
+
     public TextStyle DefaultTextStyle { get; init; } = new()
     {
         ForegroundRgba = unchecked((int)0xEEEEEEFF),

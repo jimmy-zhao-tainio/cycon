@@ -13,6 +13,8 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private readonly GL _gl;
     private uint _glyphProgram;
     private uint _quadProgram;
+    private uint _tri3dProgram;
+    private uint _vignetteProgram;
     private uint _vao;
     private uint _vbo;
     private uint _atlasTexture;
@@ -21,9 +23,14 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private int _uViewportLocationGlyph;
     private int _uAtlasLocationGlyph;
     private int _uViewportLocationQuad;
+    private int _uViewportLocationTri3d;
+    private int _uViewportLocationVignette;
+    private int _uRectLocationVignette;
+    private int _uParamsLocationVignette;
     private bool _initialized;
     private bool _disposed;
     private readonly bool _trace = Environment.GetEnvironmentVariable("CYCON_GL_TRACE") == "1";
+    private readonly Stack<(int X, int Y, int Width, int Height)> _clipStack = new();
 
     public RenderFrameExecutorGl(GL gl)
     {
@@ -43,6 +50,14 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         _quadProgram = CreateProgram(ShaderSources.Vertex, ShaderSources.FragmentQuad);
         _uViewportLocationQuad = _gl.GetUniformLocation(_quadProgram, "uViewport");
+
+        _tri3dProgram = CreateProgram(ShaderSources.Vertex3D, ShaderSources.FragmentQuad);
+        _uViewportLocationTri3d = _gl.GetUniformLocation(_tri3dProgram, "uViewport");
+
+        _vignetteProgram = CreateProgram(ShaderSources.Vertex, ShaderSources.FragmentVignette);
+        _uViewportLocationVignette = _gl.GetUniformLocation(_vignetteProgram, "uViewport");
+        _uRectLocationVignette = _gl.GetUniformLocation(_vignetteProgram, "uRect");
+        _uParamsLocationVignette = _gl.GetUniformLocation(_vignetteProgram, "uParams");
 
         _vao = _gl.GenVertexArray();
         _vbo = _gl.GenBuffer();
@@ -64,11 +79,24 @@ public sealed class RenderFrameExecutorGl : IDisposable
         _atlasTexture = CreateAtlasTexture(atlas);
 
         _gl.Disable(EnableCap.DepthTest);
+        _gl.DepthFunc(DepthFunction.Less);
+        _gl.DepthMask(false);
         _gl.Disable(EnableCap.CullFace);
+        _gl.Enable(EnableCap.Multisample);
         _gl.Enable(EnableCap.Blend);
         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        _gl.Disable(EnableCap.ScissorTest);
         _gl.ClearColor(0f, 0f, 0f, 1f);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
+
+#if DEBUG
+        if (_trace)
+        {
+            var sampleBuffers = _gl.GetInteger(GLEnum.SampleBuffers);
+            var samples = _gl.GetInteger(GLEnum.Samples);
+            Console.WriteLine($"[GL] sampleBuffers={sampleBuffers} samples={samples}");
+        }
+#endif
 
         _initialized = true;
     }
@@ -86,6 +114,12 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
             _gl.UseProgram(_quadProgram);
             _gl.Uniform2(_uViewportLocationQuad, (float)_viewportWidth, (float)_viewportHeight);
+
+            _gl.UseProgram(_tri3dProgram);
+            _gl.Uniform2(_uViewportLocationTri3d, (float)_viewportWidth, (float)_viewportHeight);
+
+            _gl.UseProgram(_vignetteProgram);
+            _gl.Uniform2(_uViewportLocationVignette, (float)_viewportWidth, (float)_viewportHeight);
         }
     }
 
@@ -101,7 +135,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
             return;
         }
 
-        _gl.Clear(ClearBufferMask.ColorBufferBit);
+        _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
         ExecuteBatched(frame, atlas);
     }
@@ -144,45 +178,170 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private enum DrawBatchKind
     {
         Glyph,
-        Quad
+        Quad,
+        Tri3D
     }
 
     private void ExecuteBatched(RenderFrame frame, GlyphAtlasData atlas)
     {
+        _clipStack.Clear();
+        ApplyClipState();
+
         var commands = frame.Commands;
-        var batches = DrawCommandBatcher.ComputeBatches(commands);
+        var vertices = new List<float>();
+        DrawBatchKind? currentKind = null;
 
-        DrawBatchKind? lastKind = null;
-        foreach (var batch in batches)
+        void Flush()
         {
-            var kind = batch.Kind == DrawCommandBatchKind.Glyph ? DrawBatchKind.Glyph : DrawBatchKind.Quad;
-            if (_trace && (lastKind is null || lastKind.Value != kind))
+            if (currentKind is null || vertices.Count == 0)
             {
-                Console.WriteLine($"[CYCON_GL_TRACE] switch -> {kind}");
+                vertices.Clear();
+                return;
             }
 
-            if (_trace)
-            {
-                Console.WriteLine($"[CYCON_GL_TRACE] batch {kind} start={batch.StartIndex} count={batch.Count}");
-            }
-
-            var vertices = new List<float>();
-            for (var i = batch.StartIndex; i < batch.StartIndex + batch.Count; i++)
-            {
-                switch (commands[i])
-                {
-                    case DrawGlyphRun glyphRun:
-                        AddGlyphRunVertices(vertices, glyphRun, atlas);
-                        break;
-                    case DrawQuad quad:
-                        AddQuadVertices(vertices, quad);
-                        break;
-                }
-            }
-
-            DrawVertices(kind, vertices, atlas);
-            lastKind = kind;
+            DrawVertices(currentKind.Value, vertices, atlas);
+            vertices.Clear();
         }
+
+        for (var i = 0; i < commands.Count; i++)
+        {
+            switch (commands[i])
+            {
+                case SetColorWrite cw:
+                    Flush();
+                    SetColorWrite(cw.Enabled);
+                    break;
+                case SetDepthState depth:
+                    Flush();
+                    SetDepthState(depth.Enabled, depth.WriteEnabled, depth.Func);
+                    break;
+                case ClearDepth clearDepth:
+                    Flush();
+                    ClearDepth(clearDepth.Depth01);
+                    break;
+                case PushClip clip:
+                    Flush();
+                    PushClipRect(clip.X, clip.Y, clip.Width, clip.Height);
+                    break;
+                case Cycon.Backends.Abstractions.Rendering.PopClip:
+                    Flush();
+                    PopClipRect();
+                    break;
+                case DrawGlyphRun glyphRun:
+                    if (currentKind != DrawBatchKind.Glyph)
+                    {
+                        Flush();
+                        currentKind = DrawBatchKind.Glyph;
+                        TraceSwitch(currentKind.Value);
+                    }
+
+                    AddGlyphRunVertices(vertices, glyphRun, atlas);
+                    break;
+                case DrawQuad quad:
+                    if (currentKind != DrawBatchKind.Quad)
+                    {
+                        Flush();
+                        currentKind = DrawBatchKind.Quad;
+                        TraceSwitch(currentKind.Value);
+                    }
+
+                    AddQuadVertices(vertices, quad);
+                    break;
+                case DrawTriangles tris:
+                    if (currentKind != DrawBatchKind.Quad)
+                    {
+                        Flush();
+                        currentKind = DrawBatchKind.Quad;
+                        TraceSwitch(currentKind.Value);
+                    }
+
+                    AddTriangleVertices(vertices, tris);
+                    break;
+                case DrawTriangles3D tris3d:
+                    if (currentKind != DrawBatchKind.Tri3D)
+                    {
+                        Flush();
+                        currentKind = DrawBatchKind.Tri3D;
+                        TraceSwitch(currentKind.Value);
+                    }
+
+                    AddTriangle3DVertices(vertices, tris3d);
+                    break;
+                case DrawVignetteQuad vignette:
+                    Flush();
+                    DrawVignette(vignette);
+                    currentKind = null;
+                    break;
+            }
+        }
+
+        Flush();
+    }
+
+    private void TraceSwitch(DrawBatchKind kind)
+    {
+        if (_trace)
+        {
+            Console.WriteLine($"[CYCON_GL_TRACE] switch -> {kind}");
+        }
+    }
+
+    private void PushClipRect(int x, int y, int w, int h)
+    {
+        if (w <= 0 || h <= 0)
+        {
+            _clipStack.Push((0, 0, 0, 0));
+            ApplyClipState();
+            return;
+        }
+
+        if (_clipStack.Count == 0)
+        {
+            _clipStack.Push((x, y, w, h));
+            ApplyClipState();
+            return;
+        }
+
+        var top = _clipStack.Peek();
+        var ix0 = Math.Max(top.X, x);
+        var iy0 = Math.Max(top.Y, y);
+        var ix1 = Math.Min(top.X + top.Width, x + w);
+        var iy1 = Math.Min(top.Y + top.Height, y + h);
+        var iw = Math.Max(0, ix1 - ix0);
+        var ih = Math.Max(0, iy1 - iy0);
+        _clipStack.Push((ix0, iy0, iw, ih));
+        ApplyClipState();
+    }
+
+    private void PopClipRect()
+    {
+        if (_clipStack.Count == 0)
+        {
+            return;
+        }
+
+        _clipStack.Pop();
+        ApplyClipState();
+    }
+
+    private void ApplyClipState()
+    {
+        if (_clipStack.Count == 0)
+        {
+            _gl.Disable(EnableCap.ScissorTest);
+            return;
+        }
+
+        _gl.Enable(EnableCap.ScissorTest);
+        var clip = _clipStack.Peek();
+        var x = Math.Clamp(clip.X, 0, Math.Max(0, _viewportWidth));
+        var y = Math.Clamp(clip.Y, 0, Math.Max(0, _viewportHeight));
+        var w = Math.Clamp(clip.Width, 0, Math.Max(0, _viewportWidth - x));
+        var h = Math.Clamp(clip.Height, 0, Math.Max(0, _viewportHeight - y));
+
+        // glScissor uses bottom-left origin.
+        var scissorY = Math.Max(0, _viewportHeight - (y + h));
+        _gl.Scissor(x, scissorY, (uint)w, (uint)h);
     }
 
     private void DrawVertices(DrawBatchKind kind, List<float> vertices, GlyphAtlasData atlas)
@@ -192,8 +351,21 @@ public sealed class RenderFrameExecutorGl : IDisposable
             return;
         }
 
-        var program = kind == DrawBatchKind.Glyph ? _glyphProgram : _quadProgram;
-        var uViewportLocation = kind == DrawBatchKind.Glyph ? _uViewportLocationGlyph : _uViewportLocationQuad;
+        var program = kind switch
+        {
+            DrawBatchKind.Glyph => _glyphProgram,
+            DrawBatchKind.Quad => _quadProgram,
+            DrawBatchKind.Tri3D => _tri3dProgram,
+            _ => _quadProgram
+        };
+
+        var uViewportLocation = kind switch
+        {
+            DrawBatchKind.Glyph => _uViewportLocationGlyph,
+            DrawBatchKind.Quad => _uViewportLocationQuad,
+            DrawBatchKind.Tri3D => _uViewportLocationTri3d,
+            _ => _uViewportLocationQuad
+        };
 
         _gl.UseProgram(program);
         _gl.Uniform2(uViewportLocation, (float)_viewportWidth, (float)_viewportHeight);
@@ -216,6 +388,40 @@ public sealed class RenderFrameExecutorGl : IDisposable
             }
         }
         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(vertices.Count / FloatsPerVertex));
+    }
+
+    private void SetColorWrite(bool enabled)
+    {
+        _gl.ColorMask(enabled, enabled, enabled, enabled);
+    }
+
+    private void SetDepthState(bool enabled, bool writeEnabled, DepthFuncKind func)
+    {
+        if (enabled)
+        {
+            _gl.Enable(EnableCap.DepthTest);
+        }
+        else
+        {
+            _gl.Disable(EnableCap.DepthTest);
+        }
+
+        _gl.DepthMask(writeEnabled);
+        _gl.DepthFunc(func switch
+        {
+            DepthFuncKind.Less => DepthFunction.Less,
+            DepthFuncKind.Lequal => DepthFunction.Lequal,
+            DepthFuncKind.Greater => DepthFunction.Greater,
+            DepthFuncKind.Always => DepthFunction.Always,
+            _ => DepthFunction.Less
+        });
+    }
+
+    private void ClearDepth(float depth01)
+    {
+        depth01 = Math.Clamp(depth01, 0f, 1f);
+        _gl.ClearDepth(depth01);
+        _gl.Clear(ClearBufferMask.DepthBufferBit);
     }
 
     private void AddGlyphRunVertices(List<float> vertices, DrawGlyphRun glyphRun, GlyphAtlasData atlas)
@@ -277,6 +483,78 @@ public sealed class RenderFrameExecutorGl : IDisposable
         AddVertex(vertices, x0, y0, u, v, r, g, b, a);
         AddVertex(vertices, x1, y1, u, v, r, g, b, a);
         AddVertex(vertices, x0, y1, u, v, r, g, b, a);
+    }
+
+    private static void AddTriangleVertices(List<float> vertices, DrawTriangles triangles)
+    {
+        if (triangles.Vertices.Count == 0)
+        {
+            return;
+        }
+
+        const float u = 0f;
+        const float v = 0f;
+        foreach (var vertex in triangles.Vertices)
+        {
+            var (r, g, b, a) = ToColor(vertex.Rgba);
+            AddVertex(vertices, vertex.X, vertex.Y, u, v, r, g, b, a);
+        }
+    }
+
+    private static void AddTriangle3DVertices(List<float> vertices, DrawTriangles3D triangles)
+    {
+        if (triangles.Vertices.Count == 0)
+        {
+            return;
+        }
+
+        const float v = 0f;
+        foreach (var vertex in triangles.Vertices)
+        {
+            var (r, g, b, a) = ToColor(vertex.Rgba);
+            // Pack depth01 into the "u" slot; Vertex3D reads it from aDepth.x.
+            AddVertex(vertices, vertex.X, vertex.Y, vertex.Depth01, v, r, g, b, a);
+        }
+    }
+
+    private void DrawVignette(DrawVignetteQuad vignette)
+    {
+        if (vignette.Width <= 0 || vignette.Height <= 0)
+        {
+            return;
+        }
+
+        _gl.UseProgram(_vignetteProgram);
+        _gl.Uniform2(_uViewportLocationVignette, (float)_viewportWidth, (float)_viewportHeight);
+
+        var rect = new System.Numerics.Vector4(vignette.X, vignette.Y, vignette.Width, vignette.Height);
+        _gl.Uniform4(_uRectLocationVignette, ref rect);
+
+        var p = new System.Numerics.Vector3(
+            Math.Clamp(vignette.Strength, 0f, 1f),
+            Math.Clamp(vignette.Inner, 0f, 2f),
+            Math.Clamp(vignette.Outer, 0f, 2f));
+        _gl.Uniform3(_uParamsLocationVignette, ref p);
+
+        var verts = new List<float>();
+        AddQuadVertices(verts, new DrawQuad(vignette.X, vignette.Y, vignette.Width, vignette.Height, unchecked((int)0x000000FF)));
+        if (verts.Count == 0)
+        {
+            return;
+        }
+
+        _gl.BindVertexArray(_vao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
+        var data = verts.ToArray();
+        unsafe
+        {
+            fixed (float* ptr = data)
+            {
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), ptr, BufferUsageARB.StreamDraw);
+            }
+        }
+
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(verts.Count / FloatsPerVertex));
     }
 
     private static void AddVertex(List<float> vertices, float x, float y, float u, float v, float r, float g, float b, float a)
@@ -396,6 +674,8 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         if (_glyphProgram != 0) _gl.DeleteProgram(_glyphProgram);
         if (_quadProgram != 0) _gl.DeleteProgram(_quadProgram);
+        if (_tri3dProgram != 0) _gl.DeleteProgram(_tri3dProgram);
+        if (_vignetteProgram != 0) _gl.DeleteProgram(_vignetteProgram);
 
         _disposed = true;
     }

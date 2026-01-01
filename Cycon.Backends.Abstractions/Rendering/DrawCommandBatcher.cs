@@ -54,6 +54,9 @@ public static class DrawCommandBatcher
         {
             DrawGlyphRun => DrawCommandBatchKind.Glyph,
             DrawQuad => DrawCommandBatchKind.Quad,
+            DrawTriangles => DrawCommandBatchKind.Quad,
+            DrawTriangles3D => DrawCommandBatchKind.Quad,
+            DrawVignetteQuad => DrawCommandBatchKind.Quad,
             _ => null
         };
     }
@@ -78,4 +81,3 @@ public static class DrawCommandBatcher
         batches.Add(new DrawCommandBatch(kind.Value, startIndex, count));
     }
 }
-

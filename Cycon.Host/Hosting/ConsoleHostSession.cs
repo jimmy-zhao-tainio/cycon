@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Numerics;
 using System.Threading;
+using Cycon.BlockCommands;
 using Cycon.Commands;
 using Cycon.Backends.Abstractions;
 using Cycon.Backends.Abstractions.Rendering;
@@ -16,6 +18,7 @@ using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Host.Commands;
+using Cycon.Host.Commands.Input;
 using Cycon.Host.Commands.Blocks;
 using Cycon.Host.Commands.Handlers;
 using Cycon.Host.Interaction;
@@ -50,6 +53,7 @@ public sealed class ConsoleHostSession
     private readonly JobScheduler _jobScheduler;
     private readonly CommandDispatcher _commandDispatcher;
     private readonly BlockCommandRegistry _blockCommands;
+    private readonly InputPreprocessorRegistry _inputPreprocessors = new();
     private readonly Dictionary<JobId, JobProjection> _jobProjections = new();
     private readonly string _defaultPromptText;
     private long _nextPromptId;
@@ -89,8 +93,14 @@ public sealed class ConsoleHostSession
     private int _lastSpinnerFrameIndex = -1;
     private long _lastTickTicks;
     private bool _scrollbarInteractedThisTick;
+    private Scene3DCapture? _scene3DCapture;
 
-    private ConsoleHostSession(string text, IClipboard clipboard, int resizeSettleMs, int rebuildThrottleMs)
+    private ConsoleHostSession(
+        string text,
+        IClipboard clipboard,
+        int resizeSettleMs,
+        int rebuildThrottleMs,
+        Action<BlockCommandRegistry>? configureBlockCommands)
     {
         _resizeSettleMs = resizeSettleMs;
         _rebuildThrottleMs = rebuildThrottleMs;
@@ -130,11 +140,17 @@ public sealed class ConsoleHostSession
         _blockCommands.Register(new ExitBlockCommandHandler());
         _blockCommands.Register(new WaitBlockCommandHandler());
         _blockCommands.Register(new ProgressBlockCommandHandler());
+        configureBlockCommands?.Invoke(_blockCommands);
     }
 
-    public static ConsoleHostSession CreateVga(string text, IClipboard clipboard, int resizeSettleMs = 80, int rebuildThrottleMs = 80)
+    public static ConsoleHostSession CreateVga(
+        string text,
+        IClipboard clipboard,
+        int resizeSettleMs = 80,
+        int rebuildThrottleMs = 80,
+        Action<BlockCommandRegistry>? configureBlockCommands = null)
     {
-        return new ConsoleHostSession(text, clipboard, resizeSettleMs, rebuildThrottleMs);
+        return new ConsoleHostSession(text, clipboard, resizeSettleMs, rebuildThrottleMs, configureBlockCommands);
     }
 
     public GlyphAtlasData Atlas => _atlasData;
@@ -160,6 +176,14 @@ public sealed class ConsoleHostSession
         lock (_pendingEventsLock)
         {
             _pendingEvents.Enqueue(new PendingEvent.Mouse(e));
+        }
+    }
+
+    public void OnFileDrop(HostFileDropEvent e)
+    {
+        lock (_pendingEventsLock)
+        {
+            _pendingEvents.Enqueue(new PendingEvent.FileDrop(e.Path));
         }
     }
 
@@ -592,8 +616,21 @@ public sealed class ConsoleHostSession
 
         for (var i = 0; i < events.Count; i++)
         {
+            if (events[i] is PendingEvent.FileDrop fileDrop)
+            {
+                HandleFileDrop(fileDrop.Path);
+                EnsureLayoutExists(framebufferWidth, framebufferHeight);
+                continue;
+            }
+
             if (events[i] is PendingEvent.Mouse mouseRaw && _lastLayout is not null)
             {
+                var sceneConsumed = HandleScene3DMouse(mouseRaw.Event);
+                if (sceneConsumed)
+                {
+                    continue;
+                }
+
                 var consumed = HandleScrollbarMouse(mouseRaw.Event);
                 if (consumed)
                 {
@@ -686,6 +723,158 @@ public sealed class ConsoleHostSession
             HostMouseEventKind.Wheel => null,
             _ => null
         };
+    }
+
+    private bool HandleScene3DMouse(HostMouseEvent e)
+    {
+        if (_lastLayout is null)
+        {
+            return false;
+        }
+
+        var viewports = _lastLayout.Scene3DViewports;
+        if (viewports.Count == 0 && _scene3DCapture is null)
+        {
+            return false;
+        }
+
+        var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
+        var contentX = e.X;
+        var contentY = e.Y + (scrollOffsetRows * _font.Metrics.CellHeightPx);
+
+        if (_scene3DCapture is { } capture)
+        {
+            if (!TryGetBlock(capture.BlockId, out var block) || block is not IScene3DViewBlock stl)
+            {
+                _scene3DCapture = null;
+                return false;
+            }
+
+            switch (e.Kind)
+            {
+                case HostMouseEventKind.Move:
+                    ApplySceneDrag(stl, _document.Settings.Scene3D, capture.Mode, capture.LastX, capture.LastY, contentX, contentY);
+                    _scene3DCapture = capture with { LastX = contentX, LastY = contentY };
+                    _pendingContentRebuild = true;
+                    return true;
+                case HostMouseEventKind.Up when (e.Buttons & capture.Button) != 0:
+                    _scene3DCapture = null;
+                    return true;
+                case HostMouseEventKind.Wheel:
+                    return true;
+            }
+
+            return true;
+        }
+
+        var hit = FindSceneViewportAt(contentX, contentY, viewports);
+        if (hit is null)
+        {
+            return false;
+        }
+
+        if (!TryGetBlock(hit.Value.BlockId, out var hitBlock) || hitBlock is not IScene3DViewBlock hitStl)
+        {
+            return false;
+        }
+
+        if (e.Kind == HostMouseEventKind.Wheel)
+        {
+            ApplySceneZoom(hitStl, _document.Settings.Scene3D, e.WheelDelta);
+            _pendingContentRebuild = true;
+            return true;
+        }
+
+        if (e.Kind == HostMouseEventKind.Down)
+        {
+            if ((e.Buttons & HostMouseButtons.Left) != 0)
+            {
+                _scene3DCapture = new Scene3DCapture(hit.Value.BlockId, HostMouseButtons.Left, Scene3DDragMode.Orbit, contentX, contentY);
+                return true;
+            }
+
+            if ((e.Buttons & HostMouseButtons.Right) != 0)
+            {
+                _scene3DCapture = new Scene3DCapture(hit.Value.BlockId, HostMouseButtons.Right, Scene3DDragMode.Pan, contentX, contentY);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private Scene3DViewportLayout? FindSceneViewportAt(int x, int y, IReadOnlyList<Scene3DViewportLayout> viewports)
+    {
+        for (var i = 0; i < viewports.Count; i++)
+        {
+            var viewport = viewports[i];
+            if (viewport.ViewportRectPx.Contains(x, y))
+            {
+                return viewport;
+            }
+        }
+
+        return null;
+    }
+
+    private static void ApplySceneDrag(IScene3DViewBlock stl, Scene3DSettings settings, Scene3DDragMode mode, int lastX, int lastY, int x, int y)
+    {
+        var dx = x - lastX;
+        var dy = y - lastY;
+
+        switch (mode)
+        {
+            case Scene3DDragMode.Orbit:
+            {
+                stl.YawRadians += dx * settings.OrbitSensitivity * (settings.InvertOrbitX ? -1f : 1f);
+                stl.PitchRadians += dy * settings.OrbitSensitivity * (settings.InvertOrbitY ? -1f : 1f);
+                stl.PitchRadians = Math.Clamp(stl.PitchRadians, -1.55f, 1.55f);
+                break;
+            }
+            case Scene3DDragMode.Pan:
+            {
+                var forward = ComputeForward(stl.YawRadians, stl.PitchRadians);
+                var right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
+                if (right.LengthSquared() < 1e-6f)
+                {
+                    right = Vector3.UnitX;
+                }
+
+                var up = Vector3.Normalize(Vector3.Cross(right, forward));
+                var scale = Math.Max(0.01f, stl.Distance) * settings.PanSensitivity;
+                stl.Target += (dx * scale * (settings.InvertPanX ? -1f : 1f)) * right;
+                stl.Target += (dy * scale * (settings.InvertPanY ? -1f : 1f)) * up;
+                break;
+            }
+        }
+    }
+
+    private static void ApplySceneZoom(IScene3DViewBlock stl, Scene3DSettings settings, int wheelDelta)
+    {
+        if (wheelDelta == 0)
+        {
+            return;
+        }
+
+        var delta = settings.InvertZoom ? -wheelDelta : wheelDelta;
+        var factor = MathF.Exp(-delta * settings.ZoomSensitivity);
+        var maxDistance = MathF.Max(0.01f, stl.BoundsRadius * 100f);
+        stl.Distance = Math.Clamp(stl.Distance * factor, 0.01f, maxDistance);
+    }
+
+    private static Vector3 ComputeForward(float yaw, float pitch)
+    {
+        var cy = MathF.Cos(yaw);
+        var sy = MathF.Sin(yaw);
+        var cp = MathF.Cos(pitch);
+        var sp = MathF.Sin(pitch);
+        var forward = new Vector3(sy * cp, sp, cy * cp);
+        if (forward.LengthSquared() < 1e-10f)
+        {
+            return new Vector3(0, 0, 1);
+        }
+
+        return Vector3.Normalize(forward);
     }
 
     private static ConsoleDocument CreateDocument(string text)
@@ -930,19 +1119,15 @@ public sealed class ConsoleHostSession
             var headerId = new BlockId(AllocateNewBlockId());
             _document.Transcript.Insert(insertIndex, new TextBlock(headerId, prompt.Prompt + command));
 
-            var trimmed = command.Trim();
-            if (!string.IsNullOrWhiteSpace(trimmed))
-            {
-                if (_commandHistory.Count == 0 || !string.Equals(_commandHistory[^1], command, StringComparison.Ordinal))
-                {
-                    _commandHistory.Add(command);
-                }
+            RecordCommandHistory(command);
 
-                _historyIndex = _commandHistory.Count;
-                _historyDraft = string.Empty;
+            var commandForParse = command;
+            if (_inputPreprocessors.TryRewrite(command, out var rewritten))
+            {
+                commandForParse = rewritten;
             }
 
-            var request = CommandLineParser.Parse(command);
+            var request = CommandLineParser.Parse(commandForParse);
             if (request is null)
             {
                 prompt.Input = string.Empty;
@@ -976,6 +1161,72 @@ public sealed class ConsoleHostSession
             _historyIndex = _commandHistory.Count;
             _historyDraft = string.Empty;
         }
+    }
+
+    private void HandleFileDrop(string path)
+    {
+        var blocks = _document.Transcript.Blocks;
+        if (blocks.Count == 0)
+        {
+            return;
+        }
+
+        var commandText = $"deconstruct {QuoteForCommandLineParser(path)}";
+
+        var insertIndex = Math.Max(0, blocks.Count - 1);
+        var headerId = new BlockId(AllocateNewBlockId());
+        _document.Transcript.Insert(insertIndex, new TextBlock(headerId, _defaultPromptText + commandText, ConsoleTextStream.Default));
+
+        RecordCommandHistory(commandText);
+
+        var commandForParse = commandText;
+        if (_inputPreprocessors.TryRewrite(commandText, out var rewritten))
+        {
+            commandForParse = rewritten;
+        }
+
+        var request = CommandLineParser.Parse(commandForParse);
+        if (request is null)
+        {
+            _document.Scroll.IsFollowingTail = true;
+            _pendingContentRebuild = true;
+            return;
+        }
+
+        var shellPromptId = FindLastPrompt(_document.Transcript)?.Id ?? headerId;
+        var ctx = new BlockCommandContext(this, headerId, shellPromptId);
+        if (_blockCommands.TryExecute(request, ctx))
+        {
+            _document.Scroll.IsFollowingTail = true;
+            _pendingContentRebuild = true;
+            return;
+        }
+
+        InsertBlockAfter(headerId, new TextBlock(new BlockId(AllocateNewBlockId()), "Unrecognized command.", ConsoleTextStream.System));
+        _document.Scroll.IsFollowingTail = true;
+        _pendingContentRebuild = true;
+    }
+
+    private static string QuoteForCommandLineParser(string value)
+    {
+        value ??= string.Empty;
+        return "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+    }
+
+    private void RecordCommandHistory(string commandText)
+    {
+        if (string.IsNullOrWhiteSpace(commandText))
+        {
+            return;
+        }
+
+        if (_commandHistory.Count == 0 || !string.Equals(_commandHistory[^1], commandText, StringComparison.Ordinal))
+        {
+            _commandHistory.Add(commandText);
+        }
+
+        _historyIndex = _commandHistory.Count;
+        _historyDraft = string.Empty;
     }
 
     private void AppendOwnedPrompt(string promptText)
@@ -1019,6 +1270,7 @@ public sealed class ConsoleHostSession
         private readonly ConsoleHostSession _session;
         private readonly BlockId _commandEchoId;
         private readonly BlockId _shellPromptId;
+        private BlockId _insertAfterId;
         private bool _startedBlockingActivity;
 
         public BlockCommandContext(ConsoleHostSession session, BlockId commandEchoId, BlockId shellPromptId)
@@ -1026,6 +1278,7 @@ public sealed class ConsoleHostSession
             _session = session;
             _commandEchoId = commandEchoId;
             _shellPromptId = shellPromptId;
+            _insertAfterId = commandEchoId;
         }
 
         public bool StartedBlockingActivity => _startedBlockingActivity;
@@ -1035,14 +1288,16 @@ public sealed class ConsoleHostSession
         public void InsertTextAfterCommandEcho(string text, ConsoleTextStream stream)
         {
             var id = new BlockId(_session.AllocateNewBlockId());
-            _session.InsertBlockAfter(_commandEchoId, new TextBlock(id, text, stream));
+            _session.InsertBlockAfter(_insertAfterId, new TextBlock(id, text, stream));
+            _insertAfterId = id;
         }
 
         public BlockId AllocateBlockId() => new(_session.AllocateNewBlockId());
 
         public void InsertBlockAfterCommandEcho(IBlock block)
         {
-            _session.InsertBlockAfter(_commandEchoId, block);
+            _session.InsertBlockAfter(_insertAfterId, block);
+            _insertAfterId = block.Id;
 
             if (block is IRunnableBlock runnable &&
                 runnable.State == BlockRunState.Running &&
@@ -1984,7 +2239,7 @@ public sealed class ConsoleHostSession
 
         if (scrollbar != layout.Scrollbar)
         {
-            layout = new LayoutFrame(layout.Grid, layout.Lines, layout.HitTestMap, layout.TotalRows, scrollbar);
+            layout = new LayoutFrame(layout.Grid, layout.Lines, layout.HitTestMap, layout.TotalRows, scrollbar, layout.Scene3DViewports);
         }
 
         var renderFrame = _renderer.Render(_document, layout, _font, _selectionStyle, timeSeconds: timeSeconds, commandIndicators: _visibleCommandIndicators, caretAlpha: caretAlpha);
@@ -2009,7 +2264,22 @@ public sealed class ConsoleHostSession
         public sealed record Key(HostKey KeyCode, HostKeyModifiers Mods, bool IsDown) : PendingEvent;
 
         public sealed record Mouse(HostMouseEvent Event) : PendingEvent;
+
+        public sealed record FileDrop(string Path) : PendingEvent;
     }
+
+    private enum Scene3DDragMode
+    {
+        Orbit,
+        Pan
+    }
+
+    private readonly record struct Scene3DCapture(
+        BlockId BlockId,
+        HostMouseButtons Button,
+        Scene3DDragMode Mode,
+        int LastX,
+        int LastY);
 
     private sealed record JobProjection(BlockId HeaderId, BlockId LastId);
 

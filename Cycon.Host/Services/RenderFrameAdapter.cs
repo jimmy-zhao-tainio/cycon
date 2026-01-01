@@ -29,6 +29,31 @@ public static class RenderFrameAdapter
                         quad.Height,
                         quad.Rgba));
                     break;
+                case RenderingCommands.DrawTriangles triangles:
+                    adapted.Add(new BackendRender.DrawTriangles(AdaptVertices(triangles.Vertices)));
+                    break;
+                case RenderingCommands.DrawTriangles3D triangles3D:
+                    adapted.Add(new BackendRender.DrawTriangles3D(AdaptVertices3D(triangles3D.Vertices)));
+                    break;
+                case RenderingCommands.DrawVignetteQuad vignette:
+                    adapted.Add(new BackendRender.DrawVignetteQuad(
+                        vignette.X,
+                        vignette.Y,
+                        vignette.Width,
+                        vignette.Height,
+                        vignette.Strength,
+                        vignette.Inner,
+                        vignette.Outer));
+                    break;
+                case RenderingCommands.SetColorWrite colorWrite:
+                    adapted.Add(new BackendRender.SetColorWrite(colorWrite.Enabled));
+                    break;
+                case RenderingCommands.SetDepthState depthState:
+                    adapted.Add(new BackendRender.SetDepthState(depthState.Enabled, depthState.WriteEnabled, (BackendRender.DepthFuncKind)depthState.Func));
+                    break;
+                case RenderingCommands.ClearDepth clearDepth:
+                    adapted.Add(new BackendRender.ClearDepth(clearDepth.Depth01));
+                    break;
                 case RenderingCommands.PushClip clip:
                     adapted.Add(new BackendRender.PushClip(
                         clip.X,
@@ -87,4 +112,19 @@ public static class RenderFrameAdapter
 
         return adapted;
     }
+
+    private static IReadOnlyList<BackendRender.SolidVertex> AdaptVertices(IReadOnlyList<Cycon.Rendering.Commands.SolidVertex> vertices)
+    {
+        var adapted = new BackendRender.SolidVertex[vertices.Count];
+        for (var i = 0; i < vertices.Count; i++)
+        {
+            var v = vertices[i];
+            adapted[i] = new BackendRender.SolidVertex(v.X, v.Y, v.Rgba);
+        }
+
+        return adapted;
+    }
+
+    private static IReadOnlyList<Cycon.Render.SolidVertex3D> AdaptVertices3D(IReadOnlyList<Cycon.Render.SolidVertex3D> vertices) =>
+        vertices;
 }

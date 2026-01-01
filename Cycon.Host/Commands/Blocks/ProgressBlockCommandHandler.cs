@@ -1,4 +1,5 @@
 using System;
+using Cycon.BlockCommands;
 using Cycon.Commands;
 using Cycon.Core.Styling;
 using Cycon.Core.Transcript.Blocks;
