@@ -25,8 +25,9 @@ endsolid test
 
             var data = StlLoader.Load(path);
 
-            Assert.Equal(3, data.Vertices.Length);
-            Assert.Equal(3, data.Indices.Length);
+            Assert.Equal(1, data.TriangleCount);
+            Assert.Equal(3, data.VertexCount);
+            Assert.Equal(3 * 6, data.VertexData.Length);
             Assert.Equal(0f, data.Bounds.Min.X);
             Assert.Equal(0f, data.Bounds.Min.Y);
             Assert.Equal(0f, data.Bounds.Min.Z);
@@ -70,8 +71,9 @@ endsolid test
 
             var data = StlLoader.Load(path);
 
-            Assert.Equal(3, data.Vertices.Length);
-            Assert.Equal(3, data.Indices.Length);
+            Assert.Equal(1, data.TriangleCount);
+            Assert.Equal(3, data.VertexCount);
+            Assert.Equal(3 * 6, data.VertexData.Length);
             Assert.Equal(0f, data.Bounds.Min.X);
             Assert.Equal(0f, data.Bounds.Min.Y);
             Assert.Equal(0f, data.Bounds.Min.Z);

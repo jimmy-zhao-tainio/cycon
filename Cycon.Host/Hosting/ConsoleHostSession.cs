@@ -187,6 +187,23 @@ public sealed class ConsoleHostSession
         }
     }
 
+    public void ReportRenderFailure(int blockId, string reason)
+    {
+        var id = new BlockId(blockId);
+        var blocks = _document.Transcript.Blocks;
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            if (blocks[i].Id != id)
+            {
+                continue;
+            }
+
+            _document.Transcript.ReplaceAt(i, new TextBlock(id, $"Render failed: {reason}", ConsoleTextStream.System));
+            _pendingContentRebuild = true;
+            return;
+        }
+    }
+
     public void Initialize(int initialFbW, int initialFbH)
     {
         _latestFramebufferWidth = initialFbW;

@@ -1,9 +1,12 @@
 using System.Collections.Generic;
+using System.Numerics;
 
 namespace Cycon.Render;
 
 public interface IRenderCanvas
 {
+    void SetCullState(bool enabled, bool frontFaceCcw);
+
     void PushClipRect(in RectPx rectPx);
 
     void PopClipRect();
@@ -18,6 +21,19 @@ public interface IRenderCanvas
 
     void DrawTriangles3D(IReadOnlyList<SolidVertex3D> vertices);
 
+    /// <summary>
+    /// Draw a previously uploaded mesh into the current clip/scissor using the given viewport rect and transforms.
+    /// </summary>
+    void DrawMesh3D(
+        int meshId,
+        float[] vertexData,
+        int vertexCount,
+        in RectPx viewportRectPx,
+        in Matrix4x4 model,
+        in Matrix4x4 view,
+        in Matrix4x4 proj,
+        in Vector3 lightDirView,
+        in Scene3DRenderSettings settings);
+
     void DrawVignette(in RectPx rectPx, float strength01, float inner, float outer);
 }
-

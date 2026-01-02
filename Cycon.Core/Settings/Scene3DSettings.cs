@@ -1,7 +1,23 @@
 namespace Cycon.Core.Settings;
 
+public enum StlDebugMode
+{
+    Normal,
+    DoubleSided,
+    Unlit,
+    FaceNormals
+}
+
 public sealed class Scene3DSettings
 {
+    public StlDebugMode StlDebugMode { get; set; } = StlDebugMode.DoubleSided;
+
+    /// <summary>
+    /// Maximum number of STL triangles to render per frame. 0 means "no limit".
+    /// This exists to keep very large meshes responsive in the current CPU-projection path.
+    /// </summary>
+    public int StlMaxTriangles { get; set; } = 250_000;
+
     public float SolidAmbient { get; set; } = 0.62f;
 
     public float SolidDiffuseStrength { get; set; } = 0.32f;

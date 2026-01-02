@@ -35,6 +35,18 @@ public static class RenderFrameAdapter
                 case RenderingCommands.DrawTriangles3D triangles3D:
                     adapted.Add(new BackendRender.DrawTriangles3D(AdaptVertices3D(triangles3D.Vertices)));
                     break;
+                case RenderingCommands.DrawMesh3D drawMesh:
+                    adapted.Add(new BackendRender.DrawMesh3D(
+                        drawMesh.MeshId,
+                        drawMesh.VertexData,
+                        drawMesh.VertexCount,
+                        drawMesh.ViewportRectPx,
+                        drawMesh.Model,
+                        drawMesh.View,
+                        drawMesh.Proj,
+                        drawMesh.LightDirView,
+                        drawMesh.Settings));
+                    break;
                 case RenderingCommands.DrawVignetteQuad vignette:
                     adapted.Add(new BackendRender.DrawVignetteQuad(
                         vignette.X,
@@ -44,6 +56,12 @@ public static class RenderFrameAdapter
                         vignette.Strength,
                         vignette.Inner,
                         vignette.Outer));
+                    break;
+                case RenderingCommands.SetDebugTag tag:
+                    adapted.Add(new BackendRender.SetDebugTag(tag.Tag));
+                    break;
+                case RenderingCommands.SetCullState cull:
+                    adapted.Add(new BackendRender.SetCullState(cull.Enabled, cull.FrontFaceCcw));
                     break;
                 case RenderingCommands.SetColorWrite colorWrite:
                     adapted.Add(new BackendRender.SetColorWrite(colorWrite.Enabled));

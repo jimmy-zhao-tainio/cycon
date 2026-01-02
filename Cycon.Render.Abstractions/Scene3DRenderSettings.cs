@@ -1,6 +1,7 @@
 namespace Cycon.Render;
 
 public readonly record struct Scene3DRenderSettings(
+    int StlDebugMode,
     float SolidAmbient,
     float SolidDiffuseStrength,
     float ToneGamma,

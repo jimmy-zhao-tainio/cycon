@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using Cycon.Backends.Abstractions.Rendering;
 using Cycon.Backends.SilkNet.Execution.Shaders;
 using Silk.NET.OpenGL;
@@ -14,6 +15,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private uint _glyphProgram;
     private uint _quadProgram;
     private uint _tri3dProgram;
+    private uint _mesh3dProgram;
     private uint _vignetteProgram;
     private uint _vao;
     private uint _vbo;
@@ -27,14 +29,44 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private int _uViewportLocationVignette;
     private int _uRectLocationVignette;
     private int _uParamsLocationVignette;
+    private int _uModelLocationMesh3d;
+    private int _uViewLocationMesh3d;
+    private int _uProjLocationMesh3d;
+    private int _uLightDirLocationMesh3d;
+    private int _uAmbientLocationMesh3d;
+    private int _uDiffuseLocationMesh3d;
+    private int _uToneGammaLocationMesh3d;
+    private int _uToneGainLocationMesh3d;
+    private int _uToneLiftLocationMesh3d;
+    private int _uUnlitLocationMesh3d;
     private bool _initialized;
     private bool _disposed;
     private readonly bool _trace = Environment.GetEnvironmentVariable("CYCON_GL_TRACE") == "1";
     private readonly Stack<(int X, int Y, int Width, int Height)> _clipStack = new();
+    private int _debugTag;
+    private readonly Dictionary<int, string> _renderFailures = new();
+    private readonly HashSet<int> _loggedFailureTags = new();
+    private readonly HashSet<int> _loggedTri3DStateTags = new();
+    private readonly HashSet<int> _loggedMesh3DStateTags = new();
+    private readonly Dictionary<int, Mesh3D> _meshes3D = new();
+
+    private readonly record struct Mesh3D(uint Vao, uint Vbo, int VertexCount);
 
     public RenderFrameExecutorGl(GL gl)
     {
         _gl = gl;
+    }
+
+    public IReadOnlyDictionary<int, string> DrainRenderFailures()
+    {
+        if (_renderFailures.Count == 0)
+        {
+            return new Dictionary<int, string>();
+        }
+
+        var copy = new Dictionary<int, string>(_renderFailures);
+        _renderFailures.Clear();
+        return copy;
     }
 
     public void Initialize(GlyphAtlasData atlas)
@@ -53,6 +85,18 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         _tri3dProgram = CreateProgram(ShaderSources.Vertex3D, ShaderSources.FragmentQuad);
         _uViewportLocationTri3d = _gl.GetUniformLocation(_tri3dProgram, "uViewport");
+
+        _mesh3dProgram = CreateProgram(ShaderSources.VertexMesh3D, ShaderSources.FragmentMesh3D);
+        _uModelLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uModel");
+        _uViewLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uView");
+        _uProjLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uProj");
+        _uLightDirLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uLightDirView");
+        _uAmbientLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uAmbient");
+        _uDiffuseLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uDiffuseStrength");
+        _uToneGammaLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uToneGamma");
+        _uToneGainLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uToneGain");
+        _uToneLiftLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uToneLift");
+        _uUnlitLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uUnlit");
 
         _vignetteProgram = CreateProgram(ShaderSources.Vertex, ShaderSources.FragmentVignette);
         _uViewportLocationVignette = _gl.GetUniformLocation(_vignetteProgram, "uViewport");
@@ -75,6 +119,8 @@ public sealed class RenderFrameExecutorGl : IDisposable
             _gl.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, stride, (void*)(4 * sizeof(float)));
             _gl.EnableVertexAttribArray(2);
         }
+
+        CheckGlError("vao_setup");
 
         _atlasTexture = CreateAtlasTexture(atlas);
 
@@ -207,6 +253,16 @@ public sealed class RenderFrameExecutorGl : IDisposable
         {
             switch (commands[i])
             {
+                case SetDebugTag tag:
+                    Flush();
+                    _debugTag = tag.Tag;
+                    currentKind = null;
+                    break;
+                case SetCullState cull:
+                    Flush();
+                    SetCullState(cull.Enabled, cull.FrontFaceCcw);
+                    currentKind = null;
+                    break;
                 case SetColorWrite cw:
                     Flush();
                     SetColorWrite(cw.Enabled);
@@ -266,6 +322,11 @@ public sealed class RenderFrameExecutorGl : IDisposable
                     }
 
                     AddTriangle3DVertices(vertices, tris3d);
+                    break;
+                case DrawMesh3D drawMesh:
+                    Flush();
+                    DrawMesh3D(drawMesh);
+                    currentKind = null;
                     break;
                 case DrawVignetteQuad vignette:
                     Flush();
@@ -351,6 +412,11 @@ public sealed class RenderFrameExecutorGl : IDisposable
             return;
         }
 
+        if (kind == DrawBatchKind.Tri3D && _debugTag != 0 && _loggedTri3DStateTags.Add(_debugTag))
+        {
+            LogTri3DStateOnce(_debugTag);
+        }
+
         var program = kind switch
         {
             DrawBatchKind.Glyph => _glyphProgram,
@@ -387,7 +453,84 @@ public sealed class RenderFrameExecutorGl : IDisposable
                 _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), ptr, BufferUsageARB.StreamDraw);
             }
         }
+
+        if (kind == DrawBatchKind.Tri3D)
+        {
+            CheckGlError("tri3d_bufferdata");
+        }
         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(vertices.Count / FloatsPerVertex));
+        if (kind == DrawBatchKind.Tri3D)
+        {
+            CheckGlError("tri3d_draw");
+        }
+    }
+
+    private void SetCullState(bool enabled, bool frontFaceCcw)
+    {
+        if (enabled)
+        {
+            _gl.Enable(EnableCap.CullFace);
+        }
+        else
+        {
+            _gl.Disable(EnableCap.CullFace);
+        }
+
+        // Silk.NET doesn't expose CW/CCW symbols consistently across targets; use raw GL values.
+        _gl.FrontFace(frontFaceCcw ? (FrontFaceDirection)0x0901 : (FrontFaceDirection)0x0900);
+    }
+
+    private void LogTri3DStateOnce(int tag)
+    {
+        var cullEnabled = _gl.IsEnabled(EnableCap.CullFace);
+        var frontFace = _gl.GetInteger(GLEnum.FrontFace);
+        var frontFaceStr = frontFace == 0x0901 ? "CCW" : frontFace == 0x0900 ? "CW" : $"0x{frontFace:X}";
+        Console.WriteLine($"[STL-GL] tag={tag} cull={cullEnabled} frontFace={frontFaceStr}");
+    }
+
+    private void LogMesh3DStateOnce(int tag, int stlDebugMode)
+    {
+        var depthTest = _gl.IsEnabled(EnableCap.DepthTest);
+        var depthFunc = _gl.GetInteger(GLEnum.DepthFunc);
+        var depthFuncStr = depthFunc switch
+        {
+            0x0201 => "LESS",
+            0x0203 => "LEQUAL",
+            0x0204 => "GREATER",
+            0x0207 => "ALWAYS",
+            _ => $"0x{depthFunc:X}"
+        };
+        var cullEnabled = _gl.IsEnabled(EnableCap.CullFace);
+        var frontFace = _gl.GetInteger(GLEnum.FrontFace);
+        var frontFaceStr = frontFace == 0x0901 ? "CCW" : frontFace == 0x0900 ? "CW" : $"0x{frontFace:X}";
+        Console.WriteLine($"[STL-GL] tag={tag} depthTest={depthTest} depthFunc={depthFuncStr} cull={cullEnabled} frontFace={frontFaceStr} mode={stlDebugMode}");
+    }
+
+    private void CheckGlError(string stage)
+    {
+        var err = _gl.GetError();
+        if (err == GLEnum.NoError)
+        {
+            return;
+        }
+
+        var tag = _debugTag;
+        var message = $"[GL] err=0x{(int)err:X} stage={stage} tag={tag}";
+        Console.WriteLine(message);
+
+        if (tag != 0 && _loggedFailureTags.Add(tag))
+        {
+            _renderFailures[tag] = message;
+        }
+    }
+
+    private void LogFailure(int tag, string message)
+    {
+        Console.WriteLine(message);
+        if (tag != 0 && _loggedFailureTags.Add(tag))
+        {
+            _renderFailures[tag] = message;
+        }
     }
 
     private void SetColorWrite(bool enabled)
@@ -422,6 +565,140 @@ public sealed class RenderFrameExecutorGl : IDisposable
         depth01 = Math.Clamp(depth01, 0f, 1f);
         _gl.ClearDepth(depth01);
         _gl.Clear(ClearBufferMask.DepthBufferBit);
+    }
+
+    private void UploadMesh3D(int meshId, float[] vertexData, int vertexCount)
+    {
+        const int floatsPerVertex = 6;
+        if (vertexCount <= 0)
+        {
+            return;
+        }
+
+        if (vertexData is null)
+        {
+            LogFailure(_debugTag, $"[GL] UploadMesh3D missing data meshId={meshId}");
+            return;
+        }
+
+        var required = checked(vertexCount * floatsPerVertex);
+        if (vertexData.Length < required)
+        {
+            LogFailure(_debugTag, $"[GL] UploadMesh3D insufficient data meshId={meshId} verts={vertexCount} floats={vertexData.Length} required={required}");
+            return;
+        }
+
+        if (_meshes3D.TryGetValue(meshId, out var existing))
+        {
+            if (existing.VertexCount == vertexCount)
+            {
+                return;
+            }
+
+            _gl.DeleteVertexArray(existing.Vao);
+            _gl.DeleteBuffer(existing.Vbo);
+            _meshes3D.Remove(meshId);
+        }
+
+        var vao = _gl.GenVertexArray();
+        var vbo = _gl.GenBuffer();
+
+        _gl.BindVertexArray(vao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
+
+        var byteSize = (nuint)(required * sizeof(float));
+        unsafe
+        {
+            fixed (float* p = vertexData)
+            {
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, byteSize, p, BufferUsageARB.StaticDraw);
+            }
+
+            var stride = (uint)(floatsPerVertex * sizeof(float));
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
+            _gl.EnableVertexAttribArray(0);
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
+            _gl.EnableVertexAttribArray(1);
+        }
+
+        CheckGlError("mesh3d_upload");
+
+        _meshes3D[meshId] = new Mesh3D(vao, vbo, vertexCount);
+    }
+
+    private void DrawMesh3D(DrawMesh3D draw)
+    {
+        if (!_meshes3D.TryGetValue(draw.MeshId, out var mesh))
+        {
+            UploadMesh3D(draw.MeshId, draw.VertexData, draw.VertexCount);
+            if (!_meshes3D.TryGetValue(draw.MeshId, out mesh))
+            {
+                LogFailure(_debugTag, $"[GL] DrawMesh3D missing mesh meshId={draw.MeshId}");
+                return;
+            }
+        }
+
+        var rect = draw.ViewportRectPx;
+        if (rect.Width <= 0 || rect.Height <= 0)
+        {
+            return;
+        }
+
+        // One-time state log per block/tag.
+        var tag = _debugTag;
+        if (tag != 0 && _loggedMesh3DStateTags.Add(tag))
+        {
+            LogMesh3DStateOnce(tag, draw.Settings.StlDebugMode);
+        }
+
+        var blendWasEnabled = _gl.IsEnabled(EnableCap.Blend);
+        _gl.Disable(EnableCap.Blend);
+
+        // Draw into the block's viewport. OpenGL viewport uses bottom-left origin.
+        // Do not clamp X/Y to the window; viewports can be partially off-screen during scrolling.
+        var vx = rect.X;
+        var vyTop = rect.Y;
+        var vw = Math.Max(0, rect.Width);
+        var vh = Math.Max(0, rect.Height);
+        var vy = _viewportHeight - (vyTop + vh);
+
+        _gl.Viewport(vx, vy, (uint)vw, (uint)vh);
+
+        _gl.UseProgram(_mesh3dProgram);
+
+        // System.Numerics stores matrices in row-major layout, while OpenGL expects column-major data.
+        // Passing the raw Matrix4x4 memory (row-major) with transpose=false is effectively a transpose
+        // from the GL perspective, which matches our System.Numerics matrix constructors and CPU projection path.
+        var model = draw.Model;
+        var view = draw.View;
+        var proj = draw.Proj;
+        unsafe
+        {
+            _gl.UniformMatrix4(_uModelLocationMesh3d, 1, false, (float*)&model);
+            _gl.UniformMatrix4(_uViewLocationMesh3d, 1, false, (float*)&view);
+            _gl.UniformMatrix4(_uProjLocationMesh3d, 1, false, (float*)&proj);
+        }
+
+        var light = draw.LightDirView;
+        _gl.Uniform3(_uLightDirLocationMesh3d, light.X, light.Y, light.Z);
+        _gl.Uniform1(_uAmbientLocationMesh3d, draw.Settings.SolidAmbient);
+        _gl.Uniform1(_uDiffuseLocationMesh3d, draw.Settings.SolidDiffuseStrength);
+        _gl.Uniform1(_uToneGammaLocationMesh3d, draw.Settings.ToneGamma);
+        _gl.Uniform1(_uToneGainLocationMesh3d, draw.Settings.ToneGain);
+        _gl.Uniform1(_uToneLiftLocationMesh3d, draw.Settings.ToneLift);
+        _gl.Uniform1(_uUnlitLocationMesh3d, draw.Settings.StlDebugMode == 2 ? 1 : 0); // Unlit
+
+        _gl.BindVertexArray(mesh.Vao);
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)mesh.VertexCount);
+        CheckGlError("mesh3d_draw");
+
+        // Restore full-frame viewport for subsequent 2D draws.
+        _gl.Viewport(0, 0, (uint)_viewportWidth, (uint)_viewportHeight);
+
+        if (blendWasEnabled)
+        {
+            _gl.Enable(EnableCap.Blend);
+        }
     }
 
     private void AddGlyphRunVertices(List<float> vertices, DrawGlyphRun glyphRun, GlyphAtlasData atlas)
@@ -672,9 +949,17 @@ public sealed class RenderFrameExecutorGl : IDisposable
             _gl.DeleteVertexArray(_vao);
         }
 
+        foreach (var mesh in _meshes3D.Values)
+        {
+            if (mesh.Vao != 0) _gl.DeleteVertexArray(mesh.Vao);
+            if (mesh.Vbo != 0) _gl.DeleteBuffer(mesh.Vbo);
+        }
+        _meshes3D.Clear();
+
         if (_glyphProgram != 0) _gl.DeleteProgram(_glyphProgram);
         if (_quadProgram != 0) _gl.DeleteProgram(_quadProgram);
         if (_tri3dProgram != 0) _gl.DeleteProgram(_tri3dProgram);
+        if (_mesh3dProgram != 0) _gl.DeleteProgram(_mesh3dProgram);
         if (_vignetteProgram != 0) _gl.DeleteProgram(_vignetteProgram);
 
         _disposed = true;

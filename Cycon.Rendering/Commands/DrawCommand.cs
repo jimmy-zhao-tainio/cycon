@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Collections.Generic;
 using Cycon.Render;
 
@@ -13,7 +14,25 @@ public sealed record DrawTriangles(IReadOnlyList<SolidVertex> Vertices) : DrawCo
 
 public sealed record DrawTriangles3D(IReadOnlyList<SolidVertex3D> Vertices) : DrawCommand;
 
+// Draw a previously uploaded mesh into a per-command viewport rect.
+public sealed record DrawMesh3D(
+    int MeshId,
+    float[] VertexData,
+    int VertexCount,
+    RectPx ViewportRectPx,
+    Matrix4x4 Model,
+    Matrix4x4 View,
+    Matrix4x4 Proj,
+    Vector3 LightDirView,
+    Scene3DRenderSettings Settings) : DrawCommand;
+
 public sealed record DrawVignetteQuad(int X, int Y, int Width, int Height, float Strength, float Inner, float Outer) : DrawCommand;
+
+// Debug/profiling metadata for renderers/executors. Not intended for UI logic.
+public sealed record SetDebugTag(int Tag) : DrawCommand;
+
+// Set culling state for subsequent draws until changed again.
+public sealed record SetCullState(bool Enabled, bool FrontFaceCcw) : DrawCommand;
 
 public sealed record SetColorWrite(bool Enabled) : DrawCommand;
 

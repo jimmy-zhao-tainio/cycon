@@ -99,4 +99,70 @@ void main()
     FragColor = vec4(0.0, 0.0, 0.0, alpha);
 }
 ";
+
+    public const string VertexMesh3D = @"#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProj;
+
+out vec3 vNormalView;
+out vec3 vPosView;
+
+void main()
+{
+    vec4 worldPos = uModel * vec4(aPos, 1.0);
+    vec4 viewPos = uView * worldPos;
+    vPosView = viewPos.xyz;
+
+    // Model is identity for now; keep the correct shape for future.
+    mat3 normalMat = mat3(uView * uModel);
+    vNormalView = normalize(normalMat * aNormal);
+
+    gl_Position = uProj * viewPos;
+}
+";
+
+    public const string FragmentMesh3D = @"#version 330 core
+in vec3 vNormalView;
+in vec3 vPosView;
+
+uniform vec3 uLightDirView; // normalized, view space
+uniform float uAmbient;
+uniform float uDiffuseStrength;
+uniform float uToneGamma;
+uniform float uToneGain;
+uniform float uToneLift;
+uniform int uUnlit;
+
+out vec4 FragColor;
+
+float ApplyTone(float b)
+{
+    b = clamp(b, 0.0, 1.0);
+    float g = uToneGamma <= 0.0 ? 1.0 : uToneGamma;
+    b = pow(b, g);
+    b = (b * uToneGain) + uToneLift;
+    return clamp(b, 0.0, 1.0);
+}
+
+void main()
+{
+    float b;
+    if (uUnlit != 0)
+    {
+        b = 0.9;
+    }
+    else
+    {
+        float ndotl = abs(dot(normalize(vNormalView), normalize(uLightDirView)));
+        b = uAmbient + (uDiffuseStrength * ndotl);
+    }
+
+    b = ApplyTone(b);
+    FragColor = vec4(vec3(b), 1.0);
+}
+";
 }

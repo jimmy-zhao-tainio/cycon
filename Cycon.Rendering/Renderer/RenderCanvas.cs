@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Numerics;
 using Cycon.Render;
 using Cycon.Rendering.Commands;
 
@@ -12,6 +13,12 @@ internal sealed class RenderCanvas : IRenderCanvas
     {
         _frame = frame;
     }
+
+    public void SetCullState(bool enabled, bool frontFaceCcw) =>
+        _frame.Add(new SetCullState(enabled, frontFaceCcw));
+
+    public void SetDebugTag(int tag) =>
+        _frame.Add(new SetDebugTag(tag));
 
     public void PushClipRect(in RectPx rectPx) =>
         _frame.Add(new PushClip(rectPx.X, rectPx.Y, rectPx.Width, rectPx.Height));
@@ -33,6 +40,18 @@ internal sealed class RenderCanvas : IRenderCanvas
 
     public void DrawTriangles3D(IReadOnlyList<SolidVertex3D> vertices) =>
         _frame.Add(new DrawTriangles3D(vertices));
+
+    public void DrawMesh3D(
+        int meshId,
+        float[] vertexData,
+        int vertexCount,
+        in RectPx viewportRectPx,
+        in Matrix4x4 model,
+        in Matrix4x4 view,
+        in Matrix4x4 proj,
+        in Vector3 lightDirView,
+        in Scene3DRenderSettings settings) =>
+        _frame.Add(new DrawMesh3D(meshId, vertexData, vertexCount, viewportRectPx, model, view, proj, lightDirView, settings));
 
     public void DrawVignette(in RectPx rectPx, float strength01, float inner, float outer) =>
         _frame.Add(new DrawVignetteQuad(rectPx.X, rectPx.Y, rectPx.Width, rectPx.Height, strength01, inner, outer));

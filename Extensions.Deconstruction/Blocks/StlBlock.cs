@@ -14,14 +14,16 @@ public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasure
     public StlBlock(
         BlockId id,
         string filePath,
-        Vector3[] vertices,
-        int[] indices,
+        float[] vertexData,
+        int vertexCount,
+        int triangleCount,
         Bounds bounds)
     {
         Id = id;
         FilePath = filePath;
-        Vertices = vertices;
-        Indices = indices;
+        VertexData = vertexData;
+        VertexCount = vertexCount;
+        TriangleCount = triangleCount;
         MeshBounds = bounds;
 
         PreferredAspectRatio = 16.0 / 9.0;
@@ -38,9 +40,14 @@ public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasure
 
     public string FilePath { get; }
 
-    public Vector3[] Vertices { get; }
+    /// <summary>
+    /// Interleaved triangle soup: (x,y,z,nx,ny,nz) per vertex, 3 vertices per triangle.
+    /// </summary>
+    public float[] VertexData { get; }
 
-    public int[] Indices { get; }
+    public int VertexCount { get; }
+
+    public int TriangleCount { get; }
 
     public Bounds MeshBounds { get; }
 
@@ -53,8 +60,6 @@ public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasure
     public float YawRadians { get; set; }
 
     public float PitchRadians { get; set; }
-
-    public int TriangleCount => Indices.Length / 3;
 
     public float BoundsRadius => MeshBounds.Radius;
 

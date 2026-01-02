@@ -42,6 +42,10 @@ public static class SilkNetCyconRunner
             var tick = session.Tick();
             executor.Resize(tick.FramebufferWidth, tick.FramebufferHeight);
             executor.Execute(tick.Frame, session.Atlas);
+            foreach (var failure in executor.DrainRenderFailures())
+            {
+                session.ReportRenderFailure(failure.Key, failure.Value);
+            }
             swapchain.Present();
             window.Show();
         };
@@ -213,6 +217,10 @@ public static class SilkNetCyconRunner
 
             executor.Resize(tick.FramebufferWidth, tick.FramebufferHeight);
             executor.Execute(tick.Frame, session.Atlas);
+            foreach (var failure in executor.DrainRenderFailures())
+            {
+                session.ReportRenderFailure(failure.Key, failure.Value);
+            }
             swapchain.Present();
 
             if (tick.RequestExit)

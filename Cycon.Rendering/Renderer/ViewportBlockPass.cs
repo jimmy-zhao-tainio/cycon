@@ -68,15 +68,18 @@ internal static class ViewportBlockPass
                 continue;
             }
 
+            canvas.SetDebugTag(viewport.BlockId.Value);
             canvas.PushClipRect(viewportRect);
             renderBlock.Render(canvas, new BlockRenderContext(viewportRect, timeSeconds, theme, textMetrics, scene3D));
             canvas.PopClipRect();
+            canvas.SetDebugTag(0);
         }
     }
 
     private static Scene3DRenderSettings MapScene3D(Scene3DSettings s)
     {
         return new Scene3DRenderSettings(
+            StlDebugMode: (int)s.StlDebugMode,
             SolidAmbient: s.SolidAmbient,
             SolidDiffuseStrength: s.SolidDiffuseStrength,
             ToneGamma: s.ToneGamma,
