@@ -3,7 +3,7 @@ using System.Numerics;
 using Cycon.Render;
 using Cycon.Core.Settings;
 
-namespace Extensions.Deconstruction.Blocks;
+namespace Extensions.Inspect.Blocks;
 
 public sealed partial class StlBlock
 {

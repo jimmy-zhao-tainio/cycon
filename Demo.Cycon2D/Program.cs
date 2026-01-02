@@ -1,5 +1,5 @@
 using Cycon.App;
-using Extensions.Deconstruction;
+using Extensions.Inspect;
 
 namespace Demo.Cycon2D;
 
@@ -13,7 +13,7 @@ public static class Program
             Width = 960,
             Height = 540,
             InitialText = BuildDemoText(),
-            ConfigureBlockCommands = DeconstructionExtensionRegistration.Register,
+            ConfigureBlockCommands = InspectExtensionRegistration.Register,
         });
     }
 

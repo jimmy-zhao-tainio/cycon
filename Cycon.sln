@@ -43,7 +43,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cycon.Runtime", "Cycon.Runt
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cycon.BlockCommands", "Cycon.BlockCommands\Cycon.BlockCommands.csproj", "{F5809DC6-91D5-40A5-920B-E8AE76DC5EE6}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Extensions.Deconstruction", "Extensions.Deconstruction\Extensions.Deconstruction.csproj", "{7499E66E-9F2A-47EC-A29A-D7318421D77A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Extensions.Inspect", "Extensions.Inspect\Extensions.Inspect.csproj", "{7499E66E-9F2A-47EC-A29A-D7318421D77A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

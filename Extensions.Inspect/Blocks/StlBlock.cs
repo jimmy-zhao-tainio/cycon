@@ -4,7 +4,7 @@ using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Render;
 
-namespace Extensions.Deconstruction.Blocks;
+namespace Extensions.Inspect.Blocks;
 
 public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner
 {

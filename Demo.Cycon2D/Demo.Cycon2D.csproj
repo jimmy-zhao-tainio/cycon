@@ -2,7 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cycon.App\Cycon.App.csproj" />
-    <ProjectReference Include="..\Extensions.Deconstruction\Extensions.Deconstruction.csproj" />
+    <ProjectReference Include="..\Extensions.Inspect\Extensions.Inspect.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

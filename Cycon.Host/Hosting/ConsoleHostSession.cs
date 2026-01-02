@@ -1191,7 +1191,7 @@ public sealed class ConsoleHostSession
             return;
         }
 
-        var commandText = $"deconstruct {QuoteForCommandLineParser(path)}";
+        var commandText = $"inspect {QuoteForCommandLineParser(path)}";
 
         var insertIndex = Math.Max(0, blocks.Count - 1);
         var headerId = new BlockId(AllocateNewBlockId());

@@ -5,17 +5,17 @@ using Cycon.Commands;
 using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
-using Extensions.Deconstruction.Blocks;
-using Extensions.Deconstruction.Stl;
+using Extensions.Inspect.Blocks;
+using Extensions.Inspect.Stl;
 
-namespace Extensions.Deconstruction.Commands;
+namespace Extensions.Inspect.Commands;
 
-public sealed class DeconstructBlockCommandHandler : IBlockCommandHandler
+public sealed class InspectBlockCommandHandler : IBlockCommandHandler
 {
     public CommandSpec Spec { get; } = new(
-        Name: "deconstruct",
+        Name: "inspect",
         Summary: "Inspect file and spawn suitable block view.",
-        Aliases: new[] { "dec" },
+        Aliases: Array.Empty<string>(),
         Capabilities: CommandCapabilities.None);
 
     public bool TryExecute(CommandRequest request, IBlockCommandContext ctx)
@@ -60,7 +60,7 @@ public sealed class DeconstructBlockCommandHandler : IBlockCommandHandler
         out string usageError)
     {
         fullPath = string.Empty;
-        usageError = "Usage: deconstruct <path>";
+        usageError = "Usage: inspect <path>";
 
         string? rawPath = null;
         foreach (var arg in request.Args)

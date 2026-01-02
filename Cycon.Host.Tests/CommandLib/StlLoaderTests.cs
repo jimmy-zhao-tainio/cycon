@@ -1,7 +1,7 @@
 using System.Text;
-using Extensions.Deconstruction.Stl;
+using Extensions.Inspect.Stl;
 
-namespace Cycon.Host.Tests.Deconstruction;
+namespace Cycon.Host.Tests.Inspect;
 
 public sealed class StlLoaderTests
 {

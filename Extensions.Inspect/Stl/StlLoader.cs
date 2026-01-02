@@ -5,9 +5,9 @@ using System.IO;
 using System.Numerics;
 using System.Text;
 using Cycon.Core.Transcript;
-using Extensions.Deconstruction.Blocks;
+using Extensions.Inspect.Blocks;
 
-namespace Extensions.Deconstruction.Stl;
+namespace Extensions.Inspect.Stl;
 
 public static class StlLoader
 {
