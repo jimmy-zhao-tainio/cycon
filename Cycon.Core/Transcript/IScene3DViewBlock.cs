@@ -5,10 +5,8 @@ namespace Cycon.Core.Transcript;
 
 public interface IScene3DViewBlock : IBlock
 {
-    Vector3 Target { get; set; }
-    float Distance { get; set; }
-    float YawRadians { get; set; }
-    float PitchRadians { get; set; }
+    Vector3 CameraPos { get; set; }
+    Vector3 CenterDir { get; set; }
+    float FocusDistance { get; set; }
     float BoundsRadius { get; }
 }
-

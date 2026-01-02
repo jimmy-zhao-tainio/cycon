@@ -96,6 +96,7 @@ public sealed class ConsoleHostSession
     private bool _scrollbarInteractedThisTick;
     private Scene3DCapture? _scene3DCapture;
     private BlockId? _scene3DMouseFocus;
+    private Scene3DNavKeys _scene3DNavKeysDown;
 
     private ConsoleHostSession(
         string text,
@@ -250,6 +251,11 @@ public sealed class ConsoleHostSession
         _lastTickTicks = nowTicks;
 
         if (TickRunnableBlocks(TimeSpan.FromMilliseconds(dtMs)))
+        {
+            _pendingContentRebuild = true;
+        }
+
+        if (TickScene3DKeys(TimeSpan.FromMilliseconds(dtMs)))
         {
             _pendingContentRebuild = true;
         }
@@ -657,12 +663,25 @@ public sealed class ConsoleHostSession
 
             if (events[i] is PendingEvent.Text textInput && !char.IsControl(textInput.Ch))
             {
+                if (ShouldConsumeScene3DTextInput(textInput.Ch))
+                {
+                    continue;
+                }
+
                 ClearScene3DMouseFocus();
             }
 
-            if (events[i] is PendingEvent.Key key && key.IsDown && key.KeyCode != HostKey.Unknown)
+            if (events[i] is PendingEvent.Key key && key.KeyCode != HostKey.Unknown)
             {
-                ClearScene3DMouseFocus();
+                if (HandleScene3DKey(key.KeyCode, key.IsDown))
+                {
+                    continue;
+                }
+
+                if (key.IsDown)
+                {
+                    ClearScene3DMouseFocus();
+                }
             }
 
             if (events[i] is PendingEvent.Mouse mouseRaw && _lastLayout is not null)
@@ -699,6 +718,54 @@ public sealed class ConsoleHostSession
         }
     }
 
+    private bool ShouldConsumeScene3DTextInput(char ch)
+    {
+        if (_scene3DMouseFocus is null)
+        {
+            return false;
+        }
+
+        return char.ToUpperInvariant(ch) is 'W' or 'A' or 'S' or 'D';
+    }
+
+    private bool HandleScene3DKey(HostKey key, bool isDown)
+    {
+        if (_scene3DMouseFocus is not { } focusedId)
+        {
+            return false;
+        }
+
+        if (!TryGetBlock(focusedId, out var block) || block is not IScene3DViewBlock)
+        {
+            return false;
+        }
+
+        if (key is not (HostKey.W or HostKey.A or HostKey.S or HostKey.D))
+        {
+            return false;
+        }
+
+        var mask = key switch
+        {
+            HostKey.W => Scene3DNavKeys.W,
+            HostKey.A => Scene3DNavKeys.A,
+            HostKey.S => Scene3DNavKeys.S,
+            HostKey.D => Scene3DNavKeys.D,
+            _ => Scene3DNavKeys.None
+        };
+
+        if (isDown)
+        {
+            _scene3DNavKeysDown |= mask;
+        }
+        else
+        {
+            _scene3DNavKeysDown &= ~mask;
+        }
+
+        return true;
+    }
+
     private void EnsureLayoutExists(int framebufferWidth, int framebufferHeight)
     {
         if (_lastLayout is not null && _lastFrame is not null && !_pendingContentRebuild)
@@ -728,6 +795,62 @@ public sealed class ConsoleHostSession
         _lastScrollbarThumbAlpha = thumbAlpha;
         _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(nowTicks);
         _lastCaretRenderTicks = nowTicks;
+    }
+
+    private bool TickScene3DKeys(TimeSpan dt)
+    {
+        if (_scene3DMouseFocus is not { } focusedId)
+        {
+            return false;
+        }
+
+        if (_scene3DNavKeysDown == Scene3DNavKeys.None)
+        {
+            return false;
+        }
+
+        if (!TryGetBlock(focusedId, out var block) || block is not IScene3DViewBlock stl)
+        {
+            _scene3DNavKeysDown = Scene3DNavKeys.None;
+            return false;
+        }
+
+        var dtSeconds = (float)dt.TotalSeconds;
+        if (dtSeconds <= 0f)
+        {
+            return false;
+        }
+
+        var settings = _document.Settings.Scene3D;
+
+        var pan = 0f;
+        if ((_scene3DNavKeysDown & Scene3DNavKeys.D) != 0) pan += 1f;
+        if ((_scene3DNavKeysDown & Scene3DNavKeys.A) != 0) pan -= 1f;
+
+        var dolly = 0f;
+        if ((_scene3DNavKeysDown & Scene3DNavKeys.W) != 0) dolly += 1f;
+        if ((_scene3DNavKeysDown & Scene3DNavKeys.S) != 0) dolly -= 1f;
+
+        var didAnything = false;
+        var (right, up, _) = ComputeSceneBasis(stl.CenterDir);
+
+        if (pan != 0f)
+        {
+            var scale = stl.FocusDistance * settings.KeyboardPanSpeed * dtSeconds;
+            var sign = settings.InvertPanX ? -1f : 1f;
+            stl.CameraPos += (pan * scale * sign) * right;
+            didAnything = true;
+        }
+
+        if (dolly != 0f)
+        {
+            var exponent = dolly * settings.KeyboardDollySpeed * dtSeconds;
+            var factor = MathF.Exp(-exponent);
+            ApplySceneDollyFactor(stl, factor);
+            didAnything = true;
+        }
+
+        return didAnything;
     }
 
     private InputEvent? Translate(PendingEvent e)
@@ -892,6 +1015,7 @@ public sealed class ConsoleHostSession
     private void ClearScene3DMouseFocus()
     {
         _scene3DCapture = null;
+        _scene3DNavKeysDown = Scene3DNavKeys.None;
 
         if (_scene3DMouseFocus is not { } focusedId)
         {
@@ -929,24 +1053,20 @@ public sealed class ConsoleHostSession
         {
             case Scene3DDragMode.Orbit:
             {
-                stl.YawRadians += dx * settings.OrbitSensitivity * (settings.InvertOrbitX ? -1f : 1f);
-                stl.PitchRadians += dy * settings.OrbitSensitivity * (settings.InvertOrbitY ? -1f : 1f);
-                stl.PitchRadians = Math.Clamp(stl.PitchRadians, -1.55f, 1.55f);
+                var yaw = MathF.Atan2(stl.CenterDir.X, stl.CenterDir.Z);
+                var pitch = MathF.Asin(Math.Clamp(stl.CenterDir.Y, -1f, 1f));
+                yaw += dx * settings.OrbitSensitivity * (settings.InvertOrbitX ? -1f : 1f);
+                pitch -= dy * settings.OrbitSensitivity * (settings.InvertOrbitY ? -1f : 1f);
+                pitch = Math.Clamp(pitch, -1.55f, 1.55f);
+                stl.CenterDir = ComputeForward(yaw, pitch);
                 break;
             }
             case Scene3DDragMode.Pan:
             {
-                var forward = ComputeForward(stl.YawRadians, stl.PitchRadians);
-                var right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
-                if (right.LengthSquared() < 1e-6f)
-                {
-                    right = Vector3.UnitX;
-                }
-
-                var up = Vector3.Normalize(Vector3.Cross(right, forward));
-                var scale = Math.Max(0.01f, stl.Distance) * settings.PanSensitivity;
-                stl.Target += (dx * scale * (settings.InvertPanX ? -1f : 1f)) * right;
-                stl.Target += (dy * scale * (settings.InvertPanY ? -1f : 1f)) * up;
+                var (right, up, _) = ComputeSceneBasis(stl.CenterDir);
+                var scale = Math.Max(0.01f, stl.FocusDistance) * settings.PanSensitivity;
+                stl.CameraPos += (-dx * scale * (settings.InvertPanX ? -1f : 1f)) * right;
+                stl.CameraPos += (dy * scale * (settings.InvertPanY ? -1f : 1f)) * up;
                 break;
             }
         }
@@ -961,8 +1081,71 @@ public sealed class ConsoleHostSession
 
         var delta = settings.InvertZoom ? -wheelDelta : wheelDelta;
         var factor = MathF.Exp(-delta * settings.ZoomSensitivity);
-        var maxDistance = MathF.Max(0.01f, stl.BoundsRadius * 100f);
-        stl.Distance = Math.Clamp(stl.Distance * factor, 0.01f, maxDistance);
+        ApplySceneDollyFactor(stl, factor);
+    }
+
+    private static void ApplySceneDollyFactor(IScene3DViewBlock stl, float factor)
+    {
+        var oldFocus = Math.Max(0.01f, stl.FocusDistance);
+        var maxFocus = MathF.Max(0.01f, stl.BoundsRadius * 100f);
+        var newFocus = Math.Clamp(oldFocus * factor, 0.01f, maxFocus);
+        if (MathF.Abs(newFocus - oldFocus) < 1e-6f)
+        {
+            return;
+        }
+
+        var forward = stl.CenterDir;
+        if (forward.LengthSquared() < 1e-10f)
+        {
+            forward = new Vector3(0, 0, 1);
+        }
+        else
+        {
+            forward = Vector3.Normalize(forward);
+        }
+
+        stl.CenterDir = forward;
+        stl.CameraPos += forward * (oldFocus - newFocus);
+        stl.FocusDistance = newFocus;
+    }
+
+    private static (Vector3 Right, Vector3 Up, Vector3 Forward) ComputeSceneBasis(Vector3 forward)
+    {
+        if (forward.LengthSquared() < 1e-10f)
+        {
+            forward = new Vector3(0, 0, 1);
+        }
+
+        forward = Vector3.Normalize(forward);
+
+        var worldUp = Vector3.UnitY;
+        if (MathF.Abs(Vector3.Dot(forward, worldUp)) > 0.99f)
+        {
+            worldUp = Vector3.UnitZ;
+        }
+
+        // Use a stable right-handed basis: right = up × forward, up = forward × right.
+        var right = Vector3.Cross(worldUp, forward);
+        if (right.LengthSquared() < 1e-10f)
+        {
+            right = Vector3.UnitX;
+        }
+        else
+        {
+            right = Vector3.Normalize(right);
+        }
+
+        var up = Vector3.Cross(forward, right);
+        if (up.LengthSquared() < 1e-10f)
+        {
+            up = Vector3.UnitY;
+        }
+        else
+        {
+            up = Vector3.Normalize(up);
+        }
+
+        return (right, up, forward);
     }
 
     private static Vector3 ComputeForward(float yaw, float pitch)
@@ -2472,6 +2655,16 @@ public sealed class ConsoleHostSession
         Scene3DDragMode Mode,
         int LastX,
         int LastY);
+
+    [Flags]
+    private enum Scene3DNavKeys
+    {
+        None = 0,
+        W = 1 << 0,
+        A = 1 << 1,
+        S = 1 << 2,
+        D = 1 << 3
+    }
 
     private sealed record JobProjection(BlockId HeaderId, BlockId LastId);
 

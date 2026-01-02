@@ -42,9 +42,13 @@ public sealed class Scene3DSettings
 
     public float ZoomSensitivity { get; set; } = 0.10f;
 
-    public bool InvertOrbitX { get; set; } = false;
+    public float KeyboardPanSpeed { get; set; } = 0.80f;
 
-    public bool InvertOrbitY { get; set; } = true;
+    public float KeyboardDollySpeed { get; set; } = 0.80f;
+
+    public bool InvertOrbitX { get; set; } = true;
+
+    public bool InvertOrbitY { get; set; } = false;
 
     public bool InvertPanX { get; set; } = true;
 

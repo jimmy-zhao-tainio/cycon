@@ -283,6 +283,10 @@ public static class SilkNetCyconRunner
             Key.Escape => HostKey.Escape,
             Key.C => HostKey.C,
             Key.V => HostKey.V,
+            Key.W => HostKey.W,
+            Key.A => HostKey.A,
+            Key.S => HostKey.S,
+            Key.D => HostKey.D,
             _ => HostKey.Unknown
         };
     }

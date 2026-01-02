@@ -35,10 +35,9 @@ public sealed partial class StlBlock : IScene3DViewBlock, IMouseFocusableViewpor
         _lastProjectionAspect = (float)(PreferredAspectRatio <= 0 ? (16.0 / 9.0) : PreferredAspectRatio);
         _lastVerticalFovRadians = ComputeVerticalFovRadians(_lastHorizontalFovDegrees, _lastProjectionAspect);
 
-        Target = bounds.Center;
-        YawRadians = 0f;
-        PitchRadians = 0.35f;
-        Distance = ComputeFitDistance(bounds.Radius, _lastVerticalFovRadians);
+        CenterDir = Vector3.Normalize(new Vector3(0, MathF.Sin(0.35f), MathF.Cos(0.35f)));
+        FocusDistance = ComputeFitDistance(bounds.Radius, _lastVerticalFovRadians);
+        CameraPos = bounds.Center - (CenterDir * FocusDistance);
     }
 
     public BlockId Id { get; }
@@ -64,26 +63,23 @@ public sealed partial class StlBlock : IScene3DViewBlock, IMouseFocusableViewpor
 
     public double PreferredAspectRatio { get; set; }
 
-    public Vector3 Target { get; set; }
+    public Vector3 CameraPos { get; set; }
 
-    public float Distance { get; set; }
+    public Vector3 CenterDir { get; set; }
 
-    public float YawRadians { get; set; }
-
-    public float PitchRadians { get; set; }
+    public float FocusDistance { get; set; }
 
     public float BoundsRadius => MeshBounds.Radius;
 
     public void ResetCameraToFit()
     {
-        Target = MeshBounds.Center;
-        YawRadians = 0f;
-        PitchRadians = 0.35f;
         var aspect = float.IsFinite(_lastProjectionAspect)
             ? _lastProjectionAspect
             : (float)(PreferredAspectRatio <= 0 ? (16.0 / 9.0) : PreferredAspectRatio);
         _lastVerticalFovRadians = ComputeVerticalFovRadians(_lastHorizontalFovDegrees, aspect);
-        Distance = ComputeFitDistance(MeshBounds.Radius, _lastVerticalFovRadians);
+        CenterDir = Vector3.Normalize(new Vector3(0, MathF.Sin(0.35f), MathF.Cos(0.35f)));
+        FocusDistance = ComputeFitDistance(MeshBounds.Radius, _lastVerticalFovRadians);
+        CameraPos = MeshBounds.Center - (CenterDir * FocusDistance);
     }
 
     public BlockSize Measure(in BlockMeasureContext ctx)

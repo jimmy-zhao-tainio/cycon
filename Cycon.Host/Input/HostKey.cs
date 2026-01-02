@@ -12,5 +12,9 @@ public enum HostKey
     Down,
     Escape,
     C,
-    V
+    V,
+    W,
+    A,
+    S,
+    D
 }

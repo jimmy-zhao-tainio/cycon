@@ -57,8 +57,10 @@ public sealed partial class StlBlock
             var oldVfov = _lastVerticalFovRadians;
             if (MathF.Abs(vfov - oldVfov) > 1e-6f)
             {
+                var lookAt = CameraPos + (CenterDir * FocusDistance);
                 var scale = MathF.Tan(oldVfov * 0.5f) / MathF.Tan(vfov * 0.5f);
-                Distance *= scale;
+                FocusDistance *= scale;
+                CameraPos = lookAt - (CenterDir * FocusDistance);
                 _lastVerticalFovRadians = vfov;
             }
         }
@@ -77,14 +79,49 @@ public sealed partial class StlBlock
             _loggedViewportW = w;
             _loggedViewportH = h;
             Console.WriteLine(
-                $"[STL-PROJ] vp={w}x{h} aspect={aspect:0.####} hfovDeg={_lastHorizontalFovDegrees:0.####} vfovDeg={(_lastVerticalFovRadians * (180f / MathF.PI)):0.####} dist={Distance:0.####} near={near:0.####} far={far:0.####}");
+                $"[STL-PROJ] vp={w}x{h} aspect={aspect:0.####} hfovDeg={_lastHorizontalFovDegrees:0.####} vfovDeg={(_lastVerticalFovRadians * (180f / MathF.PI)):0.####} focus={FocusDistance:0.####} near={near:0.####} far={far:0.####}");
         }
 #endif
 
-        var forward = ComputeForward(YawRadians, PitchRadians);
-        var cameraPos = Target - (forward * MathF.Max(near * 2f, Distance));
-        var upWorld = Vector3.UnitY;
-        var view = Matrix4x4.CreateLookAt(cameraPos, Target, upWorld);
+        var forward = CenterDir;
+        if (forward.LengthSquared() < 1e-10f)
+        {
+            forward = new Vector3(0, 0, 1);
+        }
+
+        forward = Vector3.Normalize(forward);
+        CenterDir = forward;
+
+        var lookAtPoint = CameraPos + (forward * MathF.Max(near * 2f, FocusDistance));
+
+        var worldUp = Vector3.UnitY;
+        if (MathF.Abs(Vector3.Dot(forward, worldUp)) > 0.99f)
+        {
+            worldUp = Vector3.UnitZ;
+        }
+
+        // Use a stable right-handed basis: right = up × forward, up = forward × right.
+        var right = Vector3.Cross(worldUp, forward);
+        if (right.LengthSquared() < 1e-10f)
+        {
+            right = Vector3.UnitX;
+        }
+        else
+        {
+            right = Vector3.Normalize(right);
+        }
+
+        var up = Vector3.Cross(forward, right);
+        if (up.LengthSquared() < 1e-10f)
+        {
+            up = Vector3.UnitY;
+        }
+        else
+        {
+            up = Vector3.Normalize(up);
+        }
+
+        var view = Matrix4x4.CreateLookAt(CameraPos, lookAtPoint, up);
         var proj = Matrix4x4.CreatePerspectiveFieldOfView(vfov, aspect, near, far);
 
         // View-space directional light (camera-aligned).
@@ -102,18 +139,5 @@ public sealed partial class StlBlock
         canvas.SetCullState(enabled: false, frontFaceCcw: true);
     }
 
-    private static Vector3 ComputeForward(float yaw, float pitch)
-    {
-        var cy = MathF.Cos(yaw);
-        var sy = MathF.Sin(yaw);
-        var cp = MathF.Cos(pitch);
-        var sp = MathF.Sin(pitch);
-        var forward = new Vector3(sy * cp, sp, cy * cp);
-        if (forward.LengthSquared() < 1e-10f)
-        {
-            return new Vector3(0, 0, 1);
-        }
-
-        return Vector3.Normalize(forward);
-    }
+    // Center-ray camera model: view forward is tracked by CenterDir in the block.
 }
