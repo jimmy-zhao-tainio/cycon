@@ -6,10 +6,14 @@ using Cycon.Render;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner
+public sealed partial class StlBlock : IScene3DViewBlock, IMouseFocusableViewportBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner
 {
-    private const float FitFovDegrees = 60f;
+    private const float DefaultHorizontalFovDegrees = 80f;
     private const float FitPaddingMultiplier = 0.75f;
+
+    private float _lastProjectionAspect = float.NaN;
+    private float _lastHorizontalFovDegrees = DefaultHorizontalFovDegrees;
+    private float _lastVerticalFovRadians = float.NaN;
 
     public StlBlock(
         BlockId id,
@@ -28,10 +32,13 @@ public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasure
 
         PreferredAspectRatio = 16.0 / 9.0;
 
+        _lastProjectionAspect = (float)(PreferredAspectRatio <= 0 ? (16.0 / 9.0) : PreferredAspectRatio);
+        _lastVerticalFovRadians = ComputeVerticalFovRadians(_lastHorizontalFovDegrees, _lastProjectionAspect);
+
         Target = bounds.Center;
         YawRadians = 0f;
         PitchRadians = 0.35f;
-        Distance = ComputeFitDistance(bounds.Radius);
+        Distance = ComputeFitDistance(bounds.Radius, _lastVerticalFovRadians);
     }
 
     public BlockId Id { get; }
@@ -39,6 +46,8 @@ public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasure
     public BlockKind Kind => BlockKind.Scene3D;
 
     public int MeshId => Id.Value;
+
+    public bool HasMouseFocus { get; set; }
 
     public string FilePath { get; }
 
@@ -70,7 +79,11 @@ public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasure
         Target = MeshBounds.Center;
         YawRadians = 0f;
         PitchRadians = 0.35f;
-        Distance = ComputeFitDistance(MeshBounds.Radius);
+        var aspect = float.IsFinite(_lastProjectionAspect)
+            ? _lastProjectionAspect
+            : (float)(PreferredAspectRatio <= 0 ? (16.0 / 9.0) : PreferredAspectRatio);
+        _lastVerticalFovRadians = ComputeVerticalFovRadians(_lastHorizontalFovDegrees, aspect);
+        Distance = ComputeFitDistance(MeshBounds.Radius, _lastVerticalFovRadians);
     }
 
     public BlockSize Measure(in BlockMeasureContext ctx)
@@ -81,12 +94,19 @@ public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasure
         return new BlockSize(width, idealHeight);
     }
 
-    private static float ComputeFitDistance(float radius)
+    private static float ComputeFitDistance(float radius, float vfovRadians)
     {
         radius = MathF.Max(radius, 0.0001f);
-        var fov = FitFovDegrees * (MathF.PI / 180f);
-        var d = radius / MathF.Tan(fov * 0.5f);
+        var d = radius / MathF.Tan(vfovRadians * 0.5f);
         return d * FitPaddingMultiplier;
+    }
+
+    private static float ComputeVerticalFovRadians(float horizontalFovDegrees, float aspect)
+    {
+        aspect = MathF.Max(0.0001f, aspect);
+        var hfov = horizontalFovDegrees * (MathF.PI / 180f);
+        var half = hfov * 0.5f;
+        return 2f * MathF.Atan(MathF.Tan(half) / aspect);
     }
 
     public readonly record struct Bounds(Vector3 Min, Vector3 Max)

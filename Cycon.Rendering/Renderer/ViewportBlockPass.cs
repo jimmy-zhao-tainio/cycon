@@ -80,6 +80,7 @@ internal static class ViewportBlockPass
     private static Scene3DRenderSettings MapScene3D(Scene3DSettings s)
     {
         return new Scene3DRenderSettings(
+            HorizontalFovDegrees: s.HorizontalFovDegrees,
             StlDebugMode: (int)s.StlDebugMode,
             SolidAmbient: s.SolidAmbient,
             SolidDiffuseStrength: s.SolidDiffuseStrength,

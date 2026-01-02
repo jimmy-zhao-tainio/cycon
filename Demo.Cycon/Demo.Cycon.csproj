@@ -2,6 +2,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cycon.App\Cycon.App.csproj" />
+    <ProjectReference Include="..\Extensions.Inspect\Extensions.Inspect.csproj" />
+    <ProjectReference Include="..\Extensions.Math\Extensions.Math.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -9,16 +11,17 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);NU1701</NoWarn>
   </PropertyGroup>
-
-  <ItemGroup>
-  </ItemGroup>
 
   <ItemGroup>
     <None Include="..\\Assets\\Fonts\\vga-8x16.bmp">
       <Link>Assets\\Fonts\\vga-8x16.bmp</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+  </ItemGroup>
+
+  <ItemGroup>
   </ItemGroup>
 
 </Project>

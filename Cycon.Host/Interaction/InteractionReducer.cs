@@ -221,6 +221,14 @@ public sealed class InteractionReducer
                 actions.Add(new HostAction.Backspace(promptId));
                 actions.Add(new HostAction.RequestRebuild());
                 break;
+            case HostKey.Tab:
+                if (TryGetPrompt(transcript, promptId, out var tabPrompt) && tabPrompt.Owner is null)
+                {
+                    var reverse = (e.Mods & HostKeyModifiers.Shift) != 0;
+                    actions.Add(new HostAction.Autocomplete(promptId, reverse ? -1 : 1));
+                    actions.Add(new HostAction.RequestRebuild());
+                }
+                break;
             case HostKey.Left:
                 actions.Add(new HostAction.MoveCaret(promptId, -1));
                 actions.Add(new HostAction.RequestRebuild());

@@ -61,8 +61,7 @@ High-level runtime API (no backend types exposed to demos)
 - Cycon.App.Abstractions (contracts shared between App and Platform runners)
 
 Executables
-- Demo.Cycon2D  (references ONLY Cycon.App)
-- Demo.Cycon3D  (references ONLY Cycon.App)
+- Demo.Cycon  (references ONLY Cycon.App)
 
 Tests
 - Cycon.Core.Tests
@@ -276,15 +275,10 @@ CommandLineParser.cs
 Completion/*
 Builtins (help/clear etc.)
 
-Demo.Cycon2D:
+Demo.Cycon:
 Program.cs (should call CyconApp.Run2D only)
 ResizeTortureScene.cs
 DemoCommands.cs
-
-Demo.Cycon3D:
-Program.cs (should call CyconApp.Run3D only)
-SpinningCubeBlockFactory.cs
-OrbitControls.cs
 
 Implementation sequencing (do in this order)
 1) Ensure solution/projects with correct references and empty class stubs build.

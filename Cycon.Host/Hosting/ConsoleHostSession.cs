@@ -68,9 +68,8 @@ public sealed class ConsoleHostSession
     private readonly Dictionary<(JobId JobId, TextStream Stream), ChunkAccumulator> _chunkAccumulators = new();
     private readonly List<int> _pendingMesh3DReleases = new();
     private readonly HashSet<int> _pendingMesh3DReleaseSet = new();
-    private readonly List<string> _commandHistory = new();
-    private int _historyIndex;
-    private string _historyDraft = string.Empty;
+    private readonly InputHistory _history;
+    private readonly InputCompletionController _completion;
     private bool _pendingExit;
 
     private LayoutFrame? _lastLayout;
@@ -96,6 +95,7 @@ public sealed class ConsoleHostSession
     private long _lastTickTicks;
     private bool _scrollbarInteractedThisTick;
     private Scene3DCapture? _scene3DCapture;
+    private BlockId? _scene3DMouseFocus;
 
     private ConsoleHostSession(
         string text,
@@ -108,6 +108,7 @@ public sealed class ConsoleHostSession
         _rebuildThrottleMs = rebuildThrottleMs;
 
         _clipboard = clipboard;
+        _history = InputHistory.LoadDefault();
         _document = CreateDocument(text);
         _interaction.Initialize(_document.Transcript);
         SetCaretToEndOfLastPrompt(_document.Transcript);
@@ -136,13 +137,16 @@ public sealed class ConsoleHostSession
             envProvider: static () => new Dictionary<string, string>());
 
         _blockCommands = new BlockCommandRegistry();
-        _blockCommands.Register(new EchoBlockCommandHandler());
-        _blockCommands.Register(new AskBlockCommandHandler());
-        _blockCommands.Register(new ClearBlockCommandHandler());
-        _blockCommands.Register(new ExitBlockCommandHandler());
-        _blockCommands.Register(new WaitBlockCommandHandler());
-        _blockCommands.Register(new ProgressBlockCommandHandler());
+        _blockCommands.RegisterCore(new HelpBlockCommandHandler(_blockCommands));
+        _blockCommands.RegisterCore(new EchoBlockCommandHandler());
+        _blockCommands.RegisterCore(new AskBlockCommandHandler());
+        _blockCommands.RegisterCore(new ClearBlockCommandHandler());
+        _blockCommands.RegisterCore(new ExitBlockCommandHandler());
+        _blockCommands.RegisterCore(new WaitBlockCommandHandler());
+        _blockCommands.RegisterCore(new ProgressBlockCommandHandler());
         configureBlockCommands?.Invoke(_blockCommands);
+
+        _completion = new InputCompletionController(new CommandCompletionProvider(_blockCommands));
     }
 
     public static ConsoleHostSession CreateVga(
@@ -178,6 +182,14 @@ public sealed class ConsoleHostSession
         lock (_pendingEventsLock)
         {
             _pendingEvents.Enqueue(new PendingEvent.Mouse(e));
+        }
+    }
+
+    public void OnWindowFocusChanged(bool isFocused)
+    {
+        if (!isFocused)
+        {
+            ClearScene3DMouseFocus();
         }
     }
 
@@ -643,6 +655,16 @@ public sealed class ConsoleHostSession
                 continue;
             }
 
+            if (events[i] is PendingEvent.Text textInput && !char.IsControl(textInput.Ch))
+            {
+                ClearScene3DMouseFocus();
+            }
+
+            if (events[i] is PendingEvent.Key key && key.IsDown && key.KeyCode != HostKey.Unknown)
+            {
+                ClearScene3DMouseFocus();
+            }
+
             if (events[i] is PendingEvent.Mouse mouseRaw && _lastLayout is not null)
             {
                 var sceneConsumed = HandleScene3DMouse(mouseRaw.Event);
@@ -790,6 +812,11 @@ public sealed class ConsoleHostSession
         var hit = FindSceneViewportAt(contentX, contentY, viewports);
         if (hit is null)
         {
+            if (e.Kind == HostMouseEventKind.Down)
+            {
+                ClearScene3DMouseFocus();
+            }
+
             return false;
         }
 
@@ -798,8 +825,15 @@ public sealed class ConsoleHostSession
             return false;
         }
 
+        var isFocused = IsScene3DMouseFocused(hit.Value.BlockId, hitBlock);
+
         if (e.Kind == HostMouseEventKind.Wheel)
         {
+            if (!isFocused)
+            {
+                return false;
+            }
+
             ApplySceneZoom(hitStl, _document.Settings.Scene3D, e.WheelDelta);
             _pendingContentRebuild = true;
             return true;
@@ -809,18 +843,67 @@ public sealed class ConsoleHostSession
         {
             if ((e.Buttons & HostMouseButtons.Left) != 0)
             {
+                SetScene3DMouseFocus(hit.Value.BlockId, hitBlock);
                 _scene3DCapture = new Scene3DCapture(hit.Value.BlockId, HostMouseButtons.Left, Scene3DDragMode.Orbit, contentX, contentY);
                 return true;
             }
 
             if ((e.Buttons & HostMouseButtons.Right) != 0)
             {
+                if (!isFocused)
+                {
+                    return false;
+                }
+
                 _scene3DCapture = new Scene3DCapture(hit.Value.BlockId, HostMouseButtons.Right, Scene3DDragMode.Pan, contentX, contentY);
                 return true;
             }
         }
 
         return false;
+    }
+
+    private bool IsScene3DMouseFocused(BlockId id, IBlock block)
+    {
+        if (_scene3DMouseFocus == id)
+        {
+            return true;
+        }
+
+        return block is IMouseFocusableViewportBlock { HasMouseFocus: true };
+    }
+
+    private void SetScene3DMouseFocus(BlockId id, IBlock block)
+    {
+        if (_scene3DMouseFocus == id && block is IMouseFocusableViewportBlock { HasMouseFocus: true })
+        {
+            return;
+        }
+
+        ClearScene3DMouseFocus();
+
+        if (block is IMouseFocusableViewportBlock focusable)
+        {
+            focusable.HasMouseFocus = true;
+            _scene3DMouseFocus = id;
+        }
+    }
+
+    private void ClearScene3DMouseFocus()
+    {
+        _scene3DCapture = null;
+
+        if (_scene3DMouseFocus is not { } focusedId)
+        {
+            return;
+        }
+
+        _scene3DMouseFocus = null;
+
+        if (TryGetBlock(focusedId, out var block) && block is IMouseFocusableViewportBlock focusable)
+        {
+            focusable.HasMouseFocus = false;
+        }
     }
 
     private Scene3DViewportLayout? FindSceneViewportAt(int x, int y, IReadOnlyList<Scene3DViewportLayout> viewports)
@@ -944,6 +1027,11 @@ public sealed class ConsoleHostSession
 
         foreach (var action in actions)
         {
+            if (ShouldResetCompletion(action))
+            {
+                _completion.Reset();
+            }
+
             switch (action)
             {
                 case HostAction.Focus:
@@ -985,6 +1073,9 @@ public sealed class ConsoleHostSession
                 case HostAction.NavigateHistory nav:
                     NavigateHistory(nav.PromptId, nav.Delta);
                     break;
+                case HostAction.Autocomplete ac:
+                    AutocompletePrompt(ac.PromptId, ac.Delta);
+                    break;
                 case HostAction.CopySelectionToClipboard:
                     if (_interaction.TryGetSelectedText(_document.Transcript, out var selected))
                     {
@@ -1007,6 +1098,44 @@ public sealed class ConsoleHostSession
         }
 
         _document.Selection.ActiveRange = _interaction.Snapshot.Selection;
+    }
+
+    private static bool ShouldResetCompletion(HostAction action) =>
+        action is HostAction.InsertText or
+        HostAction.Backspace or
+        HostAction.MoveCaret or
+        HostAction.SetCaret or
+        HostAction.NavigateHistory or
+        HostAction.SubmitPrompt;
+
+    private void AutocompletePrompt(BlockId promptId, int delta)
+    {
+        if (!TryGetPrompt(promptId, out var prompt))
+        {
+            return;
+        }
+
+        if (prompt.Owner is not null)
+        {
+            return;
+        }
+
+        var reverse = delta < 0;
+        if (!_completion.TryHandleTab(prompt.Input, prompt.CaretIndex, reverse, out var newInput, out var newCaret, out var matchesLine))
+        {
+            return;
+        }
+
+        if (matchesLine is not null)
+        {
+            var id = new BlockId(AllocateNewBlockId());
+            InsertBlockBefore(promptId, new TextBlock(id, matchesLine, ConsoleTextStream.System));
+            _document.Scroll.IsFollowingTail = true;
+        }
+
+        prompt.Input = newInput;
+        prompt.SetCaret(Math.Clamp(newCaret, 0, prompt.Input.Length));
+        _pendingContentRebuild = true;
     }
 
     private void StopFocusedBlock(StopLevel? levelOverride)
@@ -1096,6 +1225,7 @@ public sealed class ConsoleHostSession
             return;
         }
 
+        ClearScene3DMouseFocus();
         var command = prompt.Input;
 
         if (_ownedPromptRefs.ContainsKey(promptId))
@@ -1152,13 +1282,12 @@ public sealed class ConsoleHostSession
             {
                 prompt.Input = string.Empty;
                 prompt.SetCaret(0);
-                _historyIndex = _commandHistory.Count;
-                _historyDraft = string.Empty;
+                _history.ResetNavigation();
                 return;
             }
 
             var ctx = new BlockCommandContext(this, headerId, promptId);
-            if (_blockCommands.TryExecute(request, ctx))
+            if (_blockCommands.TryExecuteOrFallback(request, commandForParse, ctx))
             {
                 _document.Scroll.IsFollowingTail = true;
                 _pendingContentRebuild = true;
@@ -1178,8 +1307,7 @@ public sealed class ConsoleHostSession
 
             prompt.Input = string.Empty;
             prompt.SetCaret(0);
-            _historyIndex = _commandHistory.Count;
-            _historyDraft = string.Empty;
+            _history.ResetNavigation();
         }
     }
 
@@ -1215,7 +1343,7 @@ public sealed class ConsoleHostSession
 
         var shellPromptId = FindLastPrompt(_document.Transcript)?.Id ?? headerId;
         var ctx = new BlockCommandContext(this, headerId, shellPromptId);
-        if (_blockCommands.TryExecute(request, ctx))
+        if (_blockCommands.TryExecuteOrFallback(request, commandForParse, ctx))
         {
             _document.Scroll.IsFollowingTail = true;
             _pendingContentRebuild = true;
@@ -1235,18 +1363,7 @@ public sealed class ConsoleHostSession
 
     private void RecordCommandHistory(string commandText)
     {
-        if (string.IsNullOrWhiteSpace(commandText))
-        {
-            return;
-        }
-
-        if (_commandHistory.Count == 0 || !string.Equals(_commandHistory[^1], commandText, StringComparison.Ordinal))
-        {
-            _commandHistory.Add(commandText);
-        }
-
-        _historyIndex = _commandHistory.Count;
-        _historyDraft = string.Empty;
+        _history.RecordSubmitted(commandText);
     }
 
     private void AppendOwnedPrompt(string promptText)
@@ -1365,54 +1482,16 @@ public sealed class ConsoleHostSession
             return;
         }
 
-        if (_commandHistory.Count == 0)
+        if (_history.TryNavigate(prompt.Input, delta, out var updated))
         {
-            return;
-        }
-
-        _historyIndex = Math.Clamp(_historyIndex, 0, _commandHistory.Count);
-
-        if (delta < 0)
-        {
-            if (_historyIndex == _commandHistory.Count)
-            {
-                _historyDraft = prompt.Input;
-            }
-
-            if (_historyIndex == 0)
-            {
-                return;
-            }
-
-            _historyIndex--;
-            prompt.Input = _commandHistory[_historyIndex];
-            prompt.SetCaret(prompt.Input.Length);
-            return;
-        }
-
-        if (delta > 0)
-        {
-            if (_historyIndex == _commandHistory.Count)
-            {
-                return;
-            }
-
-            _historyIndex++;
-            if (_historyIndex == _commandHistory.Count)
-            {
-                prompt.Input = _historyDraft;
-            }
-            else
-            {
-                prompt.Input = _commandHistory[_historyIndex];
-            }
-
+            prompt.Input = updated;
             prompt.SetCaret(prompt.Input.Length);
         }
     }
 
     private void ClearTranscript()
     {
+        _completion.Reset();
         QueueMeshReleasesForAllBlocks();
         _document.Transcript.Clear();
         _document.Transcript.Add(new PromptBlock(new BlockId(AllocateNewBlockId()), _defaultPromptText));
@@ -1443,8 +1522,7 @@ public sealed class ConsoleHostSession
         _pendingShellPrompt = false;
         _pendingContentRebuild = true;
 
-        _historyIndex = _commandHistory.Count;
-        _historyDraft = string.Empty;
+        _history.ResetNavigation();
     }
 
     private void DrainJobEvents()
@@ -1558,6 +1636,24 @@ public sealed class ConsoleHostSession
         }
 
         insertAt = Math.Min(insertAt, Math.Max(0, blocks.Count - 1));
+        _document.Transcript.Insert(insertAt, block);
+    }
+
+    private void InsertBlockBefore(BlockId beforeId, IBlock block)
+    {
+        var blocks = _document.Transcript.Blocks;
+        var insertAt = Math.Max(0, blocks.Count - 1);
+
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            if (blocks[i].Id == beforeId)
+            {
+                insertAt = i;
+                break;
+            }
+        }
+
+        insertAt = Math.Clamp(insertAt, 0, blocks.Count);
         _document.Transcript.Insert(insertAt, block);
     }
 
@@ -1932,6 +2028,8 @@ public sealed class ConsoleHostSession
             return false;
         }
 
+        ClearScene3DMouseFocus();
+
         var deltaRows = -wheelDelta * 3;
         _document.Scroll.ApplyUserScrollDelta(deltaRows, maxScrollOffsetRows);
         _pendingContentRebuild = true;
@@ -1955,6 +2053,7 @@ public sealed class ConsoleHostSession
 
         if (sb.HitThumbRectPx.Contains(e.X, e.Y))
         {
+            ClearScene3DMouseFocus();
             ui.IsDragging = true;
             ui.IsHovering = true;
             ui.DragGrabOffsetYPx = e.Y - sb.ThumbRectPx.Y;
@@ -1967,6 +2066,7 @@ public sealed class ConsoleHostSession
             return false;
         }
 
+        ClearScene3DMouseFocus();
         var pageRows = Math.Max(1, layout.Grid.Rows);
         var deltaRows = e.Y < sb.ThumbRectPx.Y
             ? -pageRows
@@ -1989,6 +2089,7 @@ public sealed class ConsoleHostSession
             return false;
         }
 
+        ClearScene3DMouseFocus();
         var sb = layout.Scrollbar;
         var track = sb.TrackRectPx;
         var thumb = sb.ThumbRectPx;
@@ -2028,6 +2129,7 @@ public sealed class ConsoleHostSession
             return false;
         }
 
+        ClearScene3DMouseFocus();
         ui.IsDragging = false;
         _scrollbarInteractedThisTick = true;
         return true;

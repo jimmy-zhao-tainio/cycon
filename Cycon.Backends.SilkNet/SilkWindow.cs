@@ -18,6 +18,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         _window.FramebufferResize += OnFramebufferResize;
         _window.Closing += HandleClosing;
         _window.FileDrop += OnFileDrop;
+        _window.FocusChanged += OnFocusChanged;
     }
 
     public event Action? Loaded;
@@ -31,6 +32,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     public event Action<int, int, MouseButton>? MouseUp;
     public event Action<int, int, int>? MouseWheel;
     public event Action<string>? FileDropped;
+    public event Action<bool>? FocusChanged;
 
     public int Width => _window.Size.X;
     public int Height => _window.Size.Y;
@@ -178,6 +180,11 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
                 handler.Invoke(path);
             }
         }
+    }
+
+    private void OnFocusChanged(bool isFocused)
+    {
+        FocusChanged?.Invoke(isFocused);
     }
 
     private void WireInput(IInputContext? input)

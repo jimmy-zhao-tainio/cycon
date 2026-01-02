@@ -620,10 +620,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         // One-time state log per block/tag.
         var tag = _debugTag;
-        if (tag != 0 && _loggedMesh3DStateTags.Add(tag))
-        {
-            LogMesh3DStateOnce(tag, draw.Settings.StlDebugMode);
-        }
 
         var blendWasEnabled = _gl.IsEnabled(EnableCap.Blend);
         _gl.Disable(EnableCap.Blend);
@@ -637,6 +633,22 @@ public sealed class RenderFrameExecutorGl : IDisposable
         var vy = _viewportHeight - (vyTop + vh);
 
         _gl.Viewport(vx, vy, (uint)vw, (uint)vh);
+
+        if (tag != 0 && _loggedMesh3DStateTags.Add(tag))
+        {
+            LogMesh3DStateOnce(tag, draw.Settings.StlDebugMode);
+            try
+            {
+                var vp = new int[4];
+                _gl.GetInteger(GLEnum.Viewport, vp);
+                var aspect = vp[3] == 0 ? 0.0 : vp[2] / (double)vp[3];
+                Console.WriteLine($"[STL-VP] tag={tag} rect={rect.X},{rect.Y},{rect.Width},{rect.Height} glViewport={vp[0]},{vp[1]},{vp[2]},{vp[3]} aspect={aspect:0.####}");
+            }
+            catch
+            {
+                // ignore
+            }
+        }
 
         _gl.UseProgram(_mesh3dProgram);
 

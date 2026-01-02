@@ -1,7 +1,8 @@
 using Cycon.App;
 using Extensions.Inspect;
+using Extensions.Math;
 
-namespace Demo.Cycon2D;
+namespace Demo.Cycon;
 
 public static class Program
 {
@@ -9,11 +10,15 @@ public static class Program
     {
         CyconApp.Run2D(new CyconAppOptions
         {
-            Title = "Cycon 2D",
+            Title = "Cycon",
             Width = 960,
             Height = 540,
             InitialText = BuildDemoText(),
-            ConfigureBlockCommands = InspectExtensionRegistration.Register,
+            ConfigureBlockCommands = registry =>
+            {
+                InspectExtensionRegistration.Register(registry);
+                MathExtensionRegistration.Register(registry);
+            },
         });
     }
 

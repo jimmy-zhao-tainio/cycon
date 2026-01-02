@@ -10,6 +10,8 @@ public enum StlDebugMode
 
 public sealed class Scene3DSettings
 {
+    public float HorizontalFovDegrees { get; set; } = 80f;
+
     public StlDebugMode StlDebugMode { get; set; } = StlDebugMode.DoubleSided;
 
     public float SolidAmbient { get; set; } = 0.62f;

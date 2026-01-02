@@ -178,6 +178,7 @@ public static class SilkNetCyconRunner
         };
 
         window.FileDropped += path => session.OnFileDrop(new HostFileDropEvent(path));
+        window.FocusChanged += isFocused => session.OnWindowFocusChanged(isFocused);
 
         window.Render += _ =>
         {
@@ -274,6 +275,7 @@ public static class SilkNetCyconRunner
             Key.Backspace => HostKey.Backspace,
             Key.Enter => HostKey.Enter,
             Key.KeypadEnter => HostKey.Enter,
+            Key.Tab => HostKey.Tab,
             Key.Left => HostKey.Left,
             Key.Right => HostKey.Right,
             Key.Up => HostKey.Up,

@@ -23,6 +23,8 @@ public abstract record HostAction
 
     public sealed record NavigateHistory(BlockId PromptId, int Delta) : HostAction;
 
+    public sealed record Autocomplete(BlockId PromptId, int Delta) : HostAction;
+
     public sealed record CopySelectionToClipboard() : HostAction;
 
     public sealed record PasteFromClipboardIntoLastPrompt() : HostAction;

@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Cycon.Host\Cycon.Host.csproj" />
     <ProjectReference Include="..\Extensions.Inspect\Extensions.Inspect.csproj" />
+    <ProjectReference Include="..\Extensions.Math\Extensions.Math.csproj" />
   </ItemGroup>
 
   <ItemGroup>
