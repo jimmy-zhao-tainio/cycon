@@ -32,9 +32,6 @@ public static class RenderFrameAdapter
                 case RenderingCommands.DrawTriangles triangles:
                     adapted.Add(new BackendRender.DrawTriangles(AdaptVertices(triangles.Vertices)));
                     break;
-                case RenderingCommands.DrawTriangles3D triangles3D:
-                    adapted.Add(new BackendRender.DrawTriangles3D(AdaptVertices3D(triangles3D.Vertices)));
-                    break;
                 case RenderingCommands.DrawMesh3D drawMesh:
                     adapted.Add(new BackendRender.DrawMesh3D(
                         drawMesh.MeshId,
@@ -143,6 +140,5 @@ public static class RenderFrameAdapter
         return adapted;
     }
 
-    private static IReadOnlyList<Cycon.Render.SolidVertex3D> AdaptVertices3D(IReadOnlyList<Cycon.Render.SolidVertex3D> vertices) =>
-        vertices;
+
 }

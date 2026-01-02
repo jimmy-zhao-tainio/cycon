@@ -12,8 +12,6 @@ public sealed record DrawQuad(int X, int Y, int Width, int Height, int Rgba) : D
 
 public sealed record DrawTriangles(IReadOnlyList<SolidVertex> Vertices) : DrawCommand;
 
-public sealed record DrawTriangles3D(IReadOnlyList<SolidVertex3D> Vertices) : DrawCommand;
-
 // Draw a previously uploaded mesh into a per-command viewport rect.
 public sealed record DrawMesh3D(
     int MeshId,

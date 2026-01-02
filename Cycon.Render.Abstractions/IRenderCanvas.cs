@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Numerics;
 
 namespace Cycon.Render;
@@ -19,11 +18,9 @@ public interface IRenderCanvas
 
     void ClearDepth(float depth01);
 
-    void DrawTriangles3D(IReadOnlyList<SolidVertex3D> vertices);
-
     /// <summary>
-    /// Draw a previously uploaded mesh into the current clip/scissor using the given viewport rect and transforms.
-    /// </summary>
+     /// Draw a previously uploaded mesh into the current clip/scissor using the given viewport rect and transforms.
+     /// </summary>
     void DrawMesh3D(
         int meshId,
         float[] vertexData,

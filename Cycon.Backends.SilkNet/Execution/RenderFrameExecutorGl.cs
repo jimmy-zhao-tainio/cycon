@@ -14,7 +14,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private readonly GL _gl;
     private uint _glyphProgram;
     private uint _quadProgram;
-    private uint _tri3dProgram;
     private uint _mesh3dProgram;
     private uint _vignetteProgram;
     private uint _vao;
@@ -25,7 +24,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private int _uViewportLocationGlyph;
     private int _uAtlasLocationGlyph;
     private int _uViewportLocationQuad;
-    private int _uViewportLocationTri3d;
     private int _uViewportLocationVignette;
     private int _uRectLocationVignette;
     private int _uParamsLocationVignette;
@@ -46,7 +44,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private int _debugTag;
     private readonly Dictionary<int, string> _renderFailures = new();
     private readonly HashSet<int> _loggedFailureTags = new();
-    private readonly HashSet<int> _loggedTri3DStateTags = new();
     private readonly HashSet<int> _loggedMesh3DStateTags = new();
     private readonly Dictionary<int, Mesh3D> _meshes3D = new();
 
@@ -82,9 +79,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         _quadProgram = CreateProgram(ShaderSources.Vertex, ShaderSources.FragmentQuad);
         _uViewportLocationQuad = _gl.GetUniformLocation(_quadProgram, "uViewport");
-
-        _tri3dProgram = CreateProgram(ShaderSources.Vertex3D, ShaderSources.FragmentQuad);
-        _uViewportLocationTri3d = _gl.GetUniformLocation(_tri3dProgram, "uViewport");
 
         _mesh3dProgram = CreateProgram(ShaderSources.VertexMesh3D, ShaderSources.FragmentMesh3D);
         _uModelLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uModel");
@@ -161,9 +155,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
             _gl.UseProgram(_quadProgram);
             _gl.Uniform2(_uViewportLocationQuad, (float)_viewportWidth, (float)_viewportHeight);
 
-            _gl.UseProgram(_tri3dProgram);
-            _gl.Uniform2(_uViewportLocationTri3d, (float)_viewportWidth, (float)_viewportHeight);
-
             _gl.UseProgram(_vignetteProgram);
             _gl.Uniform2(_uViewportLocationVignette, (float)_viewportWidth, (float)_viewportHeight);
         }
@@ -224,8 +215,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private enum DrawBatchKind
     {
         Glyph,
-        Quad,
-        Tri3D
+        Quad
     }
 
     private void ExecuteBatched(RenderFrame frame, GlyphAtlasData atlas)
@@ -312,16 +302,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
                     }
 
                     AddTriangleVertices(vertices, tris);
-                    break;
-                case DrawTriangles3D tris3d:
-                    if (currentKind != DrawBatchKind.Tri3D)
-                    {
-                        Flush();
-                        currentKind = DrawBatchKind.Tri3D;
-                        TraceSwitch(currentKind.Value);
-                    }
-
-                    AddTriangle3DVertices(vertices, tris3d);
                     break;
                 case DrawMesh3D drawMesh:
                     Flush();
@@ -412,16 +392,10 @@ public sealed class RenderFrameExecutorGl : IDisposable
             return;
         }
 
-        if (kind == DrawBatchKind.Tri3D && _debugTag != 0 && _loggedTri3DStateTags.Add(_debugTag))
-        {
-            LogTri3DStateOnce(_debugTag);
-        }
-
         var program = kind switch
         {
             DrawBatchKind.Glyph => _glyphProgram,
             DrawBatchKind.Quad => _quadProgram,
-            DrawBatchKind.Tri3D => _tri3dProgram,
             _ => _quadProgram
         };
 
@@ -429,7 +403,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
         {
             DrawBatchKind.Glyph => _uViewportLocationGlyph,
             DrawBatchKind.Quad => _uViewportLocationQuad,
-            DrawBatchKind.Tri3D => _uViewportLocationTri3d,
             _ => _uViewportLocationQuad
         };
 
@@ -454,15 +427,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
             }
         }
 
-        if (kind == DrawBatchKind.Tri3D)
-        {
-            CheckGlError("tri3d_bufferdata");
-        }
         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(vertices.Count / FloatsPerVertex));
-        if (kind == DrawBatchKind.Tri3D)
-        {
-            CheckGlError("tri3d_draw");
-        }
     }
 
     private void SetCullState(bool enabled, bool frontFaceCcw)
@@ -478,14 +443,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         // Silk.NET doesn't expose CW/CCW symbols consistently across targets; use raw GL values.
         _gl.FrontFace(frontFaceCcw ? (FrontFaceDirection)0x0901 : (FrontFaceDirection)0x0900);
-    }
-
-    private void LogTri3DStateOnce(int tag)
-    {
-        var cullEnabled = _gl.IsEnabled(EnableCap.CullFace);
-        var frontFace = _gl.GetInteger(GLEnum.FrontFace);
-        var frontFaceStr = frontFace == 0x0901 ? "CCW" : frontFace == 0x0900 ? "CW" : $"0x{frontFace:X}";
-        Console.WriteLine($"[STL-GL] tag={tag} cull={cullEnabled} frontFace={frontFaceStr}");
     }
 
     private void LogMesh3DStateOnce(int tag, int stlDebugMode)
@@ -778,22 +735,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
         }
     }
 
-    private static void AddTriangle3DVertices(List<float> vertices, DrawTriangles3D triangles)
-    {
-        if (triangles.Vertices.Count == 0)
-        {
-            return;
-        }
-
-        const float v = 0f;
-        foreach (var vertex in triangles.Vertices)
-        {
-            var (r, g, b, a) = ToColor(vertex.Rgba);
-            // Pack depth01 into the "u" slot; Vertex3D reads it from aDepth.x.
-            AddVertex(vertices, vertex.X, vertex.Y, vertex.Depth01, v, r, g, b, a);
-        }
-    }
-
     private void DrawVignette(DrawVignetteQuad vignette)
     {
         if (vignette.Width <= 0 || vignette.Height <= 0)
@@ -958,7 +899,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         if (_glyphProgram != 0) _gl.DeleteProgram(_glyphProgram);
         if (_quadProgram != 0) _gl.DeleteProgram(_quadProgram);
-        if (_tri3dProgram != 0) _gl.DeleteProgram(_tri3dProgram);
         if (_mesh3dProgram != 0) _gl.DeleteProgram(_mesh3dProgram);
         if (_vignetteProgram != 0) _gl.DeleteProgram(_vignetteProgram);
 

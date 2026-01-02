@@ -49,26 +49,6 @@ void main()
 }
 ";
 
-    public const string Vertex3D = @"#version 330 core
-layout(location = 0) in vec2 aPosition;
-layout(location = 1) in vec2 aDepth;
-layout(location = 2) in vec4 aColor;
-
-uniform vec2 uViewport;
-
-out vec4 vColor;
-
-void main()
-{
-    vec2 ndc = vec2((aPosition.x / uViewport.x) * 2.0 - 1.0,
-                    1.0 - (aPosition.y / uViewport.y) * 2.0);
-    float depth = clamp(aDepth.x, 0.0, 1.0);
-    float z = depth * 2.0 - 1.0;
-    gl_Position = vec4(ndc, z, 1.0);
-    vColor = aColor;
-}
-";
-
     public const string FragmentVignette = @"#version 330 core
 uniform vec2 uViewport;
 uniform vec4 uRect;   // x,y,w,h in TOP-LEFT pixel space

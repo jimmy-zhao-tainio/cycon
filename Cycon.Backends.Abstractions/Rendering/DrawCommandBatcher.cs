@@ -55,7 +55,6 @@ public static class DrawCommandBatcher
             DrawGlyphRun => DrawCommandBatchKind.Glyph,
             DrawQuad => DrawCommandBatchKind.Quad,
             DrawTriangles => DrawCommandBatchKind.Quad,
-            DrawTriangles3D => DrawCommandBatchKind.Quad,
             DrawVignetteQuad => DrawCommandBatchKind.Quad,
             _ => null
         };

@@ -38,9 +38,6 @@ internal sealed class RenderCanvas : IRenderCanvas
     public void ClearDepth(float depth01) =>
         _frame.Add(new ClearDepth(depth01));
 
-    public void DrawTriangles3D(IReadOnlyList<SolidVertex3D> vertices) =>
-        _frame.Add(new DrawTriangles3D(vertices));
-
     public void DrawMesh3D(
         int meshId,
         float[] vertexData,
