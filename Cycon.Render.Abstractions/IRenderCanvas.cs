@@ -25,7 +25,6 @@ public interface IRenderCanvas
      /// </summary>
     void DrawMesh3D(
         int meshId,
-        Mesh3DPrimitive primitive,
         float[] vertexData,
         int vertexCount,
         in RectPx viewportRectPx,
@@ -33,10 +32,7 @@ public interface IRenderCanvas
         in Matrix4x4 view,
         in Matrix4x4 proj,
         in Vector3 lightDirView,
-        in Scene3DRenderSettings settings,
-        int baseRgba = unchecked((int)0xFFFFFFFF),
-        float depthBias = 0f,
-        bool unlit = false);
+        in Scene3DRenderSettings settings);
 
     void DrawVignette(in RectPx rectPx, float strength01, float inner, float outer);
 }

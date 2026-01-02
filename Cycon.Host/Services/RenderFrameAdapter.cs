@@ -38,7 +38,6 @@ public static class RenderFrameAdapter
                 case RenderingCommands.DrawMesh3D drawMesh:
                     adapted.Add(new BackendRender.DrawMesh3D(
                         drawMesh.MeshId,
-                        drawMesh.Primitive,
                         drawMesh.VertexData,
                         drawMesh.VertexCount,
                         drawMesh.ViewportRectPx,
@@ -46,10 +45,7 @@ public static class RenderFrameAdapter
                         drawMesh.View,
                         drawMesh.Proj,
                         drawMesh.LightDirView,
-                        drawMesh.Settings,
-                        drawMesh.BaseRgba,
-                        drawMesh.DepthBias,
-                        drawMesh.Unlit));
+                        drawMesh.Settings));
                     break;
                 case RenderingCommands.DrawVignetteQuad vignette:
                     adapted.Add(new BackendRender.DrawVignetteQuad(

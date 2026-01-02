@@ -8,13 +8,6 @@ public enum StlDebugMode
     FaceNormals
 }
 
-public enum StlEdgeOverlayMode
-{
-    Boundary,
-    NonManifold,
-    All
-}
-
 public sealed class Scene3DSettings
 {
     public StlDebugMode StlDebugMode { get; set; } = StlDebugMode.DoubleSided;
@@ -40,10 +33,6 @@ public sealed class Scene3DSettings
     public int VertexDotMaxVertices { get; set; } = 50_000;
 
     public int VertexDotMaxDots { get; set; } = 2_000;
-
-    public bool ShowStlEdges { get; set; } = false;
-
-    public StlEdgeOverlayMode StlEdgeOverlayMode { get; set; } = StlEdgeOverlayMode.NonManifold;
 
     public float OrbitSensitivity { get; set; } = 0.008f;
 

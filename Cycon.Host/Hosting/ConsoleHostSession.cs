@@ -2048,13 +2048,6 @@ public sealed class ConsoleHostSession
             if (block is IMesh3DResourceOwner owner)
             {
                 QueueMeshRelease(owner.MeshId);
-                if (owner.AdditionalMeshIds is { } more)
-                {
-                    for (var i = 0; i < more.Count; i++)
-                    {
-                        QueueMeshRelease(more[i]);
-                    }
-                }
             }
         }
     }
@@ -2095,13 +2088,6 @@ public sealed class ConsoleHostSession
         if (blocks[index] is IMesh3DResourceOwner owner)
         {
             QueueMeshRelease(owner.MeshId);
-            if (owner.AdditionalMeshIds is { } more)
-            {
-                for (var i = 0; i < more.Count; i++)
-                {
-                    QueueMeshRelease(more[i]);
-                }
-            }
         }
 
         _document.Transcript.RemoveAt(index);
@@ -2118,13 +2104,6 @@ public sealed class ConsoleHostSession
         if (blocks[index] is IMesh3DResourceOwner owner)
         {
             QueueMeshRelease(owner.MeshId);
-            if (owner.AdditionalMeshIds is { } more)
-            {
-                for (var i = 0; i < more.Count; i++)
-                {
-                    QueueMeshRelease(more[i]);
-                }
-            }
         }
 
         _document.Transcript.ReplaceAt(index, replacement);

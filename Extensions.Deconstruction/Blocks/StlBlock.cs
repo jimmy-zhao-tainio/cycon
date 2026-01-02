@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Numerics;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
@@ -11,7 +10,6 @@ public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasure
 {
     private const float FitFovDegrees = 60f;
     private const float FitPaddingMultiplier = 0.75f;
-    private readonly int[] _additionalMeshIds;
 
     public StlBlock(
         BlockId id,
@@ -28,12 +26,6 @@ public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasure
         TriangleCount = triangleCount;
         MeshBounds = bounds;
 
-        _additionalMeshIds = new[]
-        {
-            unchecked((int)(0x40000000u ^ (uint)Id.Value ^ 0x1u)),
-            unchecked((int)(0x40000000u ^ (uint)Id.Value ^ 0x2u))
-        };
-
         PreferredAspectRatio = 16.0 / 9.0;
 
         Target = bounds.Center;
@@ -47,8 +39,6 @@ public sealed partial class StlBlock : IScene3DViewBlock, IRenderBlock, IMeasure
     public BlockKind Kind => BlockKind.Scene3D;
 
     public int MeshId => Id.Value;
-
-    public IReadOnlyList<int>? AdditionalMeshIds => _additionalMeshIds;
 
     public string FilePath { get; }
 

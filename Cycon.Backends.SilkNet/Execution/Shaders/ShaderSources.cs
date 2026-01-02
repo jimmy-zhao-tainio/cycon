@@ -87,7 +87,6 @@ layout(location = 1) in vec3 aNormal;
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProj;
-uniform float uDepthBias;
 
 out vec3 vNormalView;
 out vec3 vPosView;
@@ -102,9 +101,7 @@ void main()
     mat3 normalMat = mat3(uView * uModel);
     vNormalView = normalize(normalMat * aNormal);
 
-    vec4 clipPos = uProj * viewPos;
-    clipPos.z -= uDepthBias * clipPos.w;
-    gl_Position = clipPos;
+    gl_Position = uProj * viewPos;
 }
 ";
 
@@ -119,7 +116,6 @@ uniform float uToneGamma;
 uniform float uToneGain;
 uniform float uToneLift;
 uniform int uUnlit;
-uniform vec3 uBaseColor;
 
 out vec4 FragColor;
 
@@ -147,8 +143,7 @@ void main()
 
     b = ApplyTone(b);
 
-    vec3 c = (uUnlit != 0) ? uBaseColor : (uBaseColor * vec3(b));
-    FragColor = vec4(c, 1.0);
+    FragColor = vec4(vec3(b), 1.0);
 }
 ";
 }

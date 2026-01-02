@@ -91,8 +91,6 @@ internal static class ViewportBlockPass
             VignetteOuter: s.VignetteOuter,
             ShowVertexDots: s.ShowVertexDots,
             VertexDotMaxVertices: s.VertexDotMaxVertices,
-            VertexDotMaxDots: s.VertexDotMaxDots,
-            ShowStlEdges: s.ShowStlEdges,
-            StlEdgeOverlayMode: (int)s.StlEdgeOverlayMode);
+            VertexDotMaxDots: s.VertexDotMaxDots);
     }
 }
