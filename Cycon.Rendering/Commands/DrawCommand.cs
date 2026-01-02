@@ -12,9 +12,12 @@ public sealed record DrawQuad(int X, int Y, int Width, int Height, int Rgba) : D
 
 public sealed record DrawTriangles(IReadOnlyList<SolidVertex> Vertices) : DrawCommand;
 
+public sealed record ReleaseMesh3D(int MeshId) : DrawCommand;
+
 // Draw a previously uploaded mesh into a per-command viewport rect.
 public sealed record DrawMesh3D(
     int MeshId,
+    Mesh3DPrimitive Primitive,
     float[] VertexData,
     int VertexCount,
     RectPx ViewportRectPx,
@@ -22,7 +25,10 @@ public sealed record DrawMesh3D(
     Matrix4x4 View,
     Matrix4x4 Proj,
     Vector3 LightDirView,
-    Scene3DRenderSettings Settings) : DrawCommand;
+    Scene3DRenderSettings Settings,
+    int BaseRgba,
+    float DepthBias,
+    bool Unlit) : DrawCommand;
 
 public sealed record DrawVignetteQuad(int X, int Y, int Width, int Height, float Strength, float Inner, float Outer) : DrawCommand;
 

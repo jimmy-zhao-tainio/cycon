@@ -71,6 +71,7 @@ internal static class ViewportBlockPass
             canvas.SetDebugTag(viewport.BlockId.Value);
             canvas.PushClipRect(viewportRect);
             renderBlock.Render(canvas, new BlockRenderContext(viewportRect, timeSeconds, theme, textMetrics, scene3D));
+
             canvas.PopClipRect();
             canvas.SetDebugTag(0);
         }
@@ -90,6 +91,8 @@ internal static class ViewportBlockPass
             VignetteOuter: s.VignetteOuter,
             ShowVertexDots: s.ShowVertexDots,
             VertexDotMaxVertices: s.VertexDotMaxVertices,
-            VertexDotMaxDots: s.VertexDotMaxDots);
+            VertexDotMaxDots: s.VertexDotMaxDots,
+            ShowStlEdges: s.ShowStlEdges,
+            StlEdgeOverlayMode: (int)s.StlEdgeOverlayMode);
     }
 }

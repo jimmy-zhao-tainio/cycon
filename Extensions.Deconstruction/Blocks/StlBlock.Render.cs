@@ -59,7 +59,58 @@ public sealed partial class StlBlock
 
         // View-space directional light (camera-aligned).
         var lightDirView = Vector3.Normalize(new Vector3(0.2f, 0.35f, 1.0f));
-        canvas.DrawMesh3D(Id.Value, VertexData, VertexCount, rect, Matrix4x4.Identity, view, proj, lightDirView, settings);
+        canvas.DrawMesh3D(Id.Value, Mesh3DPrimitive.Triangles, VertexData, VertexCount, rect, Matrix4x4.Identity, view, proj, lightDirView, settings);
+ 
+        if (settings.ShowStlEdges)
+        {
+            EnsureEdgeStatsComputed();
+
+            // Draw a simple unlit overlay for boundary/non-manifold edges.
+            // Depth test stays on so the overlay follows the solid surface; we bias slightly toward the camera to reduce z-fighting.
+            canvas.SetDepthState(enabled: true, writeEnabled: false, DepthFunc.Lequal);
+            const float depthBias = 0.0001f;
+
+            var overlayMode = (StlEdgeOverlayMode)settings.StlEdgeOverlayMode;
+            if ((overlayMode == StlEdgeOverlayMode.Boundary || overlayMode == StlEdgeOverlayMode.All) &&
+                _boundaryEdgeVertexData is not null &&
+                _boundaryEdgeVertexCount > 0)
+            {
+                canvas.DrawMesh3D(
+                    GetBoundaryEdgeMeshId(),
+                    Mesh3DPrimitive.Lines,
+                    _boundaryEdgeVertexData,
+                    _boundaryEdgeVertexCount,
+                    rect,
+                    Matrix4x4.Identity,
+                    view,
+                    proj,
+                    lightDirView,
+                    settings,
+                    baseRgba: unchecked((int)0xFF4040FF),
+                    depthBias: depthBias,
+                    unlit: true);
+            }
+
+            if ((overlayMode == StlEdgeOverlayMode.NonManifold || overlayMode == StlEdgeOverlayMode.All) &&
+                _nonManifoldEdgeVertexData is not null &&
+                _nonManifoldEdgeVertexCount > 0)
+            {
+                canvas.DrawMesh3D(
+                    GetNonManifoldEdgeMeshId(),
+                    Mesh3DPrimitive.Lines,
+                    _nonManifoldEdgeVertexData,
+                    _nonManifoldEdgeVertexCount,
+                    rect,
+                    Matrix4x4.Identity,
+                    view,
+                    proj,
+                    lightDirView,
+                    settings,
+                    baseRgba: unchecked((int)0xFFFF40FF),
+                    depthBias: depthBias,
+                    unlit: true);
+            }
+        }
 
         if (settings.VignetteStrength > 0f)
         {

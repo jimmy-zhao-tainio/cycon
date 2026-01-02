@@ -38,8 +38,12 @@ internal sealed class RenderCanvas : IRenderCanvas
     public void ClearDepth(float depth01) =>
         _frame.Add(new ClearDepth(depth01));
 
+    public void ReleaseMesh3D(int meshId) =>
+        _frame.Add(new ReleaseMesh3D(meshId));
+
     public void DrawMesh3D(
         int meshId,
+        Mesh3DPrimitive primitive,
         float[] vertexData,
         int vertexCount,
         in RectPx viewportRectPx,
@@ -47,8 +51,11 @@ internal sealed class RenderCanvas : IRenderCanvas
         in Matrix4x4 view,
         in Matrix4x4 proj,
         in Vector3 lightDirView,
-        in Scene3DRenderSettings settings) =>
-        _frame.Add(new DrawMesh3D(meshId, vertexData, vertexCount, viewportRectPx, model, view, proj, lightDirView, settings));
+        in Scene3DRenderSettings settings,
+        int baseRgba = unchecked((int)0xFFFFFFFF),
+        float depthBias = 0f,
+        bool unlit = false) =>
+        _frame.Add(new DrawMesh3D(meshId, primitive, vertexData, vertexCount, viewportRectPx, model, view, proj, lightDirView, settings, baseRgba, depthBias, unlit));
 
     public void DrawVignette(in RectPx rectPx, float strength01, float inner, float outer) =>
         _frame.Add(new DrawVignetteQuad(rectPx.X, rectPx.Y, rectPx.Width, rectPx.Height, strength01, inner, outer));

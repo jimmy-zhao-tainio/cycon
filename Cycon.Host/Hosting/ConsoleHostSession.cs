@@ -66,6 +66,8 @@ public sealed class ConsoleHostSession
     private readonly Dictionary<BlockId, BlockId> _visibleCommandIndicators = new();
     private bool _pendingShellPrompt;
     private readonly Dictionary<(JobId JobId, TextStream Stream), ChunkAccumulator> _chunkAccumulators = new();
+    private readonly List<int> _pendingMesh3DReleases = new();
+    private readonly HashSet<int> _pendingMesh3DReleaseSet = new();
     private readonly List<string> _commandHistory = new();
     private int _historyIndex;
     private string _historyDraft = string.Empty;
@@ -198,7 +200,7 @@ public sealed class ConsoleHostSession
                 continue;
             }
 
-            _document.Transcript.ReplaceAt(i, new TextBlock(id, $"Render failed: {reason}", ConsoleTextStream.System));
+            ReplaceBlockAt(i, new TextBlock(id, $"Render failed: {reason}", ConsoleTextStream.System));
             _pendingContentRebuild = true;
             return;
         }
@@ -406,8 +408,9 @@ public sealed class ConsoleHostSession
         }
 
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
-        var renderFrame = _renderer.Render(_document, _lastLayout, _font, _selectionStyle, timeSeconds: timeSeconds, commandIndicators: _visibleCommandIndicators, caretAlpha: caretAlpha);
+        var renderFrame = _renderer.Render(_document, _lastLayout, _font, _selectionStyle, timeSeconds: timeSeconds, commandIndicators: _visibleCommandIndicators, caretAlpha: caretAlpha, meshReleases: TakePendingMeshReleases());
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
+        ClearPendingMeshReleases();
         _lastFrame = backendFrame;
         _renderedGrid = backendFrame.BuiltGrid;
         _lastCaretAlpha = caretAlpha;
@@ -1259,13 +1262,13 @@ public sealed class ConsoleHostSession
         {
             if (string.IsNullOrEmpty(existingShellPrompt.Input))
             {
-                _document.Transcript.RemoveAt(lastIndex);
+                RemoveBlockAt(lastIndex);
             }
             else
             {
                 var archivedText = existingShellPrompt.Prompt + existingShellPrompt.Input;
                 var archived = new TextBlock(existingShellPrompt.Id, archivedText, ConsoleTextStream.Default);
-                _document.Transcript.ReplaceAt(lastIndex, archived);
+                ReplaceBlockAt(lastIndex, archived);
             }
         }
 
@@ -1410,6 +1413,7 @@ public sealed class ConsoleHostSession
 
     private void ClearTranscript()
     {
+        QueueMeshReleasesForAllBlocks();
         _document.Transcript.Clear();
         _document.Transcript.Add(new PromptBlock(new BlockId(AllocateNewBlockId()), _defaultPromptText));
 
@@ -1656,13 +1660,13 @@ public sealed class ConsoleHostSession
         {
             if (string.IsNullOrEmpty(existingShellPrompt.Input))
             {
-                _document.Transcript.RemoveAt(lastIndex);
+                RemoveBlockAt(lastIndex);
             }
             else
             {
                 var archivedText = existingShellPrompt.Prompt + existingShellPrompt.Input;
                 var archived = new TextBlock(existingShellPrompt.Id, archivedText, ConsoleTextStream.Default);
-                _document.Transcript.ReplaceAt(lastIndex, archived);
+                ReplaceBlockAt(lastIndex, archived);
             }
         }
 
@@ -1762,7 +1766,7 @@ public sealed class ConsoleHostSession
         var lastIndex = blocks.Count - 1;
         if (blocks[lastIndex] is PromptBlock prompt && prompt.Id == promptId && prompt.Owner is null)
         {
-            _document.Transcript.RemoveAt(lastIndex);
+            RemoveBlockAt(lastIndex);
             _pendingContentRebuild = true;
         }
     }
@@ -1802,7 +1806,7 @@ public sealed class ConsoleHostSession
         {
             if (blocks[i].Id == promptId)
             {
-                _document.Transcript.ReplaceAt(i, new TextBlock(promptId, line, stream));
+                ReplaceBlockAt(i, new TextBlock(promptId, line, stream));
                 return;
             }
         }
@@ -1815,7 +1819,7 @@ public sealed class ConsoleHostSession
         {
             if (blocks[i].Id == id && blocks[i] is TextBlock)
             {
-                _document.Transcript.ReplaceAt(i, new TextBlock(id, newText, stream));
+                ReplaceBlockAt(i, new TextBlock(id, newText, stream));
                 return;
             }
         }
@@ -2035,6 +2039,95 @@ public sealed class ConsoleHostSession
         _document.Scroll.ScrollOffsetRows = clamped;
         _document.Scroll.IsFollowingTail = clamped >= maxScrollOffsetRows;
         _document.Scroll.ScrollRowsFromBottom = maxScrollOffsetRows - clamped;
+    }
+
+    private void QueueMeshReleasesForAllBlocks()
+    {
+        foreach (var block in _document.Transcript.Blocks)
+        {
+            if (block is IMesh3DResourceOwner owner)
+            {
+                QueueMeshRelease(owner.MeshId);
+                if (owner.AdditionalMeshIds is { } more)
+                {
+                    for (var i = 0; i < more.Count; i++)
+                    {
+                        QueueMeshRelease(more[i]);
+                    }
+                }
+            }
+        }
+    }
+
+    private void QueueMeshRelease(int meshId)
+    {
+        if (_pendingMesh3DReleaseSet.Add(meshId))
+        {
+            _pendingMesh3DReleases.Add(meshId);
+        }
+    }
+
+    private IReadOnlyList<int>? TakePendingMeshReleases()
+    {
+        if (_pendingMesh3DReleases.Count == 0)
+        {
+            return null;
+        }
+
+        // Safe to pass the live list to the renderer; it enumerates synchronously.
+        return _pendingMesh3DReleases;
+    }
+
+    private void ClearPendingMeshReleases()
+    {
+        _pendingMesh3DReleases.Clear();
+        _pendingMesh3DReleaseSet.Clear();
+    }
+
+    private void RemoveBlockAt(int index)
+    {
+        var blocks = _document.Transcript.Blocks;
+        if ((uint)index >= (uint)blocks.Count)
+        {
+            return;
+        }
+
+        if (blocks[index] is IMesh3DResourceOwner owner)
+        {
+            QueueMeshRelease(owner.MeshId);
+            if (owner.AdditionalMeshIds is { } more)
+            {
+                for (var i = 0; i < more.Count; i++)
+                {
+                    QueueMeshRelease(more[i]);
+                }
+            }
+        }
+
+        _document.Transcript.RemoveAt(index);
+    }
+
+    private void ReplaceBlockAt(int index, IBlock replacement)
+    {
+        var blocks = _document.Transcript.Blocks;
+        if ((uint)index >= (uint)blocks.Count)
+        {
+            return;
+        }
+
+        if (blocks[index] is IMesh3DResourceOwner owner)
+        {
+            QueueMeshRelease(owner.MeshId);
+            if (owner.AdditionalMeshIds is { } more)
+            {
+                for (var i = 0; i < more.Count; i++)
+                {
+                    QueueMeshRelease(more[i]);
+                }
+            }
+        }
+
+        _document.Transcript.ReplaceAt(index, replacement);
     }
 
     private int AllocateNewBlockId()
@@ -2259,8 +2352,9 @@ public sealed class ConsoleHostSession
             layout = new LayoutFrame(layout.Grid, layout.Lines, layout.HitTestMap, layout.TotalRows, scrollbar, layout.Scene3DViewports);
         }
 
-        var renderFrame = _renderer.Render(_document, layout, _font, _selectionStyle, timeSeconds: timeSeconds, commandIndicators: _visibleCommandIndicators, caretAlpha: caretAlpha);
+        var renderFrame = _renderer.Render(_document, layout, _font, _selectionStyle, timeSeconds: timeSeconds, commandIndicators: _visibleCommandIndicators, caretAlpha: caretAlpha, meshReleases: TakePendingMeshReleases());
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
+        ClearPendingMeshReleases();
         var builtGrid = backendFrame.BuiltGrid;
         return (backendFrame, builtGrid, layout, renderFrame);
     }

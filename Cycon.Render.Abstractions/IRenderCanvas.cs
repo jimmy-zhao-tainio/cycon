@@ -18,11 +18,14 @@ public interface IRenderCanvas
 
     void ClearDepth(float depth01);
 
+    void ReleaseMesh3D(int meshId);
+
     /// <summary>
      /// Draw a previously uploaded mesh into the current clip/scissor using the given viewport rect and transforms.
      /// </summary>
     void DrawMesh3D(
         int meshId,
+        Mesh3DPrimitive primitive,
         float[] vertexData,
         int vertexCount,
         in RectPx viewportRectPx,
@@ -30,7 +33,10 @@ public interface IRenderCanvas
         in Matrix4x4 view,
         in Matrix4x4 proj,
         in Vector3 lightDirView,
-        in Scene3DRenderSettings settings);
+        in Scene3DRenderSettings settings,
+        int baseRgba = unchecked((int)0xFFFFFFFF),
+        float depthBias = 0f,
+        bool unlit = false);
 
     void DrawVignette(in RectPx rectPx, float strength01, float inner, float outer);
 }

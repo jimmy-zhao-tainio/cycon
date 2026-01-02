@@ -12,4 +12,6 @@ public readonly record struct Scene3DRenderSettings(
     float VignetteOuter,
     bool ShowVertexDots,
     int VertexDotMaxVertices,
-    int VertexDotMaxDots);
+    int VertexDotMaxDots,
+    bool ShowStlEdges,
+    int StlEdgeOverlayMode);

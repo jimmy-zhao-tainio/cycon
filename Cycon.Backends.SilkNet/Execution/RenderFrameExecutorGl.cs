@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Cycon.Backends.Abstractions.Rendering;
+using Cycon.Render;
 using Cycon.Backends.SilkNet.Execution.Shaders;
 using Silk.NET.OpenGL;
 
@@ -37,6 +38,8 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private int _uToneGainLocationMesh3d;
     private int _uToneLiftLocationMesh3d;
     private int _uUnlitLocationMesh3d;
+    private int _uBaseColorLocationMesh3d;
+    private int _uDepthBiasLocationMesh3d;
     private bool _initialized;
     private bool _disposed;
     private readonly bool _trace = Environment.GetEnvironmentVariable("CYCON_GL_TRACE") == "1";
@@ -91,6 +94,8 @@ public sealed class RenderFrameExecutorGl : IDisposable
         _uToneGainLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uToneGain");
         _uToneLiftLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uToneLift");
         _uUnlitLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uUnlit");
+        _uBaseColorLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uBaseColor");
+        _uDepthBiasLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uDepthBias");
 
         _vignetteProgram = CreateProgram(ShaderSources.Vertex, ShaderSources.FragmentVignette);
         _uViewportLocationVignette = _gl.GetUniformLocation(_vignetteProgram, "uViewport");
@@ -302,6 +307,11 @@ public sealed class RenderFrameExecutorGl : IDisposable
                     }
 
                     AddTriangleVertices(vertices, tris);
+                    break;
+                case ReleaseMesh3D releaseMesh:
+                    Flush();
+                    ReleaseMesh3D(releaseMesh.MeshId);
+                    currentKind = null;
                     break;
                 case DrawMesh3D drawMesh:
                     Flush();
@@ -552,9 +562,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
                 return;
             }
 
-            _gl.DeleteVertexArray(existing.Vao);
-            _gl.DeleteBuffer(existing.Vbo);
-            _meshes3D.Remove(meshId);
+            ReleaseMesh3D(meshId);
         }
 
         var vao = _gl.GenVertexArray();
@@ -581,6 +589,19 @@ public sealed class RenderFrameExecutorGl : IDisposable
         CheckGlError("mesh3d_upload");
 
         _meshes3D[meshId] = new Mesh3D(vao, vbo, vertexCount);
+    }
+
+    private void ReleaseMesh3D(int meshId)
+    {
+        if (!_meshes3D.TryGetValue(meshId, out var mesh))
+        {
+            return;
+        }
+
+        if (mesh.Vao != 0) _gl.DeleteVertexArray(mesh.Vao);
+        if (mesh.Vbo != 0) _gl.DeleteBuffer(mesh.Vbo);
+        _meshes3D.Remove(meshId);
+        CheckGlError("mesh3d_release");
     }
 
     private void DrawMesh3D(DrawMesh3D draw)
@@ -643,10 +664,16 @@ public sealed class RenderFrameExecutorGl : IDisposable
         _gl.Uniform1(_uToneGammaLocationMesh3d, draw.Settings.ToneGamma);
         _gl.Uniform1(_uToneGainLocationMesh3d, draw.Settings.ToneGain);
         _gl.Uniform1(_uToneLiftLocationMesh3d, draw.Settings.ToneLift);
-        _gl.Uniform1(_uUnlitLocationMesh3d, draw.Settings.StlDebugMode == 2 ? 1 : 0); // Unlit
+
+        var (br, bg, bb, _) = ToColor(draw.BaseRgba);
+        _gl.Uniform3(_uBaseColorLocationMesh3d, br, bg, bb);
+        _gl.Uniform1(_uDepthBiasLocationMesh3d, draw.DepthBias);
+
+        var unlit = draw.Unlit || draw.Settings.StlDebugMode == 2;
+        _gl.Uniform1(_uUnlitLocationMesh3d, unlit ? 1 : 0);
 
         _gl.BindVertexArray(mesh.Vao);
-        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)mesh.VertexCount);
+        _gl.DrawArrays(MapPrimitive(draw.Primitive), 0, (uint)mesh.VertexCount);
         CheckGlError("mesh3d_draw");
 
         // Restore full-frame viewport for subsequent 2D draws.
@@ -657,6 +684,13 @@ public sealed class RenderFrameExecutorGl : IDisposable
             _gl.Enable(EnableCap.Blend);
         }
     }
+
+    private static PrimitiveType MapPrimitive(Mesh3DPrimitive primitive) =>
+        primitive switch
+        {
+            Mesh3DPrimitive.Lines => PrimitiveType.Lines,
+            _ => PrimitiveType.Triangles
+        };
 
     private void AddGlyphRunVertices(List<float> vertices, DrawGlyphRun glyphRun, GlyphAtlasData atlas)
     {

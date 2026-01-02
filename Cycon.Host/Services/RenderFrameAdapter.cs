@@ -32,9 +32,13 @@ public static class RenderFrameAdapter
                 case RenderingCommands.DrawTriangles triangles:
                     adapted.Add(new BackendRender.DrawTriangles(AdaptVertices(triangles.Vertices)));
                     break;
+                case RenderingCommands.ReleaseMesh3D releaseMesh:
+                    adapted.Add(new BackendRender.ReleaseMesh3D(releaseMesh.MeshId));
+                    break;
                 case RenderingCommands.DrawMesh3D drawMesh:
                     adapted.Add(new BackendRender.DrawMesh3D(
                         drawMesh.MeshId,
+                        drawMesh.Primitive,
                         drawMesh.VertexData,
                         drawMesh.VertexCount,
                         drawMesh.ViewportRectPx,
@@ -42,7 +46,10 @@ public static class RenderFrameAdapter
                         drawMesh.View,
                         drawMesh.Proj,
                         drawMesh.LightDirView,
-                        drawMesh.Settings));
+                        drawMesh.Settings,
+                        drawMesh.BaseRgba,
+                        drawMesh.DepthBias,
+                        drawMesh.Unlit));
                     break;
                 case RenderingCommands.DrawVignetteQuad vignette:
                     adapted.Add(new BackendRender.DrawVignetteQuad(

@@ -7,6 +7,7 @@ using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Layout;
 using Cycon.Layout.Metrics;
+using Cycon.Rendering.Commands;
 using Cycon.Rendering.Styling;
 
 namespace Cycon.Rendering.Renderer;
@@ -20,12 +21,21 @@ public sealed class ConsoleRenderer
         SelectionStyle selectionStyle,
         double timeSeconds,
         IReadOnlyDictionary<BlockId, BlockId>? commandIndicators = null,
-        byte caretAlpha = 0xFF)
+        byte caretAlpha = 0xFF,
+        IReadOnlyList<int>? meshReleases = null)
     {
         var frame = new RenderFrame
         {
             BuiltGrid = new GridSize(layout.Grid.Cols, layout.Grid.Rows)
         };
+
+        if (meshReleases is not null)
+        {
+            for (var i = 0; i < meshReleases.Count; i++)
+            {
+                frame.Add(new ReleaseMesh3D(meshReleases[i]));
+            }
+        }
 
         var grid = layout.Grid;
         var blocks = document.Transcript.Blocks;
