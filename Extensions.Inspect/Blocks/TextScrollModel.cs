@@ -18,6 +18,11 @@ public sealed class TextScrollModel : IScrollModel
 
     private int _wrapCols = 1;
     private int _viewportRows = 1;
+    private int _rightPaddingPx;
+    private int _insetLeftPx;
+    private int _insetTopPx;
+    private int _insetRightPx;
+    private int _insetBottomPx;
 
     private int _topLineIndex;
     private int _topLineSubRow;
@@ -41,10 +46,25 @@ public sealed class TextScrollModel : IScrollModel
         }
     }
 
+    public void SetRightPaddingPx(int rightPaddingPx)
+    {
+        _rightPaddingPx = Math.Max(0, rightPaddingPx);
+    }
+
+    public void SetContentInsetsPx(int leftPx, int topPx, int rightPx, int bottomPx)
+    {
+        _insetLeftPx = Math.Max(0, leftPx);
+        _insetTopPx = Math.Max(0, topPx);
+        _insetRightPx = Math.Max(0, rightPx);
+        _insetBottomPx = Math.Max(0, bottomPx);
+    }
+
     public void UpdateViewport(PxRect viewportRectPx)
     {
-        var nextCols = Math.Max(1, viewportRectPx.Width / Math.Max(1, _cellWidthPx));
-        var nextRows = Math.Max(1, viewportRectPx.Height / Math.Max(1, _cellHeightPx));
+        var availableWidth = Math.Max(0, viewportRectPx.Width - _insetLeftPx - _insetRightPx - _rightPaddingPx);
+        var availableHeight = Math.Max(0, viewportRectPx.Height - _insetTopPx - _insetBottomPx);
+        var nextCols = Math.Max(1, availableWidth / Math.Max(1, _cellWidthPx));
+        var nextRows = Math.Max(1, availableHeight / Math.Max(1, _cellHeightPx));
 
         if (nextCols != _wrapCols)
         {

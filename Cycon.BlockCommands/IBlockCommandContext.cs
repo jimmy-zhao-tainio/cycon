@@ -9,6 +9,7 @@ public interface IBlockCommandContext
     BlockId CommandEchoId { get; }
     void InsertTextAfterCommandEcho(string text, ConsoleTextStream stream);
     void InsertBlockAfterCommandEcho(IBlock block);
+    void OpenInspect(InspectKind kind, string path, string title, IBlock viewBlock, string receiptLine);
     void AttachIndicator(BlockId activityBlockId);
     void AppendOwnedPrompt(string promptText);
     void ClearTranscript();

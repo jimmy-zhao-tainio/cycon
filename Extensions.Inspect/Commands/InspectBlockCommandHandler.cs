@@ -5,6 +5,7 @@ using Cycon.Commands;
 using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Extensions.Inspect.Blocks;
+using Extensions.Inspect.Receipt;
 using Extensions.Inspect.Stl;
 using Extensions.Inspect.Text;
 
@@ -43,12 +44,15 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
                 {
                     orbit.NavigationMode = navMode;
                 }
-                ctx.InsertBlockAfterCommandEcho(stl);
+                var receipt = InspectReceiptFormatter.CreateStl(file, stl.TriangleCount, stl.VertexCount);
+                ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, stl, InspectReceiptFormatter.FormatSingleLine(receipt));
             }
             catch (Exception ex)
             {
                 ctx.InsertTextAfterCommandEcho($"STL load failed: {ex.Message}", ConsoleTextStream.System);
-                InsertInspector(ctx, file);
+                var fallback = InspectInfoBlock.FromFile(ctx.AllocateBlockId(), file);
+                var receipt = InspectReceiptFormatter.CreateBinary(file);
+                ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, fallback, InspectReceiptFormatter.FormatSingleLine(receipt));
             }
 
             return true;
@@ -59,18 +63,25 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
             try
             {
                 var blockId = ctx.AllocateBlockId();
-                ctx.InsertBlockAfterCommandEcho(new InspectTextBlock(blockId, fullPath));
+                var view = new InspectTextBlock(blockId, fullPath);
+                var lineCount = view.LineCount;
+                var receipt = InspectReceiptFormatter.CreateText(file, lineCount);
+                ctx.OpenInspect(InspectKind.Text, fullPath, file.Name, view, InspectReceiptFormatter.FormatSingleLine(receipt));
             }
             catch (Exception ex)
             {
                 ctx.InsertTextAfterCommandEcho($"Text load failed: {ex.Message}", ConsoleTextStream.System);
-                InsertInspector(ctx, file);
+                var fallback = InspectInfoBlock.FromFile(ctx.AllocateBlockId(), file);
+                var receipt = InspectReceiptFormatter.CreateText(file, lineCount: 0);
+                ctx.OpenInspect(InspectKind.Text, fullPath, file.Name, fallback, InspectReceiptFormatter.FormatSingleLine(receipt));
             }
 
             return true;
         }
 
-        InsertInspector(ctx, file);
+        var info = InspectInfoBlock.FromFile(ctx.AllocateBlockId(), file);
+        var binaryReceipt = InspectReceiptFormatter.CreateBinary(file);
+        ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, info, InspectReceiptFormatter.FormatSingleLine(binaryReceipt));
         return true;
     }
 
@@ -143,11 +154,5 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
         }
     }
 
-    private static void InsertInspector(IBlockCommandContext ctx, FileInfo file)
-    {
-        ctx.InsertTextAfterCommandEcho($"Name: {file.Name}", ConsoleTextStream.System);
-        ctx.InsertTextAfterCommandEcho($"Size: {file.Length} bytes", ConsoleTextStream.System);
-        ctx.InsertTextAfterCommandEcho($"Ext:  {file.Extension}", ConsoleTextStream.System);
-        ctx.InsertTextAfterCommandEcho($"Path: {file.FullName}", ConsoleTextStream.System);
-    }
+
 }

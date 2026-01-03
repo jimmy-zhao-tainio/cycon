@@ -104,33 +104,9 @@ public sealed partial class StlBlock
 
         var lookAtPoint = CameraPos + (forward * MathF.Max(near * 2f, FocusDistance));
 
-        var worldUp = Vector3.UnitY;
-        if (MathF.Abs(Vector3.Dot(forward, worldUp)) > 0.99f)
-        {
-            worldUp = Vector3.UnitZ;
-        }
+        var (_, up) = ComputeStableBasis(forward);
 
         // Use a stable right-handed basis: right = up × forward, up = forward × right.
-        var right = Vector3.Cross(worldUp, forward);
-        if (right.LengthSquared() < 1e-10f)
-        {
-            right = Vector3.UnitX;
-        }
-        else
-        {
-            right = Vector3.Normalize(right);
-        }
-
-        var up = Vector3.Cross(forward, right);
-        if (up.LengthSquared() < 1e-10f)
-        {
-            up = Vector3.UnitY;
-        }
-        else
-        {
-            up = Vector3.Normalize(up);
-        }
-
         var view = Matrix4x4.CreateLookAt(CameraPos, lookAtPoint, up);
         var proj = Matrix4x4.CreatePerspectiveFieldOfView(vfov, aspect, near, far);
 
@@ -150,4 +126,39 @@ public sealed partial class StlBlock
     }
 
     // Center-ray camera model: view forward is tracked by CenterDir in the block.
+
+    private static (Vector3 Right, Vector3 Up) ComputeStableBasis(Vector3 forward)
+    {
+        if (forward.LengthSquared() < 1e-10f)
+        {
+            forward = new Vector3(0, 0, 1);
+        }
+
+        forward = Vector3.Normalize(forward);
+
+        // Project a reference "up" onto the plane perpendicular to forward.
+        // This avoids discontinuous axis switching when near the poles.
+        var upRef = Vector3.UnitY;
+        var up = upRef - (forward * Vector3.Dot(upRef, forward));
+        if (up.LengthSquared() < 1e-8f)
+        {
+            upRef = Vector3.UnitZ;
+            up = upRef - (forward * Vector3.Dot(upRef, forward));
+            if (up.LengthSquared() < 1e-8f)
+            {
+                upRef = Vector3.UnitX;
+                up = upRef - (forward * Vector3.Dot(upRef, forward));
+            }
+        }
+
+        up = up.LengthSquared() < 1e-10f ? Vector3.UnitY : Vector3.Normalize(up);
+
+        var right = Vector3.Cross(up, forward);
+        right = right.LengthSquared() < 1e-10f ? Vector3.UnitX : Vector3.Normalize(right);
+
+        up = Vector3.Cross(forward, right);
+        up = up.LengthSquared() < 1e-10f ? Vector3.UnitY : Vector3.Normalize(up);
+
+        return (right, up);
+    }
 }

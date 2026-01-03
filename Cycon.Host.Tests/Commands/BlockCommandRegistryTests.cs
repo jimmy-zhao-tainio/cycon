@@ -118,6 +118,7 @@ public sealed class BlockCommandRegistryTests
 
         public void InsertTextAfterCommandEcho(string text, ConsoleTextStream stream) => Inserted.Add((text, stream));
         public void InsertBlockAfterCommandEcho(IBlock block) => InsertedBlocks.Add(block);
+        public void OpenInspect(InspectKind kind, string path, string title, IBlock viewBlock, string receiptLine) { }
         public void AttachIndicator(BlockId activityBlockId) => Indicators.Add((CommandEchoId, activityBlockId));
         public void AppendOwnedPrompt(string promptText) => OwnedPrompts.Add(promptText);
         public void ClearTranscript() => ClearCount++;

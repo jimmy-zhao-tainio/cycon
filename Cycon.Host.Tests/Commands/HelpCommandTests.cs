@@ -75,6 +75,7 @@ public sealed class HelpCommandTests
 
         public void InsertTextAfterCommandEcho(string text, ConsoleTextStream stream) => Inserted.Add((text, stream));
         public void InsertBlockAfterCommandEcho(IBlock block) { }
+        public void OpenInspect(InspectKind kind, string path, string title, IBlock viewBlock, string receiptLine) { }
         public void AttachIndicator(BlockId activityBlockId) { }
         public void AppendOwnedPrompt(string promptText) { }
         public void ClearTranscript() { }

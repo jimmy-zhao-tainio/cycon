@@ -12,6 +12,9 @@ namespace Extensions.Inspect.Blocks;
 
 public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockPointerCaptureState
 {
+    private const int PaddingLeftRightPx = 5;
+    private const int PaddingTopBottomPx = 3;
+
     private readonly IReadOnlyList<string> _lines;
     private readonly TextScrollModel _scrollModel;
     private readonly ScrollbarWidget _scrollbar;
@@ -34,10 +37,14 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
 
     public string Path { get; }
 
+    public int LineCount => _lines.Count;
+
     public bool HasPointerCapture => _scrollbarUi.IsDragging;
 
     public bool HandlePointer(in HostMouseEvent e, in PxRect viewportRectPx)
     {
+        _scrollModel.SetRightPaddingPx(_scrollbarSettings.ThicknessPx + PaddingLeftRightPx);
+        _scrollModel.SetContentInsetsPx(PaddingLeftRightPx, PaddingTopBottomPx, PaddingLeftRightPx, PaddingTopBottomPx);
         _scrollModel.UpdateViewport(viewportRectPx);
 
         if (e.Kind == HostMouseEventKind.Move && !_scrollbarUi.IsDragging)
@@ -75,6 +82,8 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
 
     public bool HandleWheel(in HostMouseEvent e, in PxRect viewportRectPx)
     {
+        _scrollModel.SetRightPaddingPx(_scrollbarSettings.ThicknessPx + PaddingLeftRightPx);
+        _scrollModel.SetContentInsetsPx(PaddingLeftRightPx, PaddingTopBottomPx, PaddingLeftRightPx, PaddingTopBottomPx);
         _scrollModel.UpdateViewport(viewportRectPx);
 
         var consumed = _scrollbar.HandleMouse(e, viewportRectPx, _scrollbarSettings, out var scrollChanged);
@@ -88,7 +97,8 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
 
     public BlockSize Measure(in BlockMeasureContext ctx)
     {
-        var cols = Math.Max(1, ctx.ContentWidthPx / Math.Max(1, ctx.CellWidthPx));
+        var usableWidth = Math.Max(0, ctx.ContentWidthPx - (PaddingLeftRightPx * 2) - _scrollbarSettings.ThicknessPx);
+        var cols = Math.Max(1, usableWidth / Math.Max(1, ctx.CellWidthPx));
         var viewportRows = Math.Max(1, ctx.ViewportRows);
 
         var rowsReserved = 2; // command echo + new prompt
@@ -111,6 +121,8 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
         }
 
         _scrollModel.UpdateTextMetrics(ctx.TextMetrics.CellWidthPx, ctx.TextMetrics.CellHeightPx);
+        _scrollModel.SetRightPaddingPx(_scrollbarSettings.ThicknessPx + PaddingLeftRightPx);
+        _scrollModel.SetContentInsetsPx(PaddingLeftRightPx, PaddingTopBottomPx, PaddingLeftRightPx, PaddingTopBottomPx);
         _scrollModel.UpdateViewport(viewportPx);
 
         var dtMs = _lastRenderTimeSeconds <= 0
@@ -125,8 +137,8 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
 
         var cellW = Math.Max(1, ctx.TextMetrics.CellWidthPx);
         var cellH = Math.Max(1, ctx.TextMetrics.CellHeightPx);
-        var cols = Math.Max(1, viewport.Width / cellW);
-        var rows = Math.Max(1, viewport.Height / cellH);
+        var cols = Math.Max(1, Math.Max(0, viewport.Width - (PaddingLeftRightPx * 2) - _scrollbarSettings.ThicknessPx) / cellW);
+        var rows = Math.Max(1, Math.Max(0, viewport.Height - (PaddingTopBottomPx * 2)) / cellH);
 
         var fg = ctx.Theme.ForegroundRgba;
         var lineIndex = _scrollModel.TopLineIndex;
@@ -141,8 +153,8 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
             for (var r = subRow; r < spans.Length && screenRow < rows; r++)
             {
                 var span = spans[r];
-                var yPx = viewport.Y + (screenRow * cellH);
-                var xPx = viewport.X;
+                var yPx = viewport.Y + PaddingTopBottomPx + (screenRow * cellH);
+                var xPx = viewport.X + PaddingLeftRightPx;
                 var line = _lines[lineIndex];
 
                 var drawLen = Math.Min(span.Length, cols);
