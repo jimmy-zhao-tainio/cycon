@@ -23,6 +23,7 @@ using Cycon.Host.Commands.Blocks;
 using Cycon.Host.Commands.Handlers;
 using Cycon.Host.Interaction;
 using Cycon.Host.Input;
+using Cycon.Host.Scrolling;
 using Cycon.Host.Services;
 using Cycon.Layout;
 using Cycon.Layout.Metrics;
@@ -38,8 +39,6 @@ public sealed class ConsoleHostSession
 {
     private static readonly bool ResizeTrace =
         string.Equals(Environment.GetEnvironmentVariable("CYCON_RESIZE_TRACE"), "1", StringComparison.Ordinal);
-    private static readonly bool ScrollbarDebug =
-        string.Equals(Environment.GetEnvironmentVariable("CYCON_SCROLLBAR_DEBUG"), "1", StringComparison.Ordinal);
 
     private readonly int _resizeSettleMs;
     private readonly int _rebuildThrottleMs;
@@ -77,6 +76,9 @@ public sealed class ConsoleHostSession
     private readonly InputCompletionController _completion;
     private bool _pendingExit;
 
+    private readonly ConsoleScrollModel _scrollModel;
+    private readonly ScrollbarWidget _scrollbar;
+
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
     private GridSize _renderedGrid;
@@ -96,9 +98,6 @@ public sealed class ConsoleHostSession
     private bool _pendingContentRebuild;
     private byte _lastCaretAlpha = 0xFF;
     private long _lastCaretRenderTicks;
-    private byte _lastScrollbarTrackAlpha;
-    private byte _lastScrollbarThumbAlpha;
-    private bool _scrollbarThumbHover;
     private int _lastSpinnerFrameIndex = -1;
     private long _lastTickTicks;
     private int _tickIndex;
@@ -107,7 +106,6 @@ public sealed class ConsoleHostSession
     private int _lastTraceBuiltFbW = -1;
     private int _lastTraceBuiltFbH = -1;
     private bool _lastTraceShouldRebuild;
-    private bool _scrollbarInteractedThisTick;
     private Scene3DCapture? _scene3DCapture;
     private BlockId? _scene3DMouseFocus;
     private Scene3DNavKeys _scene3DNavKeysDown;
@@ -162,6 +160,8 @@ public sealed class ConsoleHostSession
         configureBlockCommands?.Invoke(_blockCommands);
 
         _completion = new InputCompletionController(new CommandCompletionProvider(_blockCommands));
+        _scrollModel = new ConsoleScrollModel(_document, _layoutSettings);
+        _scrollbar = new ScrollbarWidget(_scrollModel, _document.Scroll.ScrollbarUi);
     }
 
     public static ConsoleHostSession CreateVga(
@@ -210,18 +210,7 @@ public sealed class ConsoleHostSession
 
     public void OnPointerInWindowChanged(bool isInWindow)
     {
-        if (isInWindow)
-        {
-            return;
-        }
-
-        var ui = _document.Scroll.ScrollbarUi;
-        if (!ui.IsDragging)
-        {
-            ui.IsHovering = false;
-        }
-
-        _scrollbarThumbHover = false;
+        _scrollbar.OnPointerInWindowChanged(isInWindow);
     }
 
     public void OnFileDrop(HostFileDropEvent e)
@@ -275,7 +264,7 @@ public sealed class ConsoleHostSession
 
         var nowTicks = Stopwatch.GetTimestamp();
         _tickIndex++;
-        _scrollbarInteractedThisTick = false;
+        _scrollbar.BeginTick();
         var dtMs = _lastTickTicks == 0
             ? 0
             : (int)Math.Clamp((nowTicks - _lastTickTicks) * 1000.0 / Stopwatch.Frequency, 0, 250);
@@ -381,9 +370,6 @@ public sealed class ConsoleHostSession
                 LogOnce(_atlasData, layout, renderFrame, snapW, snapH);
                 _lastRebuildTicks = passNowTicks;
                 _lastCaretAlpha = caretAlphaNow;
-                var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
-                _lastScrollbarTrackAlpha = trackAlpha;
-                _lastScrollbarThumbAlpha = thumbAlpha;
                 _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(passNowTicks);
                 _lastCaretRenderTicks = passNowTicks;
 
@@ -412,7 +398,7 @@ public sealed class ConsoleHostSession
 
         DrainJobEvents();
 
-        AdvanceScrollbarAnimation(dtMs);
+        _scrollbar.AdvanceAnimation(dtMs, _document.Settings.Scrollbar);
 
         if (_pendingContentRebuild)
         {
@@ -429,9 +415,6 @@ public sealed class ConsoleHostSession
             LogOnce(_atlasData, layout, renderFrame, framebufferWidth, framebufferHeight);
             _lastRebuildTicks = Stopwatch.GetTimestamp();
             _lastCaretAlpha = caretAlphaNow;
-            var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
-            _lastScrollbarTrackAlpha = trackAlpha;
-            _lastScrollbarThumbAlpha = thumbAlpha;
             _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(_lastRebuildTicks);
             _lastCaretRenderTicks = _lastRebuildTicks;
             _pendingContentRebuild = false;
@@ -444,7 +427,11 @@ public sealed class ConsoleHostSession
             throw new InvalidOperationException("Tick invariant violated: frame must be available.");
         }
 
-        var overlayFrame = BuildScrollbarOverlayFrame(framebufferWidth, framebufferHeight, _lastLayout);
+        _scrollModel.TotalRows = _lastLayout?.TotalRows ?? 0;
+        var overlayFrame = _scrollbar.BuildOverlayFrame(
+            new PxRect(0, 0, framebufferWidth, framebufferHeight),
+            _document.Settings.Scrollbar,
+            _document.Settings.DefaultTextStyle.ForegroundRgba);
 
         var setVSync = _pendingSetVSync;
         _pendingSetVSync = null;
@@ -477,10 +464,7 @@ public sealed class ConsoleHostSession
         }
 
         var caretAlpha = ComputeCaretAlpha(nowTicks);
-        var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
         if (caretAlpha == _lastCaretAlpha &&
-            trackAlpha == _lastScrollbarTrackAlpha &&
-            thumbAlpha == _lastScrollbarThumbAlpha &&
             spinnerIndex == _lastSpinnerFrameIndex)
         {
             return;
@@ -493,84 +477,8 @@ public sealed class ConsoleHostSession
         _lastFrame = backendFrame;
         _renderedGrid = backendFrame.BuiltGrid;
         _lastCaretAlpha = caretAlpha;
-        _lastScrollbarTrackAlpha = trackAlpha;
-        _lastScrollbarThumbAlpha = thumbAlpha;
         _lastSpinnerFrameIndex = spinnerIndex;
         _lastCaretRenderTicks = nowTicks;
-    }
-
-    private RenderFrame? BuildScrollbarOverlayFrame(int framebufferWidth, int framebufferHeight, LayoutFrame? layout)
-    {
-        if (layout is null)
-        {
-            return null;
-        }
-
-        var ui = _document.Scroll.ScrollbarUi;
-        var visibility = Math.Clamp(ui.Visibility, 0f, 1f);
-        if (!ScrollbarDebug && visibility <= 0f && !ui.IsHovering && !ui.IsDragging)
-        {
-            return null;
-        }
-
-        var grid = FixedCellGrid.FromViewport(new ConsoleViewport(framebufferWidth, framebufferHeight), _layoutSettings);
-        var totalRows = layout.TotalRows;
-        var overflow = totalRows > grid.Rows && grid.Rows > 0;
-        var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, totalRows - grid.Rows);
-        var clampedScrollOffsetRows = Math.Clamp(_document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
-        var sb = ScrollbarLayouter.Layout(grid, totalRows, clampedScrollOffsetRows, _document.Settings.Scrollbar);
-        if (!ScrollbarDebug && !sb.IsScrollable)
-        {
-            return null;
-        }
-
-        var settings = _document.Settings.Scrollbar;
-        var thumbOpacity = ui.IsDragging
-            ? settings.ThumbOpacityDrag
-            : _scrollbarThumbHover
-                ? settings.ThumbOpacityHover
-                : settings.ThumbOpacityIdle;
-
-        var trackAlpha = ToAlpha(visibility * settings.TrackOpacityIdle);
-        var thumbAlpha = ToAlpha(visibility * thumbOpacity);
-
-        if (ScrollbarDebug && overflow)
-        {
-            trackAlpha = 0xFF;
-            thumbAlpha = 0xFF;
-        }
-
-        if (!ScrollbarDebug && trackAlpha == 0 && thumbAlpha == 0)
-        {
-            return null;
-        }
-
-        var color = _document.Settings.DefaultTextStyle.ForegroundRgba;
-        var trackColor = WithAlpha(color, trackAlpha);
-        var thumbColor = WithAlpha(color, thumbAlpha);
-
-        var frame = new RenderFrame();
-        frame.Add(new Cycon.Backends.Abstractions.Rendering.PushClip(0, 0, framebufferWidth, framebufferHeight));
-
-        if (ScrollbarDebug)
-        {
-            var markerSize = 10;
-            var markerX = Math.Max(0, framebufferWidth - markerSize);
-            frame.Add(new Cycon.Backends.Abstractions.Rendering.DrawQuad(markerX, 0, markerSize, markerSize, unchecked((int)0xFF00FFFF)));
-        }
-
-        if (trackAlpha != 0 && sb.IsScrollable)
-        {
-            frame.Add(new Cycon.Backends.Abstractions.Rendering.DrawQuad(sb.TrackRectPx.X, sb.TrackRectPx.Y, sb.TrackRectPx.Width, sb.TrackRectPx.Height, trackColor));
-        }
-
-        if (thumbAlpha != 0 && sb.IsScrollable)
-        {
-            frame.Add(new Cycon.Backends.Abstractions.Rendering.DrawQuad(sb.ThumbRectPx.X, sb.ThumbRectPx.Y, sb.ThumbRectPx.Width, sb.ThumbRectPx.Height, thumbColor));
-        }
-
-        frame.Add(new Cycon.Backends.Abstractions.Rendering.PopClip());
-        return frame;
     }
 
     private void UpdateVisibleCommandIndicators(long nowTicks)
@@ -700,79 +608,6 @@ public sealed class ConsoleHostSession
         return (byte)Math.Clamp((int)Math.Round(a * 255.0), 0, 255);
     }
 
-    private void AdvanceScrollbarAnimation(int dtMs)
-    {
-        var ui = _document.Scroll.ScrollbarUi;
-        if (_scrollbarInteractedThisTick)
-        {
-            ui.MsSinceInteraction = 0;
-        }
-        else if (dtMs > 0)
-        {
-            ui.MsSinceInteraction = (int)Math.Min(int.MaxValue, (long)ui.MsSinceInteraction + dtMs);
-        }
-
-        var settings = _document.Settings.Scrollbar;
-        var wantsVisible = ui.IsDragging || ui.IsHovering || ui.MsSinceInteraction < settings.AutoHideDelayMs;
-        var target = wantsVisible ? 1f : 0f;
-        var fadeMs = wantsVisible ? settings.FadeInMs : settings.FadeOutMs;
-
-        if (fadeMs <= 0)
-        {
-            ui.Visibility = target;
-            return;
-        }
-
-        var step = dtMs / (float)fadeMs;
-        if (step <= 0f)
-        {
-            return;
-        }
-
-        ui.Visibility = MoveTowards(ui.Visibility, target, step);
-    }
-
-    private static float MoveTowards(float value, float target, float maxDelta)
-    {
-        if (value < target)
-        {
-            return Math.Min(value + maxDelta, target);
-        }
-
-        if (value > target)
-        {
-            return Math.Max(value - maxDelta, target);
-        }
-
-        return value;
-    }
-
-    private (byte TrackAlpha, byte ThumbAlpha) ComputeScrollbarAlphas()
-    {
-        var ui = _document.Scroll.ScrollbarUi;
-        var settings = _document.Settings.Scrollbar;
-        var visibility = Math.Clamp(ui.Visibility, 0f, 1f);
-
-        var thumbOpacity = ui.IsDragging
-            ? settings.ThumbOpacityDrag
-            : _scrollbarThumbHover
-                ? settings.ThumbOpacityHover
-                : settings.ThumbOpacityIdle;
-
-        return (ToAlpha(visibility * settings.TrackOpacityIdle), ToAlpha(visibility * thumbOpacity));
-    }
-
-    private static byte ToAlpha(float alpha01)
-    {
-        alpha01 = Math.Clamp(alpha01, 0f, 1f);
-        return (byte)Math.Clamp((int)Math.Round(alpha01 * 255f), 0, 255);
-    }
-
-    private static int WithAlpha(int rgba, byte alpha)
-    {
-        return (rgba & unchecked((int)0xFFFFFF00)) | alpha;
-    }
-
     private void DrainPendingEvents(int framebufferWidth, int framebufferHeight)
     {
         List<PendingEvent> events;
@@ -791,6 +626,7 @@ public sealed class ConsoleHostSession
         }
 
         EnsureLayoutExists(framebufferWidth, framebufferHeight);
+        _scrollModel.TotalRows = _lastLayout?.TotalRows ?? 0;
 
         for (var i = 0; i < events.Count; i++)
         {
@@ -798,6 +634,7 @@ public sealed class ConsoleHostSession
             {
                 HandleFileDrop(fileDrop.Path);
                 EnsureLayoutExists(framebufferWidth, framebufferHeight);
+                _scrollModel.TotalRows = _lastLayout?.TotalRows ?? 0;
                 continue;
             }
 
@@ -826,7 +663,9 @@ public sealed class ConsoleHostSession
 
             if (events[i] is PendingEvent.Mouse mouseRaw && _lastLayout is not null)
             {
+                _scrollModel.TotalRows = _lastLayout.TotalRows;
                 var mouseEvent = mouseRaw.Event;
+                var viewportRectPx = new PxRect(0, 0, _latestFramebufferWidth, _latestFramebufferHeight);
 
                 if (mouseEvent.Kind == HostMouseEventKind.Wheel)
                 {
@@ -835,16 +674,43 @@ public sealed class ConsoleHostSession
                         continue;
                     }
 
-                    if (HandleScrollbarMouse(mouseEvent))
+                    if (!_document.Scroll.ScrollbarUi.IsDragging && _interaction.Snapshot.MouseCaptured is not null)
                     {
-                        continue;
+                        // leave for other handlers
+                    }
+                    else
+                    {
+                        var consumed = _scrollbar.HandleMouse(mouseEvent, viewportRectPx, _document.Settings.Scrollbar, out var scrollChanged);
+                        if (consumed)
+                        {
+                            ClearScene3DMouseFocus();
+                            if (scrollChanged)
+                            {
+                                _pendingContentRebuild = true;
+                            }
+                            continue;
+                        }
                     }
                 }
                 else
                 {
-                    if (HandleScrollbarMouse(mouseEvent))
+                    if (!_document.Scroll.ScrollbarUi.IsDragging && _interaction.Snapshot.MouseCaptured is not null)
                     {
-                        continue;
+                        // leave for other handlers
+                    }
+                    else
+                    {
+                        var consumed = _scrollbar.HandleMouse(mouseEvent, viewportRectPx, _document.Settings.Scrollbar, out var scrollChanged);
+                        if (consumed)
+                        {
+                            ClearScene3DMouseFocus();
+                            if (scrollChanged ||
+                                (mouseEvent.Kind == HostMouseEventKind.Move && _document.Scroll.ScrollbarUi.IsDragging))
+                            {
+                                _pendingContentRebuild = true;
+                            }
+                            continue;
+                        }
                     }
 
                     if (HandleScene3DMouse(mouseEvent))
@@ -958,9 +824,6 @@ public sealed class ConsoleHostSession
         LogOnce(_atlasData, layout, renderFrame, framebufferWidth, framebufferHeight);
         _lastRebuildTicks = nowTicks;
         _lastCaretAlpha = caretAlphaNow;
-        var (trackAlpha, thumbAlpha) = ComputeScrollbarAlphas();
-        _lastScrollbarTrackAlpha = trackAlpha;
-        _lastScrollbarThumbAlpha = thumbAlpha;
         _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(nowTicks);
         _lastCaretRenderTicks = nowTicks;
     }
@@ -2391,169 +2254,6 @@ public sealed class ConsoleHostSession
 
     private readonly record struct JobPromptRef(JobId JobId, long PromptId);
     private readonly record struct OwnedPromptRef(long PromptId);
-
-    private bool HandleScrollbarMouse(HostMouseEvent e)
-    {
-        var layout = _lastLayout;
-        if (layout is null)
-        {
-            return false;
-        }
-
-        var ui = _document.Scroll.ScrollbarUi;
-        var sb = ComputeScrollbarLayoutForInput(_latestFramebufferWidth, _latestFramebufferHeight, layout);
-        if (!sb.IsScrollable && !ui.IsDragging)
-        {
-            return false;
-        }
-
-        if (!ui.IsDragging && _interaction.Snapshot.MouseCaptured is not null)
-        {
-            return false;
-        }
-
-        if (e.Kind == HostMouseEventKind.Move && !ui.IsDragging)
-        {
-            var inTrack = sb.HitTrackRectPx.Contains(e.X, e.Y);
-            var wasHovering = ui.IsHovering;
-            ui.IsHovering = inTrack;
-            _scrollbarThumbHover = sb.ThumbRectPx.Contains(e.X, e.Y);
-            if (ui.IsHovering && !wasHovering)
-            {
-                _scrollbarInteractedThisTick = true;
-            }
-
-            return false;
-        }
-
-        return e.Kind switch
-        {
-            HostMouseEventKind.Wheel => HandleWheel(e.WheelDelta, layout),
-            HostMouseEventKind.Down => HandleScrollbarMouseDown(e, layout, sb),
-            HostMouseEventKind.Move => HandleScrollbarMouseMove(e, layout, sb),
-            HostMouseEventKind.Up => HandleScrollbarMouseUp(e),
-            _ => false
-        };
-    }
-
-    private bool HandleWheel(int wheelDelta, LayoutFrame layout)
-    {
-        if (wheelDelta == 0)
-        {
-            return false;
-        }
-
-        var grid = FixedCellGrid.FromViewport(new ConsoleViewport(_latestFramebufferWidth, _latestFramebufferHeight), _layoutSettings);
-        var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - grid.Rows);
-        if (maxScrollOffsetRows == 0)
-        {
-            return false;
-        }
-
-        ClearScene3DMouseFocus();
-
-        var deltaRows = -wheelDelta * 3;
-        _document.Scroll.ApplyUserScrollDelta(deltaRows, maxScrollOffsetRows);
-        _pendingContentRebuild = true;
-        _scrollbarInteractedThisTick = true;
-        return true;
-    }
-
-    private bool HandleScrollbarMouseDown(HostMouseEvent e, LayoutFrame layout, ScrollbarLayout sb)
-    {
-        if ((e.Buttons & HostMouseButtons.Left) == 0)
-        {
-            return false;
-        }
-
-        var ui = _document.Scroll.ScrollbarUi;
-        if (!sb.IsScrollable)
-        {
-            return false;
-        }
-
-        if (sb.ThumbRectPx.Contains(e.X, e.Y))
-        {
-            ClearScene3DMouseFocus();
-            ui.IsDragging = true;
-            ui.IsHovering = true;
-            ui.DragGrabOffsetYPx = e.Y - sb.ThumbRectPx.Y;
-            _scrollbarInteractedThisTick = true;
-            return true;
-        }
-
-        return false;
-    }
-
-    private bool HandleScrollbarMouseMove(HostMouseEvent e, LayoutFrame layout, ScrollbarLayout sb)
-    {
-        var ui = _document.Scroll.ScrollbarUi;
-        if (!ui.IsDragging)
-        {
-            return false;
-        }
-
-        ClearScene3DMouseFocus();
-        var track = sb.TrackRectPx;
-        var thumb = sb.ThumbRectPx;
-
-        var grab = Math.Clamp(ui.DragGrabOffsetYPx, 0, thumb.Height);
-        var maxThumbTop = track.Y + Math.Max(0, track.Height - thumb.Height);
-        var desiredThumbTop = Math.Clamp(e.Y - grab, track.Y, maxThumbTop);
-
-        var grid = FixedCellGrid.FromViewport(new ConsoleViewport(_latestFramebufferWidth, _latestFramebufferHeight), _layoutSettings);
-        var cellH = grid.CellHeightPx;
-        var contentHeightPx = layout.TotalRows * cellH;
-        var viewportHeightPx = grid.Rows * cellH;
-        var maxScrollYPx = Math.Max(0, contentHeightPx - viewportHeightPx);
-        var thumbTravel = Math.Max(0, track.Height - thumb.Height);
-
-        var newScrollYPx = (thumbTravel <= 0 || maxScrollYPx <= 0)
-            ? 0
-            : (int)((long)(desiredThumbTop - track.Y) * maxScrollYPx / thumbTravel);
-
-        var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - grid.Rows);
-        var newScrollRows = cellH <= 0 ? 0 : (newScrollYPx + (cellH / 2)) / cellH;
-        SetScrollOffsetRows(newScrollRows, maxScrollOffsetRows);
-        _pendingContentRebuild = true;
-        _scrollbarInteractedThisTick = true;
-        return true;
-    }
-
-    private ScrollbarLayout ComputeScrollbarLayoutForInput(int framebufferWidth, int framebufferHeight, LayoutFrame layout)
-    {
-        var grid = FixedCellGrid.FromViewport(new ConsoleViewport(framebufferWidth, framebufferHeight), _layoutSettings);
-        var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - grid.Rows);
-        var clampedScrollOffsetRows = Math.Clamp(_document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
-        return ScrollbarLayouter.Layout(grid, layout.TotalRows, clampedScrollOffsetRows, _document.Settings.Scrollbar);
-    }
-
-    private bool HandleScrollbarMouseUp(HostMouseEvent e)
-    {
-        var ui = _document.Scroll.ScrollbarUi;
-        if (!ui.IsDragging)
-        {
-            return false;
-        }
-
-        if ((e.Buttons & HostMouseButtons.Left) == 0)
-        {
-            return false;
-        }
-
-        ClearScene3DMouseFocus();
-        ui.IsDragging = false;
-        _scrollbarInteractedThisTick = true;
-        return true;
-    }
-
-    private void SetScrollOffsetRows(int scrollOffsetRows, int maxScrollOffsetRows)
-    {
-        var clamped = Math.Clamp(scrollOffsetRows, 0, maxScrollOffsetRows);
-        _document.Scroll.ScrollOffsetRows = clamped;
-        _document.Scroll.IsFollowingTail = clamped >= maxScrollOffsetRows;
-        _document.Scroll.ScrollRowsFromBottom = maxScrollOffsetRows - clamped;
-    }
 
     private void QueueMeshReleasesForAllBlocks()
     {
