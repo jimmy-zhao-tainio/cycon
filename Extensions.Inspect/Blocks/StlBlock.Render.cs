@@ -62,6 +62,11 @@ public sealed partial class StlBlock
                 FocusDistance *= scale;
                 CameraPos = lookAt - (CenterDir * FocusDistance);
                 _lastVerticalFovRadians = vfov;
+
+                if (NavigationMode == Cycon.Core.Transcript.Scene3DNavigationMode.Orbit)
+                {
+                    SyncOrbitFromCurrentView();
+                }
             }
         }
         else
@@ -91,6 +96,11 @@ public sealed partial class StlBlock
 
         forward = Vector3.Normalize(forward);
         CenterDir = forward;
+
+        if (NavigationMode == Cycon.Core.Transcript.Scene3DNavigationMode.Orbit)
+        {
+            SyncOrbitFromCurrentView();
+        }
 
         var lookAtPoint = CameraPos + (forward * MathF.Max(near * 2f, FocusDistance));
 

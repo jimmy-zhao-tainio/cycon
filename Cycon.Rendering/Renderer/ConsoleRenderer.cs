@@ -150,7 +150,6 @@ public sealed class ConsoleRenderer
             CaretPass.RenderCaret(frame, grid, fontMetrics, scrollOffsetRows, caretQuad, caretColor, caretAlpha);
         }
 
-        ScrollbarRenderer.Add(frame, document, layout);
         return frame;
     }
 

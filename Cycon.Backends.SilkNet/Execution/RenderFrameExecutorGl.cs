@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Numerics;
 using Cycon.Backends.Abstractions.Rendering;
@@ -47,6 +48,10 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private readonly HashSet<int> _loggedFailureTags = new();
     private readonly HashSet<int> _loggedMesh3DStateTags = new();
     private readonly Dictionary<int, Mesh3D> _meshes3D = new();
+    private static readonly bool ResizeTrace =
+        string.Equals(Environment.GetEnvironmentVariable("CYCON_RESIZE_TRACE"), "1", StringComparison.Ordinal);
+    private int _lastTraceViewportW = -1;
+    private int _lastTraceViewportH = -1;
 
     private readonly record struct Mesh3D(uint Vao, uint Vbo, int VertexCount);
 
@@ -148,6 +153,16 @@ public sealed class RenderFrameExecutorGl : IDisposable
         _viewportHeight = framebufferHeight;
         _gl.Viewport(0, 0, (uint)framebufferWidth, (uint)framebufferHeight);
 
+        if (ResizeTrace)
+        {
+            if (_viewportWidth != _lastTraceViewportW || _viewportHeight != _lastTraceViewportH)
+            {
+                _lastTraceViewportW = _viewportWidth;
+                _lastTraceViewportH = _viewportHeight;
+                Console.WriteLine($"[GL] viewport={_viewportWidth}x{_viewportHeight}");
+            }
+        }
+
         if (_initialized)
         {
             _gl.UseProgram(_glyphProgram);
@@ -174,6 +189,33 @@ public sealed class RenderFrameExecutorGl : IDisposable
         }
 
         _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+        ExecuteBatched(frame, atlas);
+    }
+
+    public void ExecuteOverlay(RenderFrame frame, GlyphAtlasData atlas)
+    {
+        if (!_initialized)
+        {
+            Initialize(atlas);
+        }
+
+        if (_viewportWidth <= 0 || _viewportHeight <= 0)
+        {
+            return;
+        }
+
+        // Ensure overlay uses full framebuffer viewport (3D draws may have changed it).
+        _gl.Viewport(0, 0, (uint)_viewportWidth, (uint)_viewportHeight);
+
+        // Overlay rendering should not depend on whatever state the content pass left behind
+        // (e.g. depth test/cull enabled from 3D draws).
+        _gl.Disable(EnableCap.DepthTest);
+        _gl.DepthMask(false);
+        _gl.Disable(EnableCap.CullFace);
+        _gl.Enable(EnableCap.Blend);
+        _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        SetColorWrite(true);
 
         ExecuteBatched(frame, atlas);
     }

@@ -36,6 +36,11 @@ namespace Cycon.Host.Hosting;
 
 public sealed class ConsoleHostSession
 {
+    private static readonly bool ResizeTrace =
+        string.Equals(Environment.GetEnvironmentVariable("CYCON_RESIZE_TRACE"), "1", StringComparison.Ordinal);
+    private static readonly bool ScrollbarDebug =
+        string.Equals(Environment.GetEnvironmentVariable("CYCON_SCROLLBAR_DEBUG"), "1", StringComparison.Ordinal);
+
     private readonly int _resizeSettleMs;
     private readonly int _rebuildThrottleMs;
 
@@ -75,6 +80,8 @@ public sealed class ConsoleHostSession
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
     private GridSize _renderedGrid;
+    private int _lastBuiltFramebufferWidth;
+    private int _lastBuiltFramebufferHeight;
     private bool _pendingResizeRebuild;
     private bool _resizeVsyncDisabled;
     private long _lastRebuildTicks;
@@ -91,8 +98,15 @@ public sealed class ConsoleHostSession
     private long _lastCaretRenderTicks;
     private byte _lastScrollbarTrackAlpha;
     private byte _lastScrollbarThumbAlpha;
+    private bool _scrollbarThumbHover;
     private int _lastSpinnerFrameIndex = -1;
     private long _lastTickTicks;
+    private int _tickIndex;
+    private int _lastTraceCurFbW = -1;
+    private int _lastTraceCurFbH = -1;
+    private int _lastTraceBuiltFbW = -1;
+    private int _lastTraceBuiltFbH = -1;
+    private bool _lastTraceShouldRebuild;
     private bool _scrollbarInteractedThisTick;
     private Scene3DCapture? _scene3DCapture;
     private BlockId? _scene3DMouseFocus;
@@ -194,6 +208,22 @@ public sealed class ConsoleHostSession
         }
     }
 
+    public void OnPointerInWindowChanged(bool isInWindow)
+    {
+        if (isInWindow)
+        {
+            return;
+        }
+
+        var ui = _document.Scroll.ScrollbarUi;
+        if (!ui.IsDragging)
+        {
+            ui.IsHovering = false;
+        }
+
+        _scrollbarThumbHover = false;
+    }
+
     public void OnFileDrop(HostFileDropEvent e)
     {
         lock (_pendingEventsLock)
@@ -244,6 +274,7 @@ public sealed class ConsoleHostSession
         }
 
         var nowTicks = Stopwatch.GetTimestamp();
+        _tickIndex++;
         _scrollbarInteractedThisTick = false;
         var dtMs = _lastTickTicks == 0
             ? 0
@@ -292,11 +323,35 @@ public sealed class ConsoleHostSession
         var gridMismatch = _lastFrame is null || renderedGrid != currentGrid;
         if (gridMismatch) _pendingResizeRebuild = true;
 
+        var framebufferMismatch = _lastFrame is null
+            || _lastBuiltFramebufferWidth != framebufferWidth
+            || _lastBuiltFramebufferHeight != framebufferHeight;
+
         var elapsedSinceRebuildMs = (nowTicks - _lastRebuildTicks) * 1000.0 / Stopwatch.Frequency;
         var shouldRebuild = _lastFrame is null
             || _pendingContentRebuild
             || (_pendingResizeRebuild && gridMismatch)
-            || (gridMismatch && (gridSettled || elapsedSinceRebuildMs >= _rebuildThrottleMs));
+            || (gridMismatch && (gridSettled || elapsedSinceRebuildMs >= _rebuildThrottleMs))
+            || (framebufferMismatch && (framebufferSettled || elapsedSinceRebuildMs >= _rebuildThrottleMs));
+
+        if (ResizeTrace)
+        {
+            var traceCurChanged = framebufferWidth != _lastTraceCurFbW || framebufferHeight != _lastTraceCurFbH;
+            var traceBuiltChanged = _lastBuiltFramebufferWidth != _lastTraceBuiltFbW || _lastBuiltFramebufferHeight != _lastTraceBuiltFbH;
+            var traceRebuildFlip = shouldRebuild != _lastTraceShouldRebuild;
+            var traceMismatch = framebufferMismatch || gridMismatch;
+            if (traceCurChanged || traceBuiltChanged || traceRebuildFlip || traceMismatch)
+            {
+                _lastTraceCurFbW = framebufferWidth;
+                _lastTraceCurFbH = framebufferHeight;
+                _lastTraceBuiltFbW = _lastBuiltFramebufferWidth;
+                _lastTraceBuiltFbH = _lastBuiltFramebufferHeight;
+                _lastTraceShouldRebuild = shouldRebuild;
+                var builtGrid = _lastFrame?.BuiltGrid ?? default;
+                Console.WriteLine(
+                    $"[HOST] f={_tickIndex} builtFb={_lastBuiltFramebufferWidth}x{_lastBuiltFramebufferHeight} curFb={framebufferWidth}x{framebufferHeight} builtGrid={builtGrid.Cols}x{builtGrid.Rows} curGrid={currentGrid.Cols}x{currentGrid.Rows} shouldRebuild={shouldRebuild}");
+            }
+        }
 
         if (shouldRebuild)
         {
@@ -321,6 +376,8 @@ public sealed class ConsoleHostSession
                 _lastFrame = frame;
                 _renderedGrid = builtGrid;
                 _lastLayout = layout;
+                _lastBuiltFramebufferWidth = snapW;
+                _lastBuiltFramebufferHeight = snapH;
                 LogOnce(_atlasData, layout, renderFrame, snapW, snapH);
                 _lastRebuildTicks = passNowTicks;
                 _lastCaretAlpha = caretAlphaNow;
@@ -331,13 +388,15 @@ public sealed class ConsoleHostSession
                 _lastCaretRenderTicks = passNowTicks;
 
                 var verifyGrid = _latestGrid;
-                if (_renderedGrid == verifyGrid)
+                var verifyW = _latestFramebufferWidth;
+                var verifyH = _latestFramebufferHeight;
+                if (_renderedGrid == verifyGrid && _lastBuiltFramebufferWidth == verifyW && _lastBuiltFramebufferHeight == verifyH)
                 {
                     break;
                 }
 
-                snapW = _latestFramebufferWidth;
-                snapH = _latestFramebufferHeight;
+                snapW = verifyW;
+                snapH = verifyH;
                 snapGrid = verifyGrid;
             }
 
@@ -385,11 +444,13 @@ public sealed class ConsoleHostSession
             throw new InvalidOperationException("Tick invariant violated: frame must be available.");
         }
 
+        var overlayFrame = BuildScrollbarOverlayFrame(framebufferWidth, framebufferHeight, _lastLayout);
+
         var setVSync = _pendingSetVSync;
         _pendingSetVSync = null;
         var requestExit = _pendingExit;
         _pendingExit = false;
-        return new FrameTickResult(framebufferWidth, framebufferHeight, _lastFrame, setVSync, requestExit);
+        return new FrameTickResult(framebufferWidth, framebufferHeight, _lastFrame, overlayFrame, setVSync, requestExit);
     }
 
     private void MaybeUpdateOverlays(int framebufferWidth, int framebufferHeight, long nowTicks, bool framebufferSettled)
@@ -436,6 +497,80 @@ public sealed class ConsoleHostSession
         _lastScrollbarThumbAlpha = thumbAlpha;
         _lastSpinnerFrameIndex = spinnerIndex;
         _lastCaretRenderTicks = nowTicks;
+    }
+
+    private RenderFrame? BuildScrollbarOverlayFrame(int framebufferWidth, int framebufferHeight, LayoutFrame? layout)
+    {
+        if (layout is null)
+        {
+            return null;
+        }
+
+        var ui = _document.Scroll.ScrollbarUi;
+        var visibility = Math.Clamp(ui.Visibility, 0f, 1f);
+        if (!ScrollbarDebug && visibility <= 0f && !ui.IsHovering && !ui.IsDragging)
+        {
+            return null;
+        }
+
+        var grid = FixedCellGrid.FromViewport(new ConsoleViewport(framebufferWidth, framebufferHeight), _layoutSettings);
+        var totalRows = layout.TotalRows;
+        var overflow = totalRows > grid.Rows && grid.Rows > 0;
+        var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, totalRows - grid.Rows);
+        var clampedScrollOffsetRows = Math.Clamp(_document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
+        var sb = ScrollbarLayouter.Layout(grid, totalRows, clampedScrollOffsetRows, _document.Settings.Scrollbar);
+        if (!ScrollbarDebug && !sb.IsScrollable)
+        {
+            return null;
+        }
+
+        var settings = _document.Settings.Scrollbar;
+        var thumbOpacity = ui.IsDragging
+            ? settings.ThumbOpacityDrag
+            : _scrollbarThumbHover
+                ? settings.ThumbOpacityHover
+                : settings.ThumbOpacityIdle;
+
+        var trackAlpha = ToAlpha(visibility * settings.TrackOpacityIdle);
+        var thumbAlpha = ToAlpha(visibility * thumbOpacity);
+
+        if (ScrollbarDebug && overflow)
+        {
+            trackAlpha = 0xFF;
+            thumbAlpha = 0xFF;
+        }
+
+        if (!ScrollbarDebug && trackAlpha == 0 && thumbAlpha == 0)
+        {
+            return null;
+        }
+
+        var color = _document.Settings.DefaultTextStyle.ForegroundRgba;
+        var trackColor = WithAlpha(color, trackAlpha);
+        var thumbColor = WithAlpha(color, thumbAlpha);
+
+        var frame = new RenderFrame();
+        frame.Add(new Cycon.Backends.Abstractions.Rendering.PushClip(0, 0, framebufferWidth, framebufferHeight));
+
+        if (ScrollbarDebug)
+        {
+            var markerSize = 10;
+            var markerX = Math.Max(0, framebufferWidth - markerSize);
+            frame.Add(new Cycon.Backends.Abstractions.Rendering.DrawQuad(markerX, 0, markerSize, markerSize, unchecked((int)0xFF00FFFF)));
+        }
+
+        if (trackAlpha != 0 && sb.IsScrollable)
+        {
+            frame.Add(new Cycon.Backends.Abstractions.Rendering.DrawQuad(sb.TrackRectPx.X, sb.TrackRectPx.Y, sb.TrackRectPx.Width, sb.TrackRectPx.Height, trackColor));
+        }
+
+        if (thumbAlpha != 0 && sb.IsScrollable)
+        {
+            frame.Add(new Cycon.Backends.Abstractions.Rendering.DrawQuad(sb.ThumbRectPx.X, sb.ThumbRectPx.Y, sb.ThumbRectPx.Width, sb.ThumbRectPx.Height, thumbColor));
+        }
+
+        frame.Add(new Cycon.Backends.Abstractions.Rendering.PopClip());
+        return frame;
     }
 
     private void UpdateVisibleCommandIndicators(long nowTicks)
@@ -620,7 +755,7 @@ public sealed class ConsoleHostSession
 
         var thumbOpacity = ui.IsDragging
             ? settings.ThumbOpacityDrag
-            : ui.IsHovering
+            : _scrollbarThumbHover
                 ? settings.ThumbOpacityHover
                 : settings.ThumbOpacityIdle;
 
@@ -631,6 +766,11 @@ public sealed class ConsoleHostSession
     {
         alpha01 = Math.Clamp(alpha01, 0f, 1f);
         return (byte)Math.Clamp((int)Math.Round(alpha01 * 255f), 0, 255);
+    }
+
+    private static int WithAlpha(int rgba, byte alpha)
+    {
+        return (rgba & unchecked((int)0xFFFFFF00)) | alpha;
     }
 
     private void DrainPendingEvents(int framebufferWidth, int framebufferHeight)
@@ -686,16 +826,31 @@ public sealed class ConsoleHostSession
 
             if (events[i] is PendingEvent.Mouse mouseRaw && _lastLayout is not null)
             {
-                var sceneConsumed = HandleScene3DMouse(mouseRaw.Event);
-                if (sceneConsumed)
-                {
-                    continue;
-                }
+                var mouseEvent = mouseRaw.Event;
 
-                var consumed = HandleScrollbarMouse(mouseRaw.Event);
-                if (consumed)
+                if (mouseEvent.Kind == HostMouseEventKind.Wheel)
                 {
-                    continue;
+                    if (HandleScene3DMouse(mouseEvent))
+                    {
+                        continue;
+                    }
+
+                    if (HandleScrollbarMouse(mouseEvent))
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    if (HandleScrollbarMouse(mouseEvent))
+                    {
+                        continue;
+                    }
+
+                    if (HandleScene3DMouse(mouseEvent))
+                    {
+                        continue;
+                    }
                 }
             }
 
@@ -725,6 +880,12 @@ public sealed class ConsoleHostSession
             return false;
         }
 
+        if (TryGetBlock(_scene3DMouseFocus.Value, out var focusedBlock) &&
+            focusedBlock is IScene3DOrbitBlock { NavigationMode: Scene3DNavigationMode.Orbit })
+        {
+            return false;
+        }
+
         return char.ToUpperInvariant(ch) is 'W' or 'A' or 'S' or 'D';
     }
 
@@ -736,6 +897,11 @@ public sealed class ConsoleHostSession
         }
 
         if (!TryGetBlock(focusedId, out var block) || block is not IScene3DViewBlock)
+        {
+            return false;
+        }
+
+        if (block is IScene3DOrbitBlock { NavigationMode: Scene3DNavigationMode.Orbit })
         {
             return false;
         }
@@ -787,6 +953,8 @@ public sealed class ConsoleHostSession
         _lastFrame = frame;
         _renderedGrid = builtGrid;
         _lastLayout = layout;
+        _lastBuiltFramebufferWidth = framebufferWidth;
+        _lastBuiltFramebufferHeight = framebufferHeight;
         LogOnce(_atlasData, layout, renderFrame, framebufferWidth, framebufferHeight);
         _lastRebuildTicks = nowTicks;
         _lastCaretAlpha = caretAlphaNow;
@@ -1049,6 +1217,47 @@ public sealed class ConsoleHostSession
         var dx = x - lastX;
         var dy = y - lastY;
 
+        if (stl is IScene3DOrbitBlock orbit && orbit.NavigationMode == Scene3DNavigationMode.Orbit)
+        {
+            var target = orbit.OrbitTarget;
+            var distance = Math.Max(0.01f, orbit.OrbitDistance);
+
+            var yaw = orbit.OrbitYaw;
+            var pitch = orbit.OrbitPitch;
+
+            switch (mode)
+            {
+                case Scene3DDragMode.Orbit:
+                {
+                    yaw += dx * settings.OrbitSensitivity * (settings.InvertOrbitX ? -1f : 1f);
+                    pitch -= dy * settings.OrbitSensitivity * (settings.InvertOrbitY ? -1f : 1f);
+                    pitch = Math.Clamp(pitch, -1.55f, 1.55f);
+                    break;
+                }
+                case Scene3DDragMode.Pan:
+                {
+                    var forward = ComputeForward(yaw, pitch);
+                    var (right, up, _) = ComputeSceneBasis(forward);
+                    var scale = Math.Max(0.01f, distance) * settings.PanSensitivity;
+                    var delta = (-dx * scale * (settings.InvertPanX ? -1f : 1f)) * right +
+                                (dy * scale * (settings.InvertPanY ? -1f : 1f)) * up;
+                    target += delta;
+                    break;
+                }
+            }
+
+            orbit.OrbitYaw = yaw;
+            orbit.OrbitPitch = pitch;
+            orbit.OrbitTarget = target;
+            orbit.OrbitDistance = distance;
+
+            var dir = ComputeForward(yaw, pitch);
+            stl.CenterDir = dir;
+            stl.FocusDistance = distance;
+            stl.CameraPos = target - (dir * distance);
+            return;
+        }
+
         switch (mode)
         {
             case Scene3DDragMode.Orbit:
@@ -1086,6 +1295,34 @@ public sealed class ConsoleHostSession
 
     private static void ApplySceneDollyFactor(IScene3DViewBlock stl, float factor)
     {
+        if (stl is IScene3DOrbitBlock orbit && orbit.NavigationMode == Scene3DNavigationMode.Orbit)
+        {
+            var oldDistance = Math.Max(0.01f, orbit.OrbitDistance);
+            var maxDistance = MathF.Max(0.01f, stl.BoundsRadius * 100f);
+            var newDistance = Math.Clamp(oldDistance * factor, 0.01f, maxDistance);
+            if (MathF.Abs(newDistance - oldDistance) < 1e-6f)
+            {
+                return;
+            }
+
+            orbit.OrbitDistance = newDistance;
+
+            var dir = stl.CenterDir;
+            if (dir.LengthSquared() < 1e-10f)
+            {
+                dir = new Vector3(0, 0, 1);
+            }
+            else
+            {
+                dir = Vector3.Normalize(dir);
+            }
+
+            stl.CenterDir = dir;
+            stl.FocusDistance = newDistance;
+            stl.CameraPos = orbit.OrbitTarget - (dir * newDistance);
+            return;
+        }
+
         var oldFocus = Math.Max(0.01f, stl.FocusDistance);
         var maxFocus = MathF.Max(0.01f, stl.BoundsRadius * 100f);
         var newFocus = Math.Clamp(oldFocus * factor, 0.01f, maxFocus);
@@ -2164,7 +2401,7 @@ public sealed class ConsoleHostSession
         }
 
         var ui = _document.Scroll.ScrollbarUi;
-        var sb = layout.Scrollbar;
+        var sb = ComputeScrollbarLayoutForInput(_latestFramebufferWidth, _latestFramebufferHeight, layout);
         if (!sb.IsScrollable && !ui.IsDragging)
         {
             return false;
@@ -2180,6 +2417,7 @@ public sealed class ConsoleHostSession
             var inTrack = sb.HitTrackRectPx.Contains(e.X, e.Y);
             var wasHovering = ui.IsHovering;
             ui.IsHovering = inTrack;
+            _scrollbarThumbHover = sb.ThumbRectPx.Contains(e.X, e.Y);
             if (ui.IsHovering && !wasHovering)
             {
                 _scrollbarInteractedThisTick = true;
@@ -2191,8 +2429,8 @@ public sealed class ConsoleHostSession
         return e.Kind switch
         {
             HostMouseEventKind.Wheel => HandleWheel(e.WheelDelta, layout),
-            HostMouseEventKind.Down => HandleScrollbarMouseDown(e, layout),
-            HostMouseEventKind.Move => HandleScrollbarMouseMove(e, layout),
+            HostMouseEventKind.Down => HandleScrollbarMouseDown(e, layout, sb),
+            HostMouseEventKind.Move => HandleScrollbarMouseMove(e, layout, sb),
             HostMouseEventKind.Up => HandleScrollbarMouseUp(e),
             _ => false
         };
@@ -2205,7 +2443,8 @@ public sealed class ConsoleHostSession
             return false;
         }
 
-        var maxScrollOffsetRows = layout.Grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
+        var grid = FixedCellGrid.FromViewport(new ConsoleViewport(_latestFramebufferWidth, _latestFramebufferHeight), _layoutSettings);
+        var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - grid.Rows);
         if (maxScrollOffsetRows == 0)
         {
             return false;
@@ -2220,7 +2459,7 @@ public sealed class ConsoleHostSession
         return true;
     }
 
-    private bool HandleScrollbarMouseDown(HostMouseEvent e, LayoutFrame layout)
+    private bool HandleScrollbarMouseDown(HostMouseEvent e, LayoutFrame layout, ScrollbarLayout sb)
     {
         if ((e.Buttons & HostMouseButtons.Left) == 0)
         {
@@ -2228,13 +2467,12 @@ public sealed class ConsoleHostSession
         }
 
         var ui = _document.Scroll.ScrollbarUi;
-        var sb = layout.Scrollbar;
         if (!sb.IsScrollable)
         {
             return false;
         }
 
-        if (sb.HitThumbRectPx.Contains(e.X, e.Y))
+        if (sb.ThumbRectPx.Contains(e.X, e.Y))
         {
             ClearScene3DMouseFocus();
             ui.IsDragging = true;
@@ -2244,27 +2482,10 @@ public sealed class ConsoleHostSession
             return true;
         }
 
-        if (!sb.HitTrackRectPx.Contains(e.X, e.Y))
-        {
-            return false;
-        }
-
-        ClearScene3DMouseFocus();
-        var pageRows = Math.Max(1, layout.Grid.Rows);
-        var deltaRows = e.Y < sb.ThumbRectPx.Y
-            ? -pageRows
-            : e.Y >= sb.ThumbRectPx.Y + sb.ThumbRectPx.Height
-                ? pageRows
-                : 0;
-
-        var maxScrollOffsetRows = layout.Grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
-        _document.Scroll.ApplyUserScrollDelta(deltaRows, maxScrollOffsetRows);
-        _pendingContentRebuild = true;
-        _scrollbarInteractedThisTick = true;
-        return true;
+        return false;
     }
 
-    private bool HandleScrollbarMouseMove(HostMouseEvent e, LayoutFrame layout)
+    private bool HandleScrollbarMouseMove(HostMouseEvent e, LayoutFrame layout, ScrollbarLayout sb)
     {
         var ui = _document.Scroll.ScrollbarUi;
         if (!ui.IsDragging)
@@ -2273,7 +2494,6 @@ public sealed class ConsoleHostSession
         }
 
         ClearScene3DMouseFocus();
-        var sb = layout.Scrollbar;
         var track = sb.TrackRectPx;
         var thumb = sb.ThumbRectPx;
 
@@ -2281,9 +2501,10 @@ public sealed class ConsoleHostSession
         var maxThumbTop = track.Y + Math.Max(0, track.Height - thumb.Height);
         var desiredThumbTop = Math.Clamp(e.Y - grab, track.Y, maxThumbTop);
 
-        var cellH = layout.Grid.CellHeightPx;
+        var grid = FixedCellGrid.FromViewport(new ConsoleViewport(_latestFramebufferWidth, _latestFramebufferHeight), _layoutSettings);
+        var cellH = grid.CellHeightPx;
         var contentHeightPx = layout.TotalRows * cellH;
-        var viewportHeightPx = layout.Grid.Rows * cellH;
+        var viewportHeightPx = grid.Rows * cellH;
         var maxScrollYPx = Math.Max(0, contentHeightPx - viewportHeightPx);
         var thumbTravel = Math.Max(0, track.Height - thumb.Height);
 
@@ -2291,12 +2512,20 @@ public sealed class ConsoleHostSession
             ? 0
             : (int)((long)(desiredThumbTop - track.Y) * maxScrollYPx / thumbTravel);
 
-        var maxScrollOffsetRows = layout.Grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
+        var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - grid.Rows);
         var newScrollRows = cellH <= 0 ? 0 : (newScrollYPx + (cellH / 2)) / cellH;
         SetScrollOffsetRows(newScrollRows, maxScrollOffsetRows);
         _pendingContentRebuild = true;
         _scrollbarInteractedThisTick = true;
         return true;
+    }
+
+    private ScrollbarLayout ComputeScrollbarLayoutForInput(int framebufferWidth, int framebufferHeight, LayoutFrame layout)
+    {
+        var grid = FixedCellGrid.FromViewport(new ConsoleViewport(framebufferWidth, framebufferHeight), _layoutSettings);
+        var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, layout.TotalRows - grid.Rows);
+        var clampedScrollOffsetRows = Math.Clamp(_document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
+        return ScrollbarLayouter.Layout(grid, layout.TotalRows, clampedScrollOffsetRows, _document.Settings.Scrollbar);
     }
 
     private bool HandleScrollbarMouseUp(HostMouseEvent e)
@@ -2679,5 +2908,6 @@ public readonly record struct FrameTickResult(
     int FramebufferWidth,
     int FramebufferHeight,
     RenderFrame Frame,
+    RenderFrame? OverlayFrame,
     bool? SetVSync,
     bool RequestExit);

@@ -6,7 +6,7 @@ using Cycon.Render;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed partial class StlBlock : IScene3DViewBlock, IMouseFocusableViewportBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner
+public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IMouseFocusableViewportBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner
 {
     private const float DefaultHorizontalFovDegrees = 80f;
     private const float FitPaddingMultiplier = 0.75f;
@@ -14,6 +14,12 @@ public sealed partial class StlBlock : IScene3DViewBlock, IMouseFocusableViewpor
     private float _lastProjectionAspect = float.NaN;
     private float _lastHorizontalFovDegrees = DefaultHorizontalFovDegrees;
     private float _lastVerticalFovRadians = float.NaN;
+
+    public Scene3DNavigationMode NavigationMode { get; set; } = Scene3DNavigationMode.FreeFly;
+    public Vector3 OrbitTarget { get; set; }
+    public float OrbitDistance { get; set; }
+    public float OrbitYaw { get; set; }
+    public float OrbitPitch { get; set; }
 
     public StlBlock(
         BlockId id,
@@ -38,6 +44,8 @@ public sealed partial class StlBlock : IScene3DViewBlock, IMouseFocusableViewpor
         CenterDir = Vector3.Normalize(new Vector3(0, MathF.Sin(0.35f), MathF.Cos(0.35f)));
         FocusDistance = ComputeFitDistance(bounds.Radius, _lastVerticalFovRadians);
         CameraPos = bounds.Center - (CenterDir * FocusDistance);
+
+        SyncOrbitFromRay();
     }
 
     public BlockId Id { get; }
@@ -80,6 +88,7 @@ public sealed partial class StlBlock : IScene3DViewBlock, IMouseFocusableViewpor
         CenterDir = Vector3.Normalize(new Vector3(0, MathF.Sin(0.35f), MathF.Cos(0.35f)));
         FocusDistance = ComputeFitDistance(MeshBounds.Radius, _lastVerticalFovRadians);
         CameraPos = MeshBounds.Center - (CenterDir * FocusDistance);
+        SyncOrbitFromRay();
     }
 
     public BlockSize Measure(in BlockMeasureContext ctx)
@@ -103,6 +112,45 @@ public sealed partial class StlBlock : IScene3DViewBlock, IMouseFocusableViewpor
         var hfov = horizontalFovDegrees * (MathF.PI / 180f);
         var half = hfov * 0.5f;
         return 2f * MathF.Atan(MathF.Tan(half) / aspect);
+    }
+
+    private void SyncOrbitFromRay()
+    {
+        OrbitTarget = MeshBounds.Center;
+        OrbitDistance = Math.Max(0.01f, FocusDistance);
+
+        var forward = CenterDir;
+        if (forward.LengthSquared() < 1e-10f)
+        {
+            forward = new Vector3(0, 0, 1);
+        }
+        else
+        {
+            forward = Vector3.Normalize(forward);
+        }
+
+        OrbitYaw = MathF.Atan2(forward.X, forward.Z);
+        OrbitPitch = MathF.Asin(Math.Clamp(forward.Y, -1f, 1f));
+    }
+
+    private void SyncOrbitFromCurrentView()
+    {
+        OrbitDistance = Math.Max(0.01f, FocusDistance);
+
+        var forward = CenterDir;
+        if (forward.LengthSquared() < 1e-10f)
+        {
+            forward = new Vector3(0, 0, 1);
+        }
+        else
+        {
+            forward = Vector3.Normalize(forward);
+        }
+
+        CenterDir = forward;
+        OrbitTarget = CameraPos + (forward * OrbitDistance);
+        OrbitYaw = MathF.Atan2(forward.X, forward.Z);
+        OrbitPitch = MathF.Asin(Math.Clamp(forward.Y, -1f, 1f));
     }
 
     public readonly record struct Bounds(Vector3 Min, Vector3 Max)

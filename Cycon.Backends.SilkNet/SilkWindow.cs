@@ -10,6 +10,8 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 {
     private readonly Silk.NET.Windowing.IWindow _window;
     private IInputContext? _input;
+    private IMouse? _primaryMouse;
+    private bool _lastPointerInWindow = true;
     private bool _disposed;
 
     private SilkWindow(Silk.NET.Windowing.IWindow window)
@@ -33,6 +35,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     public event Action<int, int, int>? MouseWheel;
     public event Action<string>? FileDropped;
     public event Action<bool>? FocusChanged;
+    public event Action<bool>? PointerInWindowChanged;
 
     public int Width => _window.Size.X;
     public int Height => _window.Size.Y;
@@ -158,7 +161,11 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         Loaded?.Invoke();
     }
 
-    private void HandleRender(double deltaTime) => Render?.Invoke(deltaTime);
+    private void HandleRender(double deltaTime)
+    {
+        UpdatePointerInWindow();
+        Render?.Invoke(deltaTime);
+    }
 
     private void OnFramebufferResize(Vector2D<int> size)
     {
@@ -194,6 +201,11 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
             return;
         }
 
+        if (input.Mice.Count > 0)
+        {
+            _primaryMouse = input.Mice[0];
+        }
+
         foreach (var keyboard in input.Keyboards)
         {
             keyboard.KeyChar += (_, ch) => TextInput?.Invoke(ch);
@@ -223,5 +235,27 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
                 MouseWheel?.Invoke((int)pos.X, (int)pos.Y, delta);
             };
         }
+    }
+
+    private void UpdatePointerInWindow()
+    {
+        var mouse = _primaryMouse;
+        if (mouse is null)
+        {
+            return;
+        }
+
+        var pos = mouse.Position;
+        var inWindow =
+            pos.X >= 0 && pos.Y >= 0 &&
+            pos.X < _window.Size.X && pos.Y < _window.Size.Y;
+
+        if (inWindow == _lastPointerInWindow)
+        {
+            return;
+        }
+
+        _lastPointerInWindow = inWindow;
+        PointerInWindowChanged?.Invoke(inWindow);
     }
 }

@@ -27,10 +27,8 @@ public static class ScrollbarLayouter
         var thickness = Math.Max(0, settings.ThicknessPx);
         thickness = Math.Min(thickness, grid.FramebufferWidthPx);
 
-        var contentRightEdge = grid.PaddingLeftPx + grid.ContentWidthPx;
-        var rightAlignedX = grid.FramebufferWidthPx - margin - thickness;
-        var paddingAlignedX = contentRightEdge + margin;
-        var trackX = Math.Min(paddingAlignedX, rightAlignedX);
+        // Overlay scrollbar: do not reserve layout width; anchor to the framebuffer right edge.
+        var trackX = grid.FramebufferWidthPx - thickness;
         var trackY = margin;
         var trackH = grid.FramebufferHeightPx - (margin * 2);
         if (trackH <= 0)
@@ -69,7 +67,7 @@ public static class ScrollbarLayouter
 
         var track = new PxRect(trackX, trackY, thickness, trackH);
         var thumb = new PxRect(trackX, trackY + thumbOffsetY, thickness, thumbH);
-        var hitExpand = 4;
+        var hitExpand = 6;
         var hitTrack = ExpandAndClamp(track, hitExpand, grid.FramebufferWidthPx, grid.FramebufferHeightPx);
         var hitThumb = ExpandAndClamp(thumb, hitExpand, grid.FramebufferWidthPx, grid.FramebufferHeightPx);
         return new ScrollbarLayout(true, track, thumb, hitTrack, hitThumb);
