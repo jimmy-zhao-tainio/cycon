@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Numerics;
 using System.Threading;
 using Cycon.BlockCommands;
 using Cycon.Commands;
@@ -21,6 +20,7 @@ using Cycon.Host.Commands;
 using Cycon.Host.Commands.Input;
 using Cycon.Host.Commands.Blocks;
 using Cycon.Host.Commands.Handlers;
+using Cycon.Host.Inspect;
 using Cycon.Host.Interaction;
 using Cycon.Host.Input;
 using Cycon.Host.Scrolling;
@@ -28,7 +28,6 @@ using Cycon.Host.Services;
 using Cycon.Layout;
 using Cycon.Layout.Metrics;
 using Cycon.Layout.Scrolling;
-using Cycon.Render;
 using Cycon.Rendering.Renderer;
 using Cycon.Rendering.Styling;
 using Cycon.Runtime.Events;
@@ -79,13 +78,7 @@ public sealed class ConsoleHostSession
 
     private readonly ConsoleScrollModel _scrollModel;
     private readonly ScrollbarWidget _scrollbar;
-
-    private readonly List<InspectEntry> _inspectHistory = new();
-    private int _nextInspectEntryId;
-    private InspectEntry? _activeInspect;
-    private Scene3DCapture? _inspectScene3DCapture;
-    private BlockId? _inspectScene3DMouseFocus;
-    private Scene3DNavKeys _inspectScene3DNavKeysDown;
+    private readonly InspectModeController _inspectController;
 
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
@@ -168,6 +161,7 @@ public sealed class ConsoleHostSession
         _completion = new InputCompletionController(new CommandCompletionProvider(_blockCommands));
         _scrollModel = new ConsoleScrollModel(_document, _layoutSettings);
         _scrollbar = new ScrollbarWidget(_scrollModel, _document.Scroll.ScrollbarUi);
+        _inspectController = new InspectModeController(new InspectHostAdapter(this));
     }
 
     public static ConsoleHostSession CreateVga(
@@ -208,16 +202,7 @@ public sealed class ConsoleHostSession
 
     public void OnWindowFocusChanged(bool isFocused)
     {
-        if (!isFocused)
-        {
-            if (_activeInspect is not null && _activeInspect.View is IMouseFocusableViewportBlock focusable)
-            {
-                focusable.HasMouseFocus = false;
-                _inspectScene3DMouseFocus = null;
-                _inspectScene3DCapture = null;
-                _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
-            }
-        }
+        _inspectController.OnWindowFocusChanged(isFocused);
     }
 
     public void OnPointerInWindowChanged(bool isInWindow)
@@ -283,6 +268,7 @@ public sealed class ConsoleHostSession
 
         var framebufferWidth = _latestFramebufferWidth;
         var framebufferHeight = _latestFramebufferHeight;
+        var pendingEvents = DequeuePendingEvents();
 
         var elapsedSinceFramebufferChangeMs = (nowTicks - _lastFramebufferChangeTicks) * 1000.0 / Stopwatch.Frequency;
         var framebufferSettled = elapsedSinceFramebufferChangeMs >= _resizeSettleMs;
@@ -297,14 +283,15 @@ public sealed class ConsoleHostSession
             }
         }
 
-        if (_activeInspect is not null)
+        if (_inspectController.IsActive)
         {
-            DrainPendingInspectEvents(framebufferWidth, framebufferHeight);
-            if (_activeInspect is not null)
+            _inspectController.DrainPendingEvents(pendingEvents, framebufferWidth, framebufferHeight);
+            pendingEvents = null;
+            if (_inspectController.IsActive)
             {
-                _ = TickInspectScene3DKeys(TimeSpan.FromMilliseconds(dtMs));
+                _ = _inspectController.TickScene3DKeys(TimeSpan.FromMilliseconds(dtMs));
                 var timeSecondsInspect = nowTicks / (double)Stopwatch.Frequency;
-                var inspectFrame = BuildInspectFrame(framebufferWidth, framebufferHeight, timeSecondsInspect);
+                var inspectFrame = _inspectController.BuildInspectFrame(framebufferWidth, framebufferHeight, timeSecondsInspect);
                 var backendInspectFrame = RenderFrameAdapter.Adapt(inspectFrame);
                 var setVSyncInspect = _pendingSetVSync;
                 _pendingSetVSync = null;
@@ -419,12 +406,12 @@ public sealed class ConsoleHostSession
             currentGrid = snapGrid;
         }
 
-        DrainPendingEvents(framebufferWidth, framebufferHeight);
+        DrainPendingEvents(pendingEvents, framebufferWidth, framebufferHeight);
 
-        if (_activeInspect is not null)
+        if (_inspectController.IsActive)
         {
             var timeSecondsInspect = nowTicks / (double)Stopwatch.Frequency;
-            var inspectFrame = BuildInspectFrame(framebufferWidth, framebufferHeight, timeSecondsInspect);
+            var inspectFrame = _inspectController.BuildInspectFrame(framebufferWidth, framebufferHeight, timeSecondsInspect);
             var backendInspectFrame = RenderFrameAdapter.Adapt(inspectFrame);
             var setVSyncInspect = _pendingSetVSync;
             _pendingSetVSync = null;
@@ -475,324 +462,6 @@ public sealed class ConsoleHostSession
         var requestExit = _pendingExit;
         _pendingExit = false;
         return new FrameTickResult(framebufferWidth, framebufferHeight, _lastFrame, overlayFrame, setVSync, requestExit);
-    }
-
-    private Cycon.Rendering.RenderFrame BuildInspectFrame(int framebufferWidth, int framebufferHeight, double timeSeconds)
-    {
-        if (_activeInspect is null)
-        {
-            throw new InvalidOperationException("Inspect frame requested without an active inspect entry.");
-        }
-
-        var frame = new Cycon.Rendering.RenderFrame
-        {
-            BuiltGrid = new GridSize(0, 0)
-        };
-
-        var meshReleases = TakePendingMeshReleases();
-        if (meshReleases is { Count: > 0 })
-        {
-            for (var i = 0; i < meshReleases.Count; i++)
-            {
-                frame.Add(new Cycon.Rendering.Commands.ReleaseMesh3D(meshReleases[i]));
-            }
-        }
-
-        var theme = new RenderTheme(
-            ForegroundRgba: _document.Settings.DefaultTextStyle.ForegroundRgba,
-            BackgroundRgba: _document.Settings.DefaultTextStyle.BackgroundRgba);
-
-        var fontMetrics = _font.Metrics;
-        var textMetrics = new TextMetrics(
-            CellWidthPx: fontMetrics.CellWidthPx,
-            CellHeightPx: fontMetrics.CellHeightPx,
-            BaselinePx: fontMetrics.BaselinePx,
-            UnderlineThicknessPx: Math.Max(1, fontMetrics.UnderlineThicknessPx),
-            UnderlineTopOffsetPx: fontMetrics.UnderlineTopOffsetPx);
-
-        var scene3D = new Scene3DRenderSettings(
-            HorizontalFovDegrees: _document.Settings.Scene3D.HorizontalFovDegrees,
-            StlDebugMode: (int)_document.Settings.Scene3D.StlDebugMode,
-            SolidAmbient: _document.Settings.Scene3D.SolidAmbient,
-            SolidDiffuseStrength: _document.Settings.Scene3D.SolidDiffuseStrength,
-            ToneGamma: _document.Settings.Scene3D.ToneGamma,
-            ToneGain: _document.Settings.Scene3D.ToneGain,
-            ToneLift: _document.Settings.Scene3D.ToneLift,
-            VignetteStrength: _document.Settings.Scene3D.VignetteStrength,
-            VignetteInner: _document.Settings.Scene3D.VignetteInner,
-            VignetteOuter: _document.Settings.Scene3D.VignetteOuter,
-            ShowVertexDots: _document.Settings.Scene3D.ShowVertexDots,
-            VertexDotMaxVertices: _document.Settings.Scene3D.VertexDotMaxVertices,
-            VertexDotMaxDots: _document.Settings.Scene3D.VertexDotMaxDots);
-
-        // InspectMode is fullscreen: blocks own their own padding.
-        var contentRect = new RectPx(0, 0, Math.Max(0, framebufferWidth), Math.Max(0, framebufferHeight));
-
-        var ctx = new BlockRenderContext(contentRect, timeSeconds, theme, textMetrics, scene3D);
-        if (_activeInspect.View is not IRenderBlock renderBlock)
-        {
-            throw new InvalidOperationException("Active inspect view does not implement IRenderBlock.");
-        }
-
-        Cycon.Rendering.Renderer.BlockViewRenderer.RenderFullscreen(frame, _font, renderBlock, ctx, framebufferWidth, framebufferHeight);
-
-        ClearPendingMeshReleases();
-        return frame;
-    }
-
-    private void DrainPendingInspectEvents(int framebufferWidth, int framebufferHeight)
-    {
-        List<PendingEvent> events;
-        lock (_pendingEventsLock)
-        {
-            if (_pendingEvents.Count == 0)
-            {
-                return;
-            }
-
-            events = new List<PendingEvent>(_pendingEvents.Count);
-            while (_pendingEvents.Count > 0)
-            {
-                events.Add(_pendingEvents.Dequeue());
-            }
-        }
-
-        if (_activeInspect is null)
-        {
-            return;
-        }
-
-        var block = _activeInspect.View;
-        // InspectMode is fullscreen: blocks own their own padding.
-        var viewport = new PxRect(0, 0, Math.Max(0, framebufferWidth), Math.Max(0, framebufferHeight));
-
-        for (var i = 0; i < events.Count; i++)
-        {
-            if (_activeInspect is null)
-            {
-                return;
-            }
-
-            switch (events[i])
-            {
-                case PendingEvent.FileDrop fileDrop:
-                    // File drop should behave like typing a new `inspect "<path>"` command, even while in InspectMode.
-                    HandleFileDrop(fileDrop.Path);
-                    break;
-                case PendingEvent.Key key when key.IsDown && key.KeyCode == HostKey.Escape:
-                    ExitInspectMode();
-                    return;
-                case PendingEvent.Key key when key.KeyCode != HostKey.Unknown:
-                    HandleInspectScene3DKey(block, key.KeyCode, key.IsDown);
-                    break;
-                case PendingEvent.Mouse mouse:
-                    if (HandleInspectPointer(block, viewport, mouse.Event))
-                    {
-                        // Render-only blocks update in-place; no transcript rebuild needed.
-                    }
-                    break;
-            }
-        }
-    }
-
-    private bool TickInspectScene3DKeys(TimeSpan dt)
-    {
-        if (_activeInspect is null)
-        {
-            return false;
-        }
-
-        if (_inspectScene3DNavKeysDown == Scene3DNavKeys.None)
-        {
-            return false;
-        }
-
-        if (_activeInspect.View is not IScene3DViewBlock stl)
-        {
-            _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
-            return false;
-        }
-
-        var dtSeconds = (float)dt.TotalSeconds;
-        if (dtSeconds <= 0f)
-        {
-            return false;
-        }
-
-        var settings = _document.Settings.Scene3D;
-
-        var pan = 0f;
-        if ((_inspectScene3DNavKeysDown & Scene3DNavKeys.D) != 0) pan += 1f;
-        if ((_inspectScene3DNavKeysDown & Scene3DNavKeys.A) != 0) pan -= 1f;
-
-        var dolly = 0f;
-        if ((_inspectScene3DNavKeysDown & Scene3DNavKeys.W) != 0) dolly += 1f;
-        if ((_inspectScene3DNavKeysDown & Scene3DNavKeys.S) != 0) dolly -= 1f;
-
-        var didAnything = false;
-        var (right, up, _) = ComputeSceneBasis(stl.CenterDir);
-
-        if (pan != 0f)
-        {
-            var scale = stl.FocusDistance * settings.KeyboardPanSpeed * dtSeconds;
-            var sign = settings.InvertPanX ? -1f : 1f;
-            stl.CameraPos += (pan * scale * sign) * right;
-            didAnything = true;
-        }
-
-        if (dolly != 0f)
-        {
-            var exponent = dolly * settings.KeyboardDollySpeed * dtSeconds;
-            var factor = MathF.Exp(-exponent);
-            ApplySceneDollyFactor(stl, factor);
-            didAnything = true;
-        }
-
-        return didAnything;
-    }
-
-    private void HandleInspectScene3DKey(IBlock block, HostKey key, bool isDown)
-    {
-        if (key is not (HostKey.W or HostKey.A or HostKey.S or HostKey.D))
-        {
-            return;
-        }
-
-        if (block is not IScene3DViewBlock)
-        {
-            return;
-        }
-
-        var mask = key switch
-        {
-            HostKey.W => Scene3DNavKeys.W,
-            HostKey.A => Scene3DNavKeys.A,
-            HostKey.S => Scene3DNavKeys.S,
-            HostKey.D => Scene3DNavKeys.D,
-            _ => Scene3DNavKeys.None
-        };
-
-        if (isDown)
-        {
-            _inspectScene3DNavKeysDown |= mask;
-        }
-        else
-        {
-            _inspectScene3DNavKeysDown &= ~mask;
-        }
-    }
-
-    private bool HandleInspectPointer(IBlock block, in PxRect viewportRectPx, in HostMouseEvent e)
-    {
-        if (block is IBlockWheelHandler wheelHandler && e.Kind == HostMouseEventKind.Wheel)
-        {
-            return wheelHandler.HandleWheel(e, viewportRectPx);
-        }
-
-        if (block is IBlockPointerHandler pointerHandler &&
-            e.Kind is HostMouseEventKind.Down or HostMouseEventKind.Up or HostMouseEventKind.Move)
-        {
-            return pointerHandler.HandlePointer(e, viewportRectPx);
-        }
-
-        if (block is IScene3DViewBlock stl)
-        {
-            return HandleInspectScene3DMouse(stl, viewportRectPx, e);
-        }
-
-        return false;
-    }
-
-    private bool HandleInspectScene3DMouse(IScene3DViewBlock stl, in PxRect viewportRectPx, in HostMouseEvent e)
-    {
-        var insideViewport =
-            e.X >= viewportRectPx.X &&
-            e.Y >= viewportRectPx.Y &&
-            e.X < viewportRectPx.X + viewportRectPx.Width &&
-            e.Y < viewportRectPx.Y + viewportRectPx.Height;
-
-        if (_inspectScene3DCapture is { } capture)
-        {
-            switch (e.Kind)
-            {
-                case HostMouseEventKind.Move:
-                    ApplySceneDrag(stl, _document.Settings.Scene3D, capture.Mode, capture.LastX, capture.LastY, e.X, e.Y);
-                    _inspectScene3DCapture = capture with { LastX = e.X, LastY = e.Y };
-                    return true;
-                case HostMouseEventKind.Up when (e.Buttons & capture.Button) != 0:
-                    _inspectScene3DCapture = null;
-                    return true;
-                case HostMouseEventKind.Wheel:
-                    return true;
-            }
-
-            return true;
-        }
-
-        if (!insideViewport)
-        {
-            if (e.Kind == HostMouseEventKind.Down)
-            {
-                if (stl is IMouseFocusableViewportBlock focusable)
-                {
-                    focusable.HasMouseFocus = false;
-                }
-                _inspectScene3DMouseFocus = null;
-            }
-
-            return false;
-        }
-
-        var isFocused = _inspectScene3DMouseFocus == stl.Id || (stl is IMouseFocusableViewportBlock { HasMouseFocus: true });
-
-        if (e.Kind == HostMouseEventKind.Wheel)
-        {
-            ApplySceneZoom(stl, _document.Settings.Scene3D, e.WheelDelta);
-            return true;
-        }
-
-        if (e.Kind == HostMouseEventKind.Down)
-        {
-            if ((e.Buttons & HostMouseButtons.Left) != 0)
-            {
-                if (stl is IMouseFocusableViewportBlock focusable)
-                {
-                    focusable.HasMouseFocus = true;
-                }
-                _inspectScene3DMouseFocus = stl.Id;
-                _inspectScene3DCapture = new Scene3DCapture(stl.Id, HostMouseButtons.Left, Scene3DDragMode.Orbit, e.X, e.Y);
-                return true;
-            }
-
-            if ((e.Buttons & HostMouseButtons.Right) != 0)
-            {
-                _inspectScene3DCapture = new Scene3DCapture(stl.Id, HostMouseButtons.Right, Scene3DDragMode.Pan, e.X, e.Y);
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private void ExitInspectMode()
-    {
-        if (_activeInspect is null)
-        {
-            return;
-        }
-
-        WriteInspectReceiptIfNeeded(_activeInspect);
-
-        if (_activeInspect.View is IMouseFocusableViewportBlock focusable)
-        {
-            focusable.HasMouseFocus = false;
-        }
-
-        _inspectScene3DCapture = null;
-        _inspectScene3DMouseFocus = null;
-        _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
-        _activeInspect = null;
-        _pendingContentRebuild = true;
     }
 
     private void MaybeUpdateOverlays(int framebufferWidth, int framebufferHeight, long nowTicks, bool framebufferSettled)
@@ -963,21 +632,30 @@ public sealed class ConsoleHostSession
         return (byte)Math.Clamp((int)Math.Round(a * 255.0), 0, 255);
     }
 
-    private void DrainPendingEvents(int framebufferWidth, int framebufferHeight)
+    private List<PendingEvent>? DequeuePendingEvents()
     {
-        List<PendingEvent> events;
         lock (_pendingEventsLock)
         {
             if (_pendingEvents.Count == 0)
             {
-                return;
+                return null;
             }
 
-            events = new List<PendingEvent>(_pendingEvents.Count);
+            var events = new List<PendingEvent>(_pendingEvents.Count);
             while (_pendingEvents.Count > 0)
             {
                 events.Add(_pendingEvents.Dequeue());
             }
+
+            return events;
+        }
+    }
+
+    private void DrainPendingEvents(List<PendingEvent>? events, int framebufferWidth, int framebufferHeight)
+    {
+        if (events is null || events.Count == 0)
+        {
+            return;
         }
 
         EnsureLayoutExists(framebufferWidth, framebufferHeight);
@@ -1134,191 +812,6 @@ public sealed class ConsoleHostSession
             HostMouseEventKind.Wheel => null,
             _ => null
         };
-    }
-
-    private static void ApplySceneDrag(IScene3DViewBlock stl, Scene3DSettings settings, Scene3DDragMode mode, int lastX, int lastY, int x, int y)
-    {
-        var dx = x - lastX;
-        var dy = y - lastY;
-
-        if (stl is IScene3DOrbitBlock orbit && orbit.NavigationMode == Scene3DNavigationMode.Orbit)
-        {
-            var target = orbit.OrbitTarget;
-            var distance = Math.Max(0.01f, orbit.OrbitDistance);
-
-            var yaw = orbit.OrbitYaw;
-            var pitch = orbit.OrbitPitch;
-
-            switch (mode)
-            {
-                case Scene3DDragMode.Orbit:
-                {
-                    yaw += dx * settings.OrbitSensitivity * (settings.InvertOrbitX ? -1f : 1f);
-                    pitch -= dy * settings.OrbitSensitivity * (settings.InvertOrbitY ? -1f : 1f);
-                    pitch = Math.Clamp(pitch, -1.55f, 1.55f);
-                    break;
-                }
-                case Scene3DDragMode.Pan:
-                {
-                    var forward = ComputeForward(yaw, pitch);
-                    var (right, up, _) = ComputeSceneBasis(forward);
-                    var scale = Math.Max(0.01f, distance) * settings.PanSensitivity;
-                    var delta = (-dx * scale * (settings.InvertPanX ? -1f : 1f)) * right +
-                                (dy * scale * (settings.InvertPanY ? -1f : 1f)) * up;
-                    target += delta;
-                    break;
-                }
-            }
-
-            orbit.OrbitYaw = yaw;
-            orbit.OrbitPitch = pitch;
-            orbit.OrbitTarget = target;
-            orbit.OrbitDistance = distance;
-
-            var dir = ComputeForward(yaw, pitch);
-            stl.CenterDir = dir;
-            stl.FocusDistance = distance;
-            stl.CameraPos = target - (dir * distance);
-            return;
-        }
-
-        switch (mode)
-        {
-            case Scene3DDragMode.Orbit:
-            {
-                var yaw = MathF.Atan2(stl.CenterDir.X, stl.CenterDir.Z);
-                var pitch = MathF.Asin(Math.Clamp(stl.CenterDir.Y, -1f, 1f));
-                yaw += dx * settings.OrbitSensitivity * (settings.InvertOrbitX ? -1f : 1f);
-                pitch -= dy * settings.OrbitSensitivity * (settings.InvertOrbitY ? -1f : 1f);
-                pitch = Math.Clamp(pitch, -1.55f, 1.55f);
-                stl.CenterDir = ComputeForward(yaw, pitch);
-                break;
-            }
-            case Scene3DDragMode.Pan:
-            {
-                var (right, up, _) = ComputeSceneBasis(stl.CenterDir);
-                var scale = Math.Max(0.01f, stl.FocusDistance) * settings.PanSensitivity;
-                stl.CameraPos += (-dx * scale * (settings.InvertPanX ? -1f : 1f)) * right;
-                stl.CameraPos += (dy * scale * (settings.InvertPanY ? -1f : 1f)) * up;
-                break;
-            }
-        }
-    }
-
-    private static void ApplySceneZoom(IScene3DViewBlock stl, Scene3DSettings settings, int wheelDelta)
-    {
-        if (wheelDelta == 0)
-        {
-            return;
-        }
-
-        var delta = settings.InvertZoom ? -wheelDelta : wheelDelta;
-        var factor = MathF.Exp(-delta * settings.ZoomSensitivity);
-        ApplySceneDollyFactor(stl, factor);
-    }
-
-    private static void ApplySceneDollyFactor(IScene3DViewBlock stl, float factor)
-    {
-        if (stl is IScene3DOrbitBlock orbit && orbit.NavigationMode == Scene3DNavigationMode.Orbit)
-        {
-            var oldDistance = Math.Max(0.01f, orbit.OrbitDistance);
-            var maxDistance = MathF.Max(0.01f, stl.BoundsRadius * 100f);
-            var newDistance = Math.Clamp(oldDistance * factor, 0.01f, maxDistance);
-            if (MathF.Abs(newDistance - oldDistance) < 1e-6f)
-            {
-                return;
-            }
-
-            orbit.OrbitDistance = newDistance;
-
-            var dir = stl.CenterDir;
-            if (dir.LengthSquared() < 1e-10f)
-            {
-                dir = new Vector3(0, 0, 1);
-            }
-            else
-            {
-                dir = Vector3.Normalize(dir);
-            }
-
-            stl.CenterDir = dir;
-            stl.FocusDistance = newDistance;
-            stl.CameraPos = orbit.OrbitTarget - (dir * newDistance);
-            return;
-        }
-
-        var oldFocus = Math.Max(0.01f, stl.FocusDistance);
-        var maxFocus = MathF.Max(0.01f, stl.BoundsRadius * 100f);
-        var newFocus = Math.Clamp(oldFocus * factor, 0.01f, maxFocus);
-        if (MathF.Abs(newFocus - oldFocus) < 1e-6f)
-        {
-            return;
-        }
-
-        var forward = stl.CenterDir;
-        if (forward.LengthSquared() < 1e-10f)
-        {
-            forward = new Vector3(0, 0, 1);
-        }
-        else
-        {
-            forward = Vector3.Normalize(forward);
-        }
-
-        stl.CenterDir = forward;
-        stl.CameraPos += forward * (oldFocus - newFocus);
-        stl.FocusDistance = newFocus;
-    }
-
-    private static (Vector3 Right, Vector3 Up, Vector3 Forward) ComputeSceneBasis(Vector3 forward)
-    {
-        if (forward.LengthSquared() < 1e-10f)
-        {
-            forward = new Vector3(0, 0, 1);
-        }
-
-        forward = Vector3.Normalize(forward);
-
-        // Project a reference "up" onto the plane perpendicular to forward.
-        // This avoids discontinuous axis switching when near the poles.
-        var upRef = Vector3.UnitY;
-        var up = upRef - (forward * Vector3.Dot(upRef, forward));
-        if (up.LengthSquared() < 1e-8f)
-        {
-            upRef = Vector3.UnitZ;
-            up = upRef - (forward * Vector3.Dot(upRef, forward));
-            if (up.LengthSquared() < 1e-8f)
-            {
-                upRef = Vector3.UnitX;
-                up = upRef - (forward * Vector3.Dot(upRef, forward));
-            }
-        }
-
-        up = up.LengthSquared() < 1e-10f ? Vector3.UnitY : Vector3.Normalize(up);
-
-        var right = Vector3.Cross(up, forward);
-        right = right.LengthSquared() < 1e-10f ? Vector3.UnitX : Vector3.Normalize(right);
-
-        up = Vector3.Cross(forward, right);
-        up = up.LengthSquared() < 1e-10f ? Vector3.UnitY : Vector3.Normalize(up);
-
-        // Use a stable right-handed basis: right = up × forward, up = forward × right.
-        return (right, up, forward);
-    }
-
-    private static Vector3 ComputeForward(float yaw, float pitch)
-    {
-        var cy = MathF.Cos(yaw);
-        var sy = MathF.Sin(yaw);
-        var cp = MathF.Cos(pitch);
-        var sp = MathF.Sin(pitch);
-        var forward = new Vector3(sy * cp, sp, cy * cp);
-        if (forward.LengthSquared() < 1e-10f)
-        {
-            return new Vector3(0, 0, 1);
-        }
-
-        return Vector3.Normalize(forward);
     }
 
     private static ConsoleDocument CreateDocument(string text)
@@ -1787,7 +1280,7 @@ public sealed class ConsoleHostSession
         public void OpenInspect(InspectKind kind, string path, string title, IBlock viewBlock, string receiptLine)
         {
             _startedBlockingActivity = true;
-            _session.OpenInspect(kind, path, title, viewBlock, receiptLine, _commandEchoId);
+            _session._inspectController.OpenInspect(kind, path, title, viewBlock, receiptLine, _commandEchoId);
         }
 
         public void AttachIndicator(BlockId activityBlockId)
@@ -1814,70 +1307,6 @@ public sealed class ConsoleHostSession
             _session._pendingExit = true;
             _session._pendingContentRebuild = true;
         }
-    }
-
-    private void OpenInspect(InspectKind kind, string path, string title, IBlock viewBlock, string receiptLine, BlockId commandEchoId)
-    {
-        if (_activeInspect is not null)
-        {
-            WriteInspectReceiptIfNeeded(_activeInspect);
-        }
-
-        var id = ++_nextInspectEntryId;
-        title = string.IsNullOrWhiteSpace(title) ? Path.GetFileName(path) : title;
-        var entry = new InspectEntry(id, kind, path, title, viewBlock, commandEchoId, receiptLine ?? string.Empty);
-        _inspectHistory.Add(entry);
-        _activeInspect = entry;
-
-        _inspectScene3DCapture = null;
-        _inspectScene3DMouseFocus = null;
-        _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
-
-        // InspectMode is fullscreen; if the active view is a Scene3D block, it should receive immediate mouse+keyboard navigation
-        // without requiring a prior click to "arm" focus (there is no underlying transcript interaction to protect here).
-        if (viewBlock is IMouseFocusableViewportBlock focusable)
-        {
-            focusable.HasMouseFocus = true;
-        }
-
-        if (viewBlock is IScene3DViewBlock)
-        {
-            _inspectScene3DMouseFocus = viewBlock.Id;
-        }
-
-        _pendingContentRebuild = true;
-    }
-
-    private void WriteInspectReceiptIfNeeded(InspectEntry entry)
-    {
-        if (entry.ReceiptWritten)
-        {
-            return;
-        }
-
-        entry.ReceiptWritten = true;
-
-        if (string.IsNullOrWhiteSpace(entry.ReceiptLine))
-        {
-            return;
-        }
-
-        var receiptId = new BlockId(AllocateNewBlockId());
-        // Insert directly after the originating command echo (even if it is the last block at the moment).
-        // `InsertBlockAfter` clamps to keep the shell prompt last, but inspect temporarily removes the prompt.
-        var blocks = _document.Transcript.Blocks;
-        var insertAt = blocks.Count;
-        for (var i = 0; i < blocks.Count; i++)
-        {
-            if (blocks[i].Id == entry.CommandEchoId)
-            {
-                insertAt = i + 1;
-                break;
-            }
-        }
-
-        insertAt = Math.Clamp(insertAt, 0, blocks.Count);
-        _document.Transcript.Insert(insertAt, new TextBlock(receiptId, entry.ReceiptLine, ConsoleTextStream.System));
     }
 
     private void NavigateHistory(BlockId promptId, int delta)
@@ -2379,31 +1808,41 @@ public sealed class ConsoleHostSession
         public bool PendingCR;
     }
 
-    private sealed class InspectEntry
-    {
-        public InspectEntry(int id, InspectKind kind, string path, string title, IBlock view, BlockId commandEchoId, string receiptLine)
-        {
-            Id = id;
-            Kind = kind;
-            Path = path;
-            Title = title;
-            View = view;
-            CommandEchoId = commandEchoId;
-            ReceiptLine = receiptLine;
-        }
-
-        public int Id { get; }
-        public InspectKind Kind { get; }
-        public string Path { get; }
-        public string Title { get; }
-        public IBlock View { get; }
-        public BlockId CommandEchoId { get; }
-        public string ReceiptLine { get; }
-        public bool ReceiptWritten { get; set; }
-    }
-
     private readonly record struct JobPromptRef(JobId JobId, long PromptId);
     private readonly record struct OwnedPromptRef(long PromptId);
+
+    private sealed class InspectHostAdapter : IInspectHost
+    {
+        private readonly ConsoleHostSession _session;
+
+        public InspectHostAdapter(ConsoleHostSession session)
+        {
+            _session = session;
+        }
+
+        public ConsoleDocument Document => _session._document;
+        public IConsoleFont Font => _session._font;
+        public ConsoleRenderer Renderer => _session._renderer;
+        public SelectionStyle SelectionStyle => _session._selectionStyle;
+        public IReadOnlyList<IBlock> TranscriptBlocks => _session._document.Transcript.Blocks;
+
+        public void InsertTranscriptBlock(int index, IBlock block)
+        {
+            var blocks = _session._document.Transcript.Blocks;
+            var insertAt = Math.Clamp(index, 0, blocks.Count);
+            _session._document.Transcript.Insert(insertAt, block);
+        }
+
+        public BlockId AllocateBlockId() => new(_session.AllocateNewBlockId());
+
+        public void HandleFileDrop(string path) => _session.HandleFileDrop(path);
+
+        public void RequestContentRebuild() => _session._pendingContentRebuild = true;
+
+        public IReadOnlyList<int>? TakePendingMeshReleases() => _session.TakePendingMeshReleases();
+
+        public void ClearPendingMeshReleases() => _session.ClearPendingMeshReleases();
+    }
 
     private void QueueMeshReleasesForAllBlocks()
     {
@@ -2709,40 +2148,6 @@ public sealed class ConsoleHostSession
             : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
 
         return Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
-    }
-
-    private abstract record PendingEvent
-    {
-        public sealed record Text(char Ch) : PendingEvent;
-
-        public sealed record Key(HostKey KeyCode, HostKeyModifiers Mods, bool IsDown) : PendingEvent;
-
-        public sealed record Mouse(HostMouseEvent Event) : PendingEvent;
-
-        public sealed record FileDrop(string Path) : PendingEvent;
-    }
-
-    private enum Scene3DDragMode
-    {
-        Orbit,
-        Pan
-    }
-
-    private readonly record struct Scene3DCapture(
-        BlockId BlockId,
-        HostMouseButtons Button,
-        Scene3DDragMode Mode,
-        int LastX,
-        int LastY);
-
-    [Flags]
-    private enum Scene3DNavKeys
-    {
-        None = 0,
-        W = 1 << 0,
-        A = 1 << 1,
-        S = 1 << 2,
-        D = 1 << 3
     }
 
     private sealed record JobProjection(BlockId HeaderId, BlockId LastId);

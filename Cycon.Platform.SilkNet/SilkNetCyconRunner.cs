@@ -314,6 +314,7 @@ public static class SilkNetCyconRunner
             Key.A => HostKey.A,
             Key.S => HostKey.S,
             Key.D => HostKey.D,
+            Key.Q => HostKey.Q,
             _ => HostKey.Unknown
         };
     }

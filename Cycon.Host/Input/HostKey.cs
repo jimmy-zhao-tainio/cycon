@@ -16,5 +16,6 @@ public enum HostKey
     W,
     A,
     S,
-    D
+    D,
+    Q
 }
