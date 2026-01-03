@@ -49,7 +49,7 @@ public sealed class ConsoleRenderer
         var indicatorsSettings = document.Settings.Indicators;
         var indicatedCommandBlocks = new HashSet<BlockId>();
 
-        var canvas = new RenderCanvas(frame);
+        var canvas = new RenderCanvas(frame, font);
         var nextSceneViewportIndex = 0;
 
         CaretPass.CaretQuad? pendingCaret = null;

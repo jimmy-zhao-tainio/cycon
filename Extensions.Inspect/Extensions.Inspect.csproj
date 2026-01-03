@@ -4,6 +4,7 @@
     <ProjectReference Include="..\Cycon.BlockCommands\Cycon.BlockCommands.csproj" />
     <ProjectReference Include="..\Cycon.Commands\Cycon.Commands.csproj" />
     <ProjectReference Include="..\Cycon.Core\Cycon.Core.csproj" />
+    <ProjectReference Include="..\Cycon.Host\Cycon.Host.csproj" />
     <ProjectReference Include="..\Cycon.Render.Abstractions\Cycon.Render.Abstractions.csproj" />
   </ItemGroup>
 
@@ -14,4 +15,3 @@
   </PropertyGroup>
 
 </Project>
-

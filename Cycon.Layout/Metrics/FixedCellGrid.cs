@@ -53,7 +53,8 @@ public readonly struct FixedCellGrid
 
         var borderX = Math.Max(0, settings.BorderLeftRightPx);
         var borderY = Math.Max(0, settings.BorderTopBottomPx);
-        var availableWidth = Math.Max(0, viewport.FramebufferWidthPx - (borderX * 2));
+        var rightGutter = Math.Max(0, settings.RightGutterPx);
+        var availableWidth = Math.Max(0, viewport.FramebufferWidthPx - (borderX * 2) - rightGutter);
         var availableHeight = Math.Max(0, viewport.FramebufferHeightPx - (borderY * 2));
 
         var cols = settings.CellWidthPx > 0 ? availableWidth / settings.CellWidthPx : 0;
@@ -67,7 +68,7 @@ public readonly struct FixedCellGrid
 
         var paddingLeft = borderX;
         var paddingTop = borderY;
-        var paddingRight = borderX + leftoverX;
+        var paddingRight = borderX + rightGutter + leftoverX;
         var paddingBottom = borderY + leftoverY;
 
         return new FixedCellGrid(

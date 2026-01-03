@@ -107,6 +107,7 @@ public sealed class ConsoleHostSession
     private int _lastTraceBuiltFbH = -1;
     private bool _lastTraceShouldRebuild;
     private Scene3DCapture? _scene3DCapture;
+    private BlockId? _viewportPointerCapture;
     private BlockId? _scene3DMouseFocus;
     private Scene3DNavKeys _scene3DNavKeysDown;
 
@@ -132,6 +133,7 @@ public sealed class ConsoleHostSession
         _layoutSettings.PaddingPolicy = PaddingPolicy.None;
         _layoutSettings.BorderLeftRightPx = 5;
         _layoutSettings.BorderTopBottomPx = 3;
+        _layoutSettings.RightGutterPx = _document.Settings.Scrollbar.ThicknessPx;
 
         _atlasData = _font.Atlas;
         _renderer = new ConsoleRenderer();
@@ -667,11 +669,64 @@ public sealed class ConsoleHostSession
                 var mouseEvent = mouseRaw.Event;
                 var viewportRectPx = new PxRect(0, 0, _latestFramebufferWidth, _latestFramebufferHeight);
 
+                if (_viewportPointerCapture is { } capturedId &&
+                    mouseEvent.Kind is HostMouseEventKind.Move or HostMouseEventKind.Up)
+                {
+                    var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
+                    var viewports = _lastLayout.Scene3DViewports;
+                    Scene3DViewportLayout? capturedViewport = null;
+                    for (var vi = 0; vi < viewports.Count; vi++)
+                    {
+                        if (viewports[vi].BlockId == capturedId)
+                        {
+                            capturedViewport = viewports[vi];
+                            break;
+                        }
+                    }
+
+                    if (capturedViewport is null || !TryGetBlock(capturedId, out var capturedBlock) || capturedBlock is not IBlockPointerHandler pointerHandler)
+                    {
+                        _viewportPointerCapture = null;
+                    }
+                    else
+                    {
+                        var rect = capturedViewport.Value.ViewportRectPx;
+                        var viewportRectScreen = new PxRect(rect.X, rect.Y - (scrollOffsetRows * _font.Metrics.CellHeightPx), rect.Width, rect.Height);
+                        if (pointerHandler.HandlePointer(mouseEvent, viewportRectScreen))
+                        {
+                            _pendingContentRebuild = true;
+                        }
+
+                        if (mouseEvent.Kind == HostMouseEventKind.Up)
+                        {
+                            _viewportPointerCapture = null;
+                        }
+
+                        continue;
+                    }
+                }
+
                 if (mouseEvent.Kind == HostMouseEventKind.Wheel)
                 {
                     if (HandleScene3DMouse(mouseEvent))
                     {
                         continue;
+                    }
+
+                    var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
+                    var contentY = mouseEvent.Y + (scrollOffsetRows * _font.Metrics.CellHeightPx);
+                    var viewportHit = FindSceneViewportAt(mouseEvent.X, contentY, _lastLayout.Scene3DViewports);
+                    if (viewportHit is not null &&
+                        TryGetBlock(viewportHit.Value.BlockId, out var viewportBlock) &&
+                        viewportBlock is IBlockWheelHandler wheelHandler)
+                    {
+                        var rect = viewportHit.Value.ViewportRectPx;
+                        var viewportRectScreen = new PxRect(rect.X, rect.Y - (scrollOffsetRows * _font.Metrics.CellHeightPx), rect.Width, rect.Height);
+                        if (wheelHandler.HandleWheel(mouseEvent, viewportRectScreen))
+                        {
+                            _pendingContentRebuild = true;
+                            continue;
+                        }
                     }
 
                     if (!_document.Scroll.ScrollbarUi.IsDragging && _interaction.Snapshot.MouseCaptured is not null)
@@ -708,6 +763,27 @@ public sealed class ConsoleHostSession
                                 (mouseEvent.Kind == HostMouseEventKind.Move && _document.Scroll.ScrollbarUi.IsDragging))
                             {
                                 _pendingContentRebuild = true;
+                            }
+                            continue;
+                        }
+                    }
+
+                    var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
+                    var contentY = mouseEvent.Y + (scrollOffsetRows * _font.Metrics.CellHeightPx);
+                    var viewportHit = FindSceneViewportAt(mouseEvent.X, contentY, _lastLayout.Scene3DViewports);
+                    if (viewportHit is not null &&
+                        TryGetBlock(viewportHit.Value.BlockId, out var viewportBlock) &&
+                        viewportBlock is IBlockPointerHandler pointerHandler)
+                    {
+                        var rect = viewportHit.Value.ViewportRectPx;
+                        var viewportRectScreen = new PxRect(rect.X, rect.Y - (scrollOffsetRows * _font.Metrics.CellHeightPx), rect.Width, rect.Height);
+                        if (pointerHandler.HandlePointer(mouseEvent, viewportRectScreen))
+                        {
+                            _pendingContentRebuild = true;
+                            if (mouseEvent.Kind == HostMouseEventKind.Down &&
+                                viewportBlock is IBlockPointerCaptureState { HasPointerCapture: true })
+                            {
+                                _viewportPointerCapture = viewportHit.Value.BlockId;
                             }
                             continue;
                         }

@@ -8,6 +8,7 @@ public sealed class LayoutSettings
 
     public int BorderLeftRightPx { get; set; }
     public int BorderTopBottomPx { get; set; }
+    public int RightGutterPx { get; set; }
 
     public int BorderPx
     {

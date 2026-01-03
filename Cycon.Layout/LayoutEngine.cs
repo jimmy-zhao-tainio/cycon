@@ -30,7 +30,7 @@ public sealed class LayoutEngine
                 var desiredHeight = (int)Math.Round(grid.ContentWidthPx / (16.0 / 9.0));
                 if (block is IMeasureBlock measure)
                 {
-                    desiredHeight = Math.Max(1, measure.Measure(new BlockMeasureContext(grid.ContentWidthPx, grid.CellHeightPx)).HeightPx);
+                    desiredHeight = Math.Max(1, measure.Measure(new BlockMeasureContext(grid.ContentWidthPx, grid.CellWidthPx, grid.CellHeightPx, grid.Rows)).HeightPx);
                 }
 
                 var maxHeight = Math.Max(grid.CellHeightPx, grid.ContentHeightPx - (grid.CellHeightPx * 2));

@@ -35,4 +35,6 @@ public interface IRenderCanvas
         in Scene3DRenderSettings settings);
 
     void DrawVignette(in RectPx rectPx, float strength01, float inner, float outer);
+
+    void DrawText(string text, int start, int length, int xPx, int yPx, int rgba);
 }

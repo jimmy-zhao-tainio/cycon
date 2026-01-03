@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Numerics;
+using Cycon.Core.Fonts;
 using Cycon.Render;
 using Cycon.Rendering.Commands;
 
@@ -8,10 +9,12 @@ namespace Cycon.Rendering.Renderer;
 internal sealed class RenderCanvas : IRenderCanvas
 {
     private readonly RenderFrame _frame;
+    private readonly IConsoleFont _font;
 
-    public RenderCanvas(RenderFrame frame)
+    public RenderCanvas(RenderFrame frame, IConsoleFont font)
     {
         _frame = frame;
+        _font = font;
     }
 
     public void SetCullState(bool enabled, bool frontFaceCcw) =>
@@ -55,6 +58,49 @@ internal sealed class RenderCanvas : IRenderCanvas
 
     public void DrawVignette(in RectPx rectPx, float strength01, float inner, float outer) =>
         _frame.Add(new DrawVignetteQuad(rectPx.X, rectPx.Y, rectPx.Width, rectPx.Height, strength01, inner, outer));
+
+    public void DrawText(string text, int start, int length, int xPx, int yPx, int rgba)
+    {
+        if (string.IsNullOrEmpty(text) || length <= 0 || start < 0 || start >= text.Length)
+        {
+            return;
+        }
+
+        length = Math.Min(length, text.Length - start);
+        if (length <= 0)
+        {
+            return;
+        }
+
+        var metrics = _font.Metrics;
+        var baselineY = yPx + metrics.BaselinePx;
+        var glyphs = new List<GlyphInstance>(length);
+
+        for (var i = 0; i < length; i++)
+        {
+            var ch = text[start + i];
+            if (ch is '\r' or '\n')
+            {
+                continue;
+            }
+
+            if (ch < 32 && ch != '\t')
+            {
+                ch = ' ';
+            }
+
+            var glyph = _font.MapGlyph(ch);
+            var cellX = xPx + (i * metrics.CellWidthPx);
+            var glyphX = cellX + glyph.BearingX;
+            var glyphY = baselineY - glyph.BearingY;
+            glyphs.Add(new GlyphInstance(glyph.Codepoint, glyphX, glyphY, rgba));
+        }
+
+        if (glyphs.Count > 0)
+        {
+            _frame.Add(new DrawGlyphRun(0, 0, glyphs));
+        }
+    }
 
     private static DepthFuncKind Map(DepthFunc func) =>
         func switch

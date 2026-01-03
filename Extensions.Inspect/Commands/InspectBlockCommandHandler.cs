@@ -4,9 +4,9 @@ using Cycon.BlockCommands;
 using Cycon.Commands;
 using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
-using Cycon.Core.Transcript.Blocks;
 using Extensions.Inspect.Blocks;
 using Extensions.Inspect.Stl;
+using Extensions.Inspect.Text;
 
 namespace Extensions.Inspect.Commands;
 
@@ -48,6 +48,22 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
             catch (Exception ex)
             {
                 ctx.InsertTextAfterCommandEcho($"STL load failed: {ex.Message}", ConsoleTextStream.System);
+                InsertInspector(ctx, file);
+            }
+
+            return true;
+        }
+
+        if (TextSniffer.LooksLikeTextFile(fullPath))
+        {
+            try
+            {
+                var blockId = ctx.AllocateBlockId();
+                ctx.InsertBlockAfterCommandEcho(new InspectTextBlock(blockId, fullPath));
+            }
+            catch (Exception ex)
+            {
+                ctx.InsertTextAfterCommandEcho($"Text load failed: {ex.Message}", ConsoleTextStream.System);
                 InsertInspector(ctx, file);
             }
 
