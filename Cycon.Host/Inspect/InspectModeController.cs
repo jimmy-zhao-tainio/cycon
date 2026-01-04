@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Numerics;
+using System.Diagnostics;
 using Cycon.BlockCommands;
 using Cycon.Core.Settings;
 using Cycon.Core.Styling;
@@ -17,6 +18,8 @@ namespace Cycon.Host.Inspect;
 
 internal sealed class InspectModeController
 {
+    private const float MouseDeltaClampPx = 200f;
+
     private readonly IInspectHost _host;
     private readonly List<InspectEntry> _inspectHistory = new();
     private int _nextInspectEntryId;
@@ -24,6 +27,9 @@ internal sealed class InspectModeController
     private Scene3DCapture? _inspectScene3DCapture;
     private BlockId? _inspectScene3DMouseFocus;
     private Scene3DNavKeys _inspectScene3DNavKeysDown;
+    private int _lastScene3DMouseX;
+    private int _lastScene3DMouseY;
+    private bool _hasScene3DMousePos;
 
     public InspectModeController(IInspectHost host)
     {
@@ -48,9 +54,11 @@ internal sealed class InspectModeController
         _inspectScene3DCapture = null;
         _inspectScene3DMouseFocus = null;
         _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
+        _hasScene3DMousePos = false;
 
-        // InspectMode is fullscreen; if the active view is a Scene3D block, it should receive immediate mouse+keyboard navigation
-        // without requiring a prior click to "arm" focus (there is no underlying transcript interaction to protect here).
+        // NOTE: If drag mysteriously needs a priming click again,
+        // check Windows keyboard/trackpad/trackpoint delay settings.
+        // Yes, this has happened before. More than once.
         if (viewBlock is IMouseFocusableViewportBlock focusable)
         {
             focusable.HasMouseFocus = true;
@@ -225,7 +233,18 @@ internal sealed class InspectModeController
         {
             var scale = stl.FocusDistance * settings.KeyboardPanSpeed * dtSeconds;
             var sign = settings.InvertPanX ? -1f : 1f;
-            stl.CameraPos += (pan * scale * sign) * right;
+            var delta = (pan * scale * sign) * right;
+
+            if (stl is IScene3DOrbitBlock orbit && orbit.NavigationMode == Scene3DNavigationMode.Orbit)
+            {
+                orbit.OrbitTarget += delta;
+                stl.CameraPos += delta;
+            }
+            else
+            {
+                stl.CameraPos += delta;
+            }
+
             didAnything = true;
         }
 
@@ -300,14 +319,68 @@ internal sealed class InspectModeController
             e.X < viewportRectPx.X + viewportRectPx.Width &&
             e.Y < viewportRectPx.Y + viewportRectPx.Height;
 
+        var nowTicks = Stopwatch.GetTimestamp();
+
         if (_inspectScene3DCapture is { } capture)
         {
             switch (e.Kind)
             {
                 case HostMouseEventKind.Move:
-                    ApplySceneDrag(stl, _host.Document.Settings.Scene3D, capture.Mode, capture.LastX, capture.LastY, e.X, e.Y);
-                    _inspectScene3DCapture = capture with { LastX = e.X, LastY = e.Y };
+                {
+                    var settings = _host.Document.Settings.Scene3D;
+                    var dtSeconds = (float)((nowTicks - capture.LastTicks) / (double)Stopwatch.Frequency);
+                    dtSeconds = Math.Clamp(dtSeconds, 1f / 500f, 1f / 15f);
+
+                    // Orbit blocks already track yaw/pitch explicitly; keep position-based smoothing there.
+                    // Freefly look uses derived yaw/pitch, so smooth the raw deltas for responsiveness (delta-EMA).
+                    var isOrbitMode = stl is IScene3DOrbitBlock orbit && orbit.NavigationMode == Scene3DNavigationMode.Orbit;
+                    var isFreeflyLook = !isOrbitMode && capture.Mode == Scene3DDragMode.Orbit;
+
+                    if (isFreeflyLook)
+                    {
+                        var rawDx = Math.Clamp(e.X - capture.LastX, -MouseDeltaClampPx, MouseDeltaClampPx);
+                        var rawDy = Math.Clamp(e.Y - capture.LastY, -MouseDeltaClampPx, MouseDeltaClampPx);
+
+                        var tau = Math.Clamp(settings.FreeflyLookTauSeconds, 0.001f, 0.25f);
+                        var alpha = 1f - MathF.Exp(-dtSeconds / tau);
+
+                        var smoothedDx = Lerp(capture.SmoothedDx, rawDx, alpha);
+                        var smoothedDy = Lerp(capture.SmoothedDy, rawDy, alpha);
+
+                        if (MathF.Abs(smoothedDx) + MathF.Abs(smoothedDy) <= 0.05f)
+                        {
+                            _inspectScene3DCapture = capture with { LastX = e.X, LastY = e.Y, LastTicks = nowTicks, SmoothedDx = smoothedDx, SmoothedDy = smoothedDy };
+                            return true;
+                        }
+
+                        ApplySceneDragDelta(stl, settings, capture.Mode, smoothedDx, smoothedDy);
+                        _inspectScene3DCapture = capture with { LastX = e.X, LastY = e.Y, LastTicks = nowTicks, SmoothedDx = smoothedDx, SmoothedDy = smoothedDy };
+                        return true;
+                    }
+
+                    {
+                        var tau = Math.Clamp(settings.MouseSmoothingTauSeconds, 0.001f, 0.50f);
+                        var alpha = 1f - MathF.Exp(-dtSeconds / tau);
+
+                        var rawX = (float)e.X;
+                        var rawY = (float)e.Y;
+                        var smoothedX = Lerp(capture.SmoothedX, rawX, alpha);
+                        var smoothedY = Lerp(capture.SmoothedY, rawY, alpha);
+
+                        var dx = Math.Clamp(smoothedX - capture.SmoothedX, -MouseDeltaClampPx, MouseDeltaClampPx);
+                        var dy = Math.Clamp(smoothedY - capture.SmoothedY, -MouseDeltaClampPx, MouseDeltaClampPx);
+
+                        if (MathF.Abs(dx) + MathF.Abs(dy) <= 0.05f)
+                        {
+                            _inspectScene3DCapture = capture with { LastX = e.X, LastY = e.Y, LastTicks = nowTicks, SmoothedX = smoothedX, SmoothedY = smoothedY };
+                            return true;
+                        }
+
+                        ApplySceneDragDelta(stl, settings, capture.Mode, dx, dy);
+                        _inspectScene3DCapture = capture with { LastX = e.X, LastY = e.Y, LastTicks = nowTicks, SmoothedX = smoothedX, SmoothedY = smoothedY };
+                    }
                     return true;
+                }
                 case HostMouseEventKind.Up when (e.Buttons & capture.Button) != 0:
                     _inspectScene3DCapture = null;
                     return true;
@@ -338,6 +411,54 @@ internal sealed class InspectModeController
             return true;
         }
 
+        if (e.Kind == HostMouseEventKind.Move)
+        {
+            if (!_hasScene3DMousePos)
+            {
+                _lastScene3DMouseX = e.X;
+                _lastScene3DMouseY = e.Y;
+                _hasScene3DMousePos = true;
+            }
+
+            if ((e.Buttons & HostMouseButtons.Left) != 0)
+            {
+                if (stl is IMouseFocusableViewportBlock focusable)
+                {
+                    focusable.HasMouseFocus = true;
+                }
+                _inspectScene3DMouseFocus = stl.Id;
+                if (stl is not IScene3DOrbitBlock { NavigationMode: Scene3DNavigationMode.Orbit })
+                {
+                    // Freefly: start capture without applying an unsmoothed first-frame delta.
+                    _inspectScene3DCapture = new Scene3DCapture(stl.Id, HostMouseButtons.Left, Scene3DDragMode.Orbit, e.X, e.Y, nowTicks, e.X, e.Y, 0f, 0f);
+                }
+                else
+                {
+                    var rawDx = Math.Clamp(e.X - _lastScene3DMouseX, -MouseDeltaClampPx, MouseDeltaClampPx);
+                    var rawDy = Math.Clamp(e.Y - _lastScene3DMouseY, -MouseDeltaClampPx, MouseDeltaClampPx);
+                    ApplySceneDragDelta(stl, _host.Document.Settings.Scene3D, Scene3DDragMode.Orbit, rawDx, rawDy);
+                    _inspectScene3DCapture = new Scene3DCapture(stl.Id, HostMouseButtons.Left, Scene3DDragMode.Orbit, e.X, e.Y, nowTicks, e.X, e.Y, 0f, 0f);
+                }
+                _lastScene3DMouseX = e.X;
+                _lastScene3DMouseY = e.Y;
+                return true;
+            }
+
+            if ((e.Buttons & HostMouseButtons.Right) != 0)
+            {
+                var rawDx = Math.Clamp(e.X - _lastScene3DMouseX, -MouseDeltaClampPx, MouseDeltaClampPx);
+                var rawDy = Math.Clamp(e.Y - _lastScene3DMouseY, -MouseDeltaClampPx, MouseDeltaClampPx);
+                ApplySceneDragDelta(stl, _host.Document.Settings.Scene3D, Scene3DDragMode.Pan, rawDx, rawDy);
+                _inspectScene3DCapture = new Scene3DCapture(stl.Id, HostMouseButtons.Right, Scene3DDragMode.Pan, e.X, e.Y, nowTicks, e.X, e.Y, 0f, 0f);
+                _lastScene3DMouseX = e.X;
+                _lastScene3DMouseY = e.Y;
+                return true;
+            }
+
+            _lastScene3DMouseX = e.X;
+            _lastScene3DMouseY = e.Y;
+        }
+
         if (e.Kind == HostMouseEventKind.Down)
         {
             if ((e.Buttons & HostMouseButtons.Left) != 0)
@@ -347,13 +468,13 @@ internal sealed class InspectModeController
                     focusable.HasMouseFocus = true;
                 }
                 _inspectScene3DMouseFocus = stl.Id;
-                _inspectScene3DCapture = new Scene3DCapture(stl.Id, HostMouseButtons.Left, Scene3DDragMode.Orbit, e.X, e.Y);
+                _inspectScene3DCapture = new Scene3DCapture(stl.Id, HostMouseButtons.Left, Scene3DDragMode.Orbit, e.X, e.Y, nowTicks, e.X, e.Y, 0f, 0f);
                 return true;
             }
 
             if ((e.Buttons & HostMouseButtons.Right) != 0)
             {
-                _inspectScene3DCapture = new Scene3DCapture(stl.Id, HostMouseButtons.Right, Scene3DDragMode.Pan, e.X, e.Y);
+                _inspectScene3DCapture = new Scene3DCapture(stl.Id, HostMouseButtons.Right, Scene3DDragMode.Pan, e.X, e.Y, nowTicks, e.X, e.Y, 0f, 0f);
                 return true;
             }
         }
@@ -378,6 +499,7 @@ internal sealed class InspectModeController
         _inspectScene3DCapture = null;
         _inspectScene3DMouseFocus = null;
         _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
+        _hasScene3DMousePos = false;
         _activeInspect = null;
         _host.RequestContentRebuild();
     }
@@ -414,10 +536,12 @@ internal sealed class InspectModeController
         _host.InsertTranscriptBlock(insertAt, new TextBlock(receiptId, entry.ReceiptLine, ConsoleTextStream.System));
     }
 
-    private static void ApplySceneDrag(IScene3DViewBlock stl, Scene3DSettings settings, Scene3DDragMode mode, int lastX, int lastY, int x, int y)
+    private static void ApplySceneDragDelta(IScene3DViewBlock stl, Scene3DSettings settings, Scene3DDragMode mode, float dx, float dy)
     {
-        var dx = x - lastX;
-        var dy = y - lastY;
+        if (MathF.Abs(dx) + MathF.Abs(dy) <= 1f)
+        {
+            return;
+        }
 
         if (stl is IScene3DOrbitBlock orbit && orbit.NavigationMode == Scene3DNavigationMode.Orbit)
         {
@@ -466,8 +590,9 @@ internal sealed class InspectModeController
             {
                 var yaw = MathF.Atan2(stl.CenterDir.X, stl.CenterDir.Z);
                 var pitch = MathF.Asin(Math.Clamp(stl.CenterDir.Y, -1f, 1f));
-                yaw += dx * settings.OrbitSensitivity * (settings.InvertOrbitX ? -1f : 1f);
-                pitch -= dy * settings.OrbitSensitivity * (settings.InvertOrbitY ? -1f : 1f);
+                var lookSensitivity = settings.FreeflyLookSensitivity;
+                yaw += dx * lookSensitivity * (settings.InvertOrbitX ? -1f : 1f);
+                pitch -= dy * lookSensitivity * (settings.InvertOrbitY ? -1f : 1f);
                 pitch = Math.Clamp(pitch, -1.55f, 1.55f);
                 stl.CenterDir = ComputeForward(yaw, pitch);
                 break;
@@ -482,6 +607,8 @@ internal sealed class InspectModeController
             }
         }
     }
+
+    private static float Lerp(float a, float b, float t) => a + ((b - a) * t);
 
     private static void ApplySceneZoom(IScene3DViewBlock stl, Scene3DSettings settings, int wheelDelta)
     {
@@ -632,7 +759,12 @@ internal sealed class InspectModeController
         HostMouseButtons Button,
         Scene3DDragMode Mode,
         int LastX,
-        int LastY);
+        int LastY,
+        long LastTicks,
+        float SmoothedX,
+        float SmoothedY,
+        float SmoothedDx,
+        float SmoothedDy);
 
     [Flags]
     private enum Scene3DNavKeys

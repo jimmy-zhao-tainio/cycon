@@ -12,6 +12,11 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     private IInputContext? _input;
     private IMouse? _primaryMouse;
     private bool _lastPointerInWindow = true;
+    private bool _havePolledMouse;
+    private int _lastPolledMouseX;
+    private int _lastPolledMouseY;
+    private bool _lastPolledLeftPressed;
+    private bool _lastPolledRightPressed;
     private bool _disposed;
 
     private SilkWindow(Silk.NET.Windowing.IWindow window)
@@ -163,6 +168,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
     private void HandleRender(double deltaTime)
     {
+        PollMouse();
         UpdatePointerInWindow();
         Render?.Invoke(deltaTime);
     }
@@ -215,25 +221,81 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
         foreach (var mouse in input.Mice)
         {
-            mouse.MouseDown += (_, button) =>
-            {
-                var pos = mouse.Position;
-                MouseDown?.Invoke((int)pos.X, (int)pos.Y, button);
-            };
-
-            mouse.MouseUp += (_, button) =>
-            {
-                var pos = mouse.Position;
-                MouseUp?.Invoke((int)pos.X, (int)pos.Y, button);
-            };
-
-            mouse.MouseMove += (_, pos) => MouseMoved?.Invoke((int)pos.X, (int)pos.Y);
             mouse.Scroll += (_, wheel) =>
             {
                 var pos = mouse.Position;
                 var delta = (int)MathF.Round(wheel.Y);
                 MouseWheel?.Invoke((int)pos.X, (int)pos.Y, delta);
             };
+        }
+    }
+
+    private void PollMouse()
+    {
+        var mouse = _primaryMouse;
+        if (mouse is null)
+        {
+            return;
+        }
+
+        var pos = mouse.Position;
+        var x = (int)pos.X;
+        var y = (int)pos.Y;
+
+        if (!_havePolledMouse)
+        {
+            _havePolledMouse = true;
+            _lastPolledMouseX = x;
+            _lastPolledMouseY = y;
+            _lastPolledLeftPressed = mouse.IsButtonPressed(MouseButton.Left);
+            _lastPolledRightPressed = mouse.IsButtonPressed(MouseButton.Right);
+
+            if (_lastPolledLeftPressed)
+            {
+                MouseDown?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Left);
+            }
+
+            if (_lastPolledRightPressed)
+            {
+                MouseDown?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Right);
+            }
+
+            return;
+        }
+
+        if (x != _lastPolledMouseX || y != _lastPolledMouseY)
+        {
+            _lastPolledMouseX = x;
+            _lastPolledMouseY = y;
+            MouseMoved?.Invoke(x, y);
+        }
+
+        var left = mouse.IsButtonPressed(MouseButton.Left);
+        if (left != _lastPolledLeftPressed)
+        {
+            _lastPolledLeftPressed = left;
+            if (left)
+            {
+                MouseDown?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Left);
+            }
+            else
+            {
+                MouseUp?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Left);
+            }
+        }
+
+        var right = mouse.IsButtonPressed(MouseButton.Right);
+        if (right != _lastPolledRightPressed)
+        {
+            _lastPolledRightPressed = right;
+            if (right)
+            {
+                MouseDown?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Right);
+            }
+            else
+            {
+                MouseUp?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Right);
+            }
         }
     }
 

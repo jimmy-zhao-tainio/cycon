@@ -48,10 +48,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private readonly HashSet<int> _loggedFailureTags = new();
     private readonly HashSet<int> _loggedMesh3DStateTags = new();
     private readonly Dictionary<int, Mesh3D> _meshes3D = new();
-    private static readonly bool ResizeTrace =
-        string.Equals(Environment.GetEnvironmentVariable("CYCON_RESIZE_TRACE"), "1", StringComparison.Ordinal);
-    private int _lastTraceViewportW = -1;
-    private int _lastTraceViewportH = -1;
 
     private readonly record struct Mesh3D(uint Vao, uint Vbo, int VertexCount);
 
@@ -152,16 +148,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
         _viewportWidth = framebufferWidth;
         _viewportHeight = framebufferHeight;
         _gl.Viewport(0, 0, (uint)framebufferWidth, (uint)framebufferHeight);
-
-        if (ResizeTrace)
-        {
-            if (_viewportWidth != _lastTraceViewportW || _viewportHeight != _lastTraceViewportH)
-            {
-                _lastTraceViewportW = _viewportWidth;
-                _lastTraceViewportH = _viewportHeight;
-                Console.WriteLine($"[GL] viewport={_viewportWidth}x{_viewportHeight}");
-            }
-        }
 
         if (_initialized)
         {
@@ -508,7 +494,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
         var cullEnabled = _gl.IsEnabled(EnableCap.CullFace);
         var frontFace = _gl.GetInteger(GLEnum.FrontFace);
         var frontFaceStr = frontFace == 0x0901 ? "CCW" : frontFace == 0x0900 ? "CW" : $"0x{frontFace:X}";
-        Console.WriteLine($"[STL-GL] tag={tag} depthTest={depthTest} depthFunc={depthFuncStr} cull={cullEnabled} frontFace={frontFaceStr} mode={stlDebugMode}");
     }
 
     private void CheckGlError(string stage)
@@ -684,7 +669,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
                 var vp = new int[4];
                 _gl.GetInteger(GLEnum.Viewport, vp);
                 var aspect = vp[3] == 0 ? 0.0 : vp[2] / (double)vp[3];
-                Console.WriteLine($"[STL-VP] tag={tag} rect={rect.X},{rect.Y},{rect.Width},{rect.Height} glViewport={vp[0]},{vp[1]},{vp[2]},{vp[3]} aspect={aspect:0.####}");
             }
             catch
             {

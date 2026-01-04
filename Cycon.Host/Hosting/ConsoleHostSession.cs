@@ -17,8 +17,6 @@ using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Host.Commands;
-using Cycon.Host.Commands.Input;
-using Cycon.Host.Commands.Blocks;
 using Cycon.Host.Commands.Handlers;
 using Cycon.Host.Inspect;
 using Cycon.Host.Interaction;
@@ -38,11 +36,6 @@ namespace Cycon.Host.Hosting;
 
 public sealed class ConsoleHostSession : IBlockCommandSession
 {
-    private static readonly bool ResizeTrace =
-        string.Equals(Environment.GetEnvironmentVariable("CYCON_RESIZE_TRACE"), "1", StringComparison.Ordinal);
-
-    private readonly int _resizeSettleMs;
-    private readonly int _rebuildThrottleMs;
 
     private readonly ConsoleDocument _document;
     private readonly LayoutSettings _layoutSettings;
@@ -57,11 +50,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private readonly PendingEventQueue _pendingEventQueue = new();
     private readonly JobScheduler _jobScheduler;
     private readonly CommandDispatcher _commandDispatcher;
-    private readonly BlockCommandRegistry _blockCommands;
-    private readonly InputPreprocessorRegistry _inputPreprocessors = new();
     private readonly CommandSubmissionService _commandSubmission;
     private readonly JobProjectionService _jobProjectionService;
     private readonly JobEventApplier _jobEventApplier;
+    private readonly CommandHost _commandHost;
+    private readonly CommandHostViewAdapter _commandHostView;
     private readonly string _defaultPromptText;
     private readonly PromptLifecycle _promptLifecycle;
     private readonly Dictionary<BlockId, BlockId> _commandIndicators = new();
@@ -69,8 +62,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private readonly Dictionary<BlockId, BlockId> _visibleCommandIndicators = new();
     private readonly List<int> _pendingMesh3DReleases = new();
     private readonly HashSet<int> _pendingMesh3DReleaseSet = new();
-    private readonly InputHistory _history;
-    private readonly InputCompletionController _completion;
+    private readonly ResizeCoordinator _resizeCoordinator;
     private bool _pendingExit;
 
     private readonly ScrollbarController _scrollbarController;
@@ -78,30 +70,13 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
-    private GridSize _renderedGrid;
-    private int _lastBuiltFramebufferWidth;
-    private int _lastBuiltFramebufferHeight;
-    private bool _pendingResizeRebuild;
-    private bool _resizeVsyncDisabled;
-    private long _lastRebuildTicks;
-    private int _latestFramebufferWidth;
-    private int _latestFramebufferHeight;
-    private long _lastFramebufferChangeTicks;
-    private GridSize _latestGrid;
-    private long _lastGridChangeTicks;
     private bool _initialized;
-    private bool? _pendingSetVSync;
     private bool _pendingContentRebuild;
     private byte _lastCaretAlpha = 0xFF;
     private long _lastCaretRenderTicks;
     private int _lastSpinnerFrameIndex = -1;
     private long _lastTickTicks;
     private int _tickIndex;
-    private int _lastTraceCurFbW = -1;
-    private int _lastTraceCurFbH = -1;
-    private int _lastTraceBuiltFbW = -1;
-    private int _lastTraceBuiltFbH = -1;
-    private bool _lastTraceShouldRebuild;
 
     private ConsoleHostSession(
         string text,
@@ -110,11 +85,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         int rebuildThrottleMs,
         Action<BlockCommandRegistry>? configureBlockCommands)
     {
-        _resizeSettleMs = resizeSettleMs;
-        _rebuildThrottleMs = rebuildThrottleMs;
-
         _clipboard = clipboard;
-        _history = InputHistory.LoadDefault();
         _document = CreateDocument(text);
         _interaction.Initialize(_document.Transcript);
         SetCaretToEndOfLastPrompt(_document.Transcript);
@@ -144,18 +115,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             cwdProvider: () => Directory.GetCurrentDirectory(),
             envProvider: static () => new Dictionary<string, string>());
 
-        _blockCommands = new BlockCommandRegistry();
-        _blockCommands.RegisterCore(new HelpBlockCommandHandler(_blockCommands));
-        _blockCommands.RegisterCore(new EchoBlockCommandHandler());
-        _blockCommands.RegisterCore(new AskBlockCommandHandler());
-        _blockCommands.RegisterCore(new ClearBlockCommandHandler());
-        _blockCommands.RegisterCore(new ExitBlockCommandHandler());
-        _blockCommands.RegisterCore(new WaitBlockCommandHandler());
-        _blockCommands.RegisterCore(new ProgressBlockCommandHandler());
-        configureBlockCommands?.Invoke(_blockCommands);
-
-        _completion = new InputCompletionController(new CommandCompletionProvider(_blockCommands));
-        _commandSubmission = new CommandSubmissionService(_blockCommands, _inputPreprocessors);
+        _commandHost = new CommandHost(configureBlockCommands);
+        _commandHostView = new CommandHostViewAdapter(this);
+        _commandSubmission = new CommandSubmissionService(_commandHost.BlockCommands, _commandHost.InputPreprocessors);
         _jobProjectionService = new JobProjectionService(
             _document,
             AllocateNewBlockId,
@@ -171,6 +133,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _scrollbarController = new ScrollbarController(_document, _layoutSettings);
         _inspectController = new InspectModeController(new InspectHostAdapter(this));
         _renderPipeline = new RenderPipeline(_layoutEngine, _renderer, _font, _selectionStyle);
+        _resizeCoordinator = new ResizeCoordinator(resizeSettleMs, rebuildThrottleMs, _layoutSettings);
     }
 
     public static ConsoleHostSession CreateVga(
@@ -234,19 +197,19 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     public void Initialize(int initialFbW, int initialFbH)
     {
-        _latestFramebufferWidth = initialFbW;
-        _latestFramebufferHeight = initialFbH;
-        _latestGrid = ComputeGrid(_latestFramebufferWidth, _latestFramebufferHeight, _layoutSettings);
         var nowTicks = Stopwatch.GetTimestamp();
-        _lastFramebufferChangeTicks = nowTicks;
-        _lastGridChangeTicks = nowTicks;
+        _resizeCoordinator.Initialize(initialFbW, initialFbH, nowTicks);
         _initialized = true;
     }
 
     public void OnFramebufferResized(int fbW, int fbH)
     {
         var nowTicks = Stopwatch.GetTimestamp();
-        HandleFramebufferChanged(fbW, fbH, nowTicks);
+        var result = _resizeCoordinator.OnFramebufferResized(fbW, fbH, nowTicks, _lastLayout);
+        if (result.CaptureAnchor && _lastLayout is not null)
+        {
+            ScrollAnchoring.CaptureAnchor(_document.Scroll, _lastLayout);
+        }
     }
 
     public FrameTickResult Tick()
@@ -263,21 +226,19 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             : (int)Math.Clamp((nowTicks - _lastTickTicks) * 1000.0 / Stopwatch.Frequency, 0, 250);
         _lastTickTicks = nowTicks;
 
-        var framebufferWidth = _latestFramebufferWidth;
-        var framebufferHeight = _latestFramebufferHeight;
+        var resizeSnapshot = _resizeCoordinator.GetLatestSnapshot();
+        var framebufferWidth = resizeSnapshot.FramebufferWidth;
+        var framebufferHeight = resizeSnapshot.FramebufferHeight;
         var pendingEvents = DequeuePendingEvents();
+        var resizePlan = _resizeCoordinator.PlanForTick(
+            nowTicks,
+            _lastFrame is not null,
+            _lastFrame?.BuiltGrid ?? default,
+            _pendingContentRebuild);
 
-        var elapsedSinceFramebufferChangeMs = (nowTicks - _lastFramebufferChangeTicks) * 1000.0 / Stopwatch.Frequency;
-        var framebufferSettled = elapsedSinceFramebufferChangeMs >= _resizeSettleMs;
-        if (framebufferSettled)
+        if (resizePlan.ClearTopAnchor)
         {
             _document.Scroll.TopVisualLineAnchor = null;
-
-            if (_resizeVsyncDisabled)
-            {
-                _pendingSetVSync = true;
-                _resizeVsyncDisabled = false;
-            }
         }
 
         if (_inspectController.IsActive)
@@ -290,8 +251,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 var timeSecondsInspect = nowTicks / (double)Stopwatch.Frequency;
                 var inspectFrame = _inspectController.BuildInspectFrame(framebufferWidth, framebufferHeight, timeSecondsInspect);
                 var backendInspectFrame = RenderFrameAdapter.Adapt(inspectFrame);
-                var setVSyncInspect = _pendingSetVSync;
-                _pendingSetVSync = null;
+                var setVSyncInspect = _resizeCoordinator.ConsumeVSyncRequest();
                 var requestExitInspect = _pendingExit;
                 _pendingExit = false;
                 return new FrameTickResult(framebufferWidth, framebufferHeight, backendInspectFrame, OverlayFrame: null, setVSyncInspect, requestExitInspect);
@@ -308,58 +268,26 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         UpdateVisibleCommandIndicators(nowTicks);
         EnsureShellPromptAtEndIfNeeded();
 
-        var currentGrid = _latestGrid;
-
-        var elapsedSinceGridChangeMs = (nowTicks - _lastGridChangeTicks) * 1000.0 / Stopwatch.Frequency;
-        var gridSettled = elapsedSinceGridChangeMs >= _resizeSettleMs;
+        var currentGrid = resizePlan.CurrentGrid;
 
         var caretAlphaNow = ComputeCaretAlpha(nowTicks);
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
 
         var renderedGrid = _lastFrame?.BuiltGrid ?? default;
+        var gridMismatch = resizePlan.GridMismatch;
+        var framebufferMismatch = resizePlan.FramebufferMismatch;
+        var shouldRebuild = resizePlan.ShouldRebuild;
 
-        var gridMismatch = _lastFrame is null || renderedGrid != currentGrid;
-        if (gridMismatch) _pendingResizeRebuild = true;
-
-        var framebufferMismatch = _lastFrame is null
-            || _lastBuiltFramebufferWidth != framebufferWidth
-            || _lastBuiltFramebufferHeight != framebufferHeight;
-
-        var elapsedSinceRebuildMs = (nowTicks - _lastRebuildTicks) * 1000.0 / Stopwatch.Frequency;
-        var shouldRebuild = _lastFrame is null
-            || _pendingContentRebuild
-            || (_pendingResizeRebuild && gridMismatch)
-            || (gridMismatch && (gridSettled || elapsedSinceRebuildMs >= _rebuildThrottleMs))
-            || (framebufferMismatch && (framebufferSettled || elapsedSinceRebuildMs >= _rebuildThrottleMs));
-
-        if (ResizeTrace)
-        {
-            var traceCurChanged = framebufferWidth != _lastTraceCurFbW || framebufferHeight != _lastTraceCurFbH;
-            var traceBuiltChanged = _lastBuiltFramebufferWidth != _lastTraceBuiltFbW || _lastBuiltFramebufferHeight != _lastTraceBuiltFbH;
-            var traceRebuildFlip = shouldRebuild != _lastTraceShouldRebuild;
-            var traceMismatch = framebufferMismatch || gridMismatch;
-            if (traceCurChanged || traceBuiltChanged || traceRebuildFlip || traceMismatch)
-            {
-                _lastTraceCurFbW = framebufferWidth;
-                _lastTraceCurFbH = framebufferHeight;
-                _lastTraceBuiltFbW = _lastBuiltFramebufferWidth;
-                _lastTraceBuiltFbH = _lastBuiltFramebufferHeight;
-                _lastTraceShouldRebuild = shouldRebuild;
-                var builtGrid = _lastFrame?.BuiltGrid ?? default;
-                Console.WriteLine(
-                    $"[HOST] f={_tickIndex} builtFb={_lastBuiltFramebufferWidth}x{_lastBuiltFramebufferHeight} curFb={framebufferWidth}x{framebufferHeight} builtGrid={builtGrid.Cols}x{builtGrid.Rows} curGrid={currentGrid.Cols}x{currentGrid.Rows} shouldRebuild={shouldRebuild}");
-            }
-        }
 
         if (shouldRebuild)
         {
-            var restoreAnchor = _pendingResizeRebuild;
+            var restoreAnchor = resizePlan.PendingResizeRebuild;
 
             var snapW = framebufferWidth;
             var snapH = framebufferHeight;
             var snapGrid = currentGrid;
 
-            var rebuildPasses = gridSettled && gridMismatch ? 2 : 1;
+            var rebuildPasses = resizePlan.RebuildPasses;
             for (var pass = 0; pass < rebuildPasses; pass++)
             {
                 var passNowTicks = Stopwatch.GetTimestamp();
@@ -376,20 +304,20 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                     TakePendingMeshReleases());
 
                 _lastFrame = result.BackendFrame;
-                _renderedGrid = result.BuiltGrid;
                 _lastLayout = result.Layout;
-                _lastBuiltFramebufferWidth = snapW;
-                _lastBuiltFramebufferHeight = snapH;
-                _lastRebuildTicks = passNowTicks;
+                _resizeCoordinator.NotifyFrameBuilt(snapW, snapH, result.BuiltGrid, passNowTicks);
                 _lastCaretAlpha = caretAlphaNow;
                 _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(passNowTicks);
                 _lastCaretRenderTicks = passNowTicks;
                 ClearPendingMeshReleases();
 
-                var verifyGrid = _latestGrid;
-                var verifyW = _latestFramebufferWidth;
-                var verifyH = _latestFramebufferHeight;
-                if (_renderedGrid == verifyGrid && _lastBuiltFramebufferWidth == verifyW && _lastBuiltFramebufferHeight == verifyH)
+                var verifySnapshot = _resizeCoordinator.GetLatestSnapshot();
+                var verifyGrid = verifySnapshot.Grid;
+                var verifyW = verifySnapshot.FramebufferWidth;
+                var verifyH = verifySnapshot.FramebufferHeight;
+                if (result.BuiltGrid == verifyGrid &&
+                    _resizeCoordinator.GetBuiltSnapshot().FramebufferWidth == verifyW &&
+                    _resizeCoordinator.GetBuiltSnapshot().FramebufferHeight == verifyH)
                 {
                     break;
                 }
@@ -399,7 +327,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 snapGrid = verifyGrid;
             }
 
-            _pendingResizeRebuild = false;
+            _resizeCoordinator.ClearPendingResizeRebuild();
             _pendingContentRebuild = false;
 
             framebufferWidth = snapW;
@@ -414,8 +342,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             var timeSecondsInspect = nowTicks / (double)Stopwatch.Frequency;
             var inspectFrame = _inspectController.BuildInspectFrame(framebufferWidth, framebufferHeight, timeSecondsInspect);
             var backendInspectFrame = RenderFrameAdapter.Adapt(inspectFrame);
-            var setVSyncInspect = _pendingSetVSync;
-            _pendingSetVSync = null;
+            var setVSyncInspect = _resizeCoordinator.ConsumeVSyncRequest();
             var requestExitInspect = _pendingExit;
             _pendingExit = false;
             return new FrameTickResult(framebufferWidth, framebufferHeight, backendInspectFrame, OverlayFrame: null, setVSyncInspect, requestExitInspect);
@@ -439,17 +366,17 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 TakePendingMeshReleases());
 
             _lastFrame = result.BackendFrame;
-            _renderedGrid = result.BuiltGrid;
             _lastLayout = result.Layout;
-            _lastRebuildTicks = Stopwatch.GetTimestamp();
+            var rebuiltTicks = Stopwatch.GetTimestamp();
+            _resizeCoordinator.NotifyFrameBuilt(framebufferWidth, framebufferHeight, result.BuiltGrid, rebuiltTicks);
             _lastCaretAlpha = caretAlphaNow;
-            _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(_lastRebuildTicks);
-            _lastCaretRenderTicks = _lastRebuildTicks;
+            _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(rebuiltTicks);
+            _lastCaretRenderTicks = rebuiltTicks;
             _pendingContentRebuild = false;
             ClearPendingMeshReleases();
         }
 
-        MaybeUpdateOverlays(framebufferWidth, framebufferHeight, nowTicks, framebufferSettled);
+        MaybeUpdateOverlays(framebufferWidth, framebufferHeight, nowTicks, resizePlan.FramebufferSettled);
 
         if (_lastFrame is null)
         {
@@ -461,8 +388,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             new PxRect(0, 0, framebufferWidth, framebufferHeight),
             _document.Settings.DefaultTextStyle.ForegroundRgba);
 
-        var setVSync = _pendingSetVSync;
-        _pendingSetVSync = null;
+        var setVSync = _resizeCoordinator.ConsumeVSyncRequest();
         var requestExit = _pendingExit;
         _pendingExit = false;
         return new FrameTickResult(framebufferWidth, framebufferHeight, _lastFrame, overlayFrame, setVSync, requestExit);
@@ -503,7 +429,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         ClearPendingMeshReleases();
         _lastFrame = backendFrame;
-        _renderedGrid = backendFrame.BuiltGrid;
         _lastCaretAlpha = caretAlpha;
         _lastSpinnerFrameIndex = spinnerIndex;
         _lastCaretRenderTicks = nowTicks;
@@ -653,7 +578,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         {
             if (events[i] is PendingEvent.FileDrop fileDrop)
             {
-                HandleFileDrop(fileDrop.Path);
+                ApplyCommandHostActions(_commandHost.HandleFileDrop(fileDrop.Path, _commandHostView));
                 EnsureLayoutExists(framebufferWidth, framebufferHeight);
                 _scrollbarController.UpdateTotalRows(_lastLayout);
                 continue;
@@ -672,7 +597,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             if (events[i] is PendingEvent.Mouse mouseRaw && _lastLayout is not null)
             {
                 var mouseEvent = mouseRaw.Event;
-                var viewportRectPx = new PxRect(0, 0, _latestFramebufferWidth, _latestFramebufferHeight);
+                var viewportRectPx = new PxRect(0, 0, framebufferWidth, framebufferHeight);
 
                 var consumed = _scrollbarController.TryHandleMouse(
                     mouseEvent,
@@ -735,11 +660,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             TakePendingMeshReleases());
 
         _lastFrame = result.BackendFrame;
-        _renderedGrid = result.BuiltGrid;
         _lastLayout = result.Layout;
-        _lastBuiltFramebufferWidth = framebufferWidth;
-        _lastBuiltFramebufferHeight = framebufferHeight;
-        _lastRebuildTicks = nowTicks;
+        _resizeCoordinator.NotifyFrameBuilt(framebufferWidth, framebufferHeight, result.BuiltGrid, nowTicks);
         _lastCaretAlpha = caretAlphaNow;
         _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(nowTicks);
         _lastCaretRenderTicks = nowTicks;
@@ -830,11 +752,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         foreach (var action in actions)
         {
-            if (ShouldResetCompletion(action))
-            {
-                _completion.Reset();
-            }
-
             switch (action)
             {
                 case HostAction.Focus:
@@ -870,14 +787,14 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                     }
                     break;
                 case HostAction.SubmitPrompt submit:
-                    CommitPromptIfAny(submit.PromptId);
+                    HandlePromptSubmit(submit.PromptId);
                     _document.Scroll.IsFollowingTail = true;
                     break;
                 case HostAction.NavigateHistory nav:
-                    NavigateHistory(nav.PromptId, nav.Delta);
+                    ApplyCommandHostActions(_commandHost.HandleNavigateHistory(nav.PromptId, nav.Delta, _commandHostView));
                     break;
                 case HostAction.Autocomplete ac:
-                    AutocompletePrompt(ac.PromptId, ac.Delta);
+                    ApplyCommandHostActions(_commandHost.HandleAutocomplete(ac.PromptId, ac.Delta, _commandHostView));
                     break;
                 case HostAction.CopySelectionToClipboard:
                     if (_interaction.TryGetSelectedText(_document.Transcript, out var selected))
@@ -898,47 +815,46 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                     _pendingContentRebuild = true;
                     break;
             }
+
+            _commandHost.NotifyHostActionApplied(action);
         }
 
         _document.Selection.ActiveRange = _interaction.Snapshot.Selection;
     }
 
-    private static bool ShouldResetCompletion(HostAction action) =>
-        action is HostAction.InsertText or
-        HostAction.Backspace or
-        HostAction.MoveCaret or
-        HostAction.SetCaret or
-        HostAction.NavigateHistory or
-        HostAction.SubmitPrompt;
-
-    private void AutocompletePrompt(BlockId promptId, int delta)
+    private void ApplyCommandHostActions(IReadOnlyList<CommandHostAction> actions)
     {
-        if (!TryGetPrompt(promptId, out var prompt))
+        for (var i = 0; i < actions.Count; i++)
         {
-            return;
+            switch (actions[i])
+            {
+                case CommandHostAction.InsertTextBlockBefore insert:
+                    InsertBlockBefore(insert.BeforeId, new TextBlock(insert.NewId, insert.Text, insert.Stream));
+                    _pendingContentRebuild = true;
+                    break;
+                case CommandHostAction.InsertTextBlockAfter insert:
+                    InsertBlockAfter(insert.AfterId, new TextBlock(insert.NewId, insert.Text, insert.Stream));
+                    _pendingContentRebuild = true;
+                    break;
+                case CommandHostAction.UpdatePrompt update:
+                    if (TryGetPrompt(update.PromptId, out var prompt))
+                    {
+                        prompt.Input = update.Input ?? string.Empty;
+                        prompt.SetCaret(update.CaretIndex);
+                        _pendingContentRebuild = true;
+                    }
+                    break;
+                case CommandHostAction.SubmitParsedCommand submit:
+                    ApplyParsedCommand(submit);
+                    break;
+                case CommandHostAction.RequestContentRebuild:
+                    _pendingContentRebuild = true;
+                    break;
+                case CommandHostAction.SetFollowingTail tail:
+                    _document.Scroll.IsFollowingTail = tail.Enabled;
+                    break;
+            }
         }
-
-        if (prompt.Owner is not null)
-        {
-            return;
-        }
-
-        var reverse = delta < 0;
-        if (!_completion.TryHandleTab(prompt.Input, prompt.CaretIndex, reverse, out var newInput, out var newCaret, out var matchesLine))
-        {
-            return;
-        }
-
-        if (matchesLine is not null)
-        {
-            var id = new BlockId(AllocateNewBlockId());
-            InsertBlockBefore(promptId, new TextBlock(id, matchesLine, ConsoleTextStream.System));
-            _document.Scroll.IsFollowingTail = true;
-        }
-
-        prompt.Input = newInput;
-        prompt.SetCaret(Math.Clamp(newCaret, 0, prompt.Input.Length));
-        _pendingContentRebuild = true;
     }
 
     private void StopFocusedBlock(StopLevel? levelOverride)
@@ -1021,7 +937,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _document.Scroll.IsFollowingTail = true;
     }
 
-    private void CommitPromptIfAny(BlockId promptId)
+    private void HandlePromptSubmit(BlockId promptId)
     {
         if (!TryGetPrompt(promptId, out var prompt))
         {
@@ -1067,67 +983,21 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
         else
         {
-            var insertIndex = Math.Max(0, _document.Transcript.Blocks.Count - 1);
-            var headerId = new BlockId(AllocateNewBlockId());
-            _document.Transcript.Insert(insertIndex, new TextBlock(headerId, prompt.Prompt + command));
-
-            RecordCommandHistory(command);
-
-            var submitResult = _commandSubmission.Submit(command, headerId, promptId, this);
-            if (submitResult.IsParseFailed)
-            {
-                prompt.Input = string.Empty;
-                prompt.SetCaret(0);
-                _history.ResetNavigation();
-                return;
-            }
-
-            if (submitResult.Handled)
-            {
-                _document.Scroll.IsFollowingTail = true;
-                _pendingContentRebuild = true;
-
-                if (submitResult.StartedBlockingActivity)
-                {
-                    RemoveShellPromptIfPresent(promptId);
-                    _promptLifecycle.PendingShellPrompt = true;
-                }
-            }
-            else if (!string.IsNullOrWhiteSpace(command))
-            {
-                _document.Transcript.Insert(insertIndex + 1, new TextBlock(new BlockId(AllocateNewBlockId()), "Unrecognized command."));
-                _document.Scroll.IsFollowingTail = true;
-                _pendingContentRebuild = true;
-            }
-
-            prompt.Input = string.Empty;
-            prompt.SetCaret(0);
-            _history.ResetNavigation();
+            ApplyCommandHostActions(_commandHost.HandleSubmitPrompt(promptId, _commandHostView));
         }
     }
 
-    private void HandleFileDrop(string path)
+    private void ApplyParsedCommand(CommandHostAction.SubmitParsedCommand submit)
     {
-        var blocks = _document.Transcript.Blocks;
-        if (blocks.Count == 0)
-        {
-            return;
-        }
+        var submitResult = _commandSubmission.SubmitParsed(
+            submit.Request,
+            submit.CommandForParse,
+            submit.HeaderId,
+            submit.ShellPromptId,
+            this);
 
-        var commandText = $"inspect {QuoteForCommandLineParser(path)}";
-
-        var insertIndex = Math.Max(0, blocks.Count - 1);
-        var headerId = new BlockId(AllocateNewBlockId());
-        _document.Transcript.Insert(insertIndex, new TextBlock(headerId, _defaultPromptText + commandText, ConsoleTextStream.Default));
-
-        RecordCommandHistory(commandText);
-
-        var shellPromptId = FindLastPrompt(_document.Transcript)?.Id ?? headerId;
-        var submitResult = _commandSubmission.Submit(commandText, headerId, shellPromptId, this);
         if (submitResult.IsParseFailed)
         {
-            _document.Scroll.IsFollowingTail = true;
-            _pendingContentRebuild = true;
             return;
         }
 
@@ -1135,47 +1005,34 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         {
             _document.Scroll.IsFollowingTail = true;
             _pendingContentRebuild = true;
+
+            if (submitResult.StartedBlockingActivity)
+            {
+                RemoveShellPromptIfPresent(submit.ShellPromptId);
+                _promptLifecycle.PendingShellPrompt = true;
+            }
+
             return;
         }
 
-        InsertBlockAfter(headerId, new TextBlock(new BlockId(AllocateNewBlockId()), "Unrecognized command.", ConsoleTextStream.System));
-        _document.Scroll.IsFollowingTail = true;
-        _pendingContentRebuild = true;
+        if (!string.IsNullOrWhiteSpace(submit.RawCommand))
+        {
+            InsertBlockAfter(
+                submit.HeaderId,
+                new TextBlock(new BlockId(AllocateNewBlockId()), "Unrecognized command.", ConsoleTextStream.System));
+            _document.Scroll.IsFollowingTail = true;
+            _pendingContentRebuild = true;
+        }
     }
 
-    private static string QuoteForCommandLineParser(string value)
+    private void HandleFileDropFromInspect(string path)
     {
-        value ??= string.Empty;
-        return "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
-    }
-
-    private void RecordCommandHistory(string commandText)
-    {
-        _history.RecordSubmitted(commandText);
-    }
-
-    private void NavigateHistory(BlockId promptId, int delta)
-    {
-        if (delta == 0 || !TryGetPrompt(promptId, out var prompt))
-        {
-            return;
-        }
-
-        if (prompt.Owner is not null)
-        {
-            return;
-        }
-
-        if (_history.TryNavigate(prompt.Input, delta, out var updated))
-        {
-            prompt.Input = updated;
-            prompt.SetCaret(prompt.Input.Length);
-        }
+        ApplyCommandHostActions(_commandHost.HandleFileDrop(path, _commandHostView));
     }
 
     private void ClearTranscript()
     {
-        _completion.Reset();
+        _commandHost.ResetOnClear();
         QueueMeshReleasesForAllBlocks();
         _document.Transcript.Clear();
         _document.Transcript.Add(new PromptBlock(new BlockId(AllocateNewBlockId()), _defaultPromptText));
@@ -1202,7 +1059,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         _pendingContentRebuild = true;
 
-        _history.ResetNavigation();
     }
 
     private void DrainJobEvents()
@@ -1346,6 +1202,41 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
     }
 
+    private sealed class CommandHostViewAdapter : ICommandHostView
+    {
+        private readonly ConsoleHostSession _session;
+
+        public CommandHostViewAdapter(ConsoleHostSession session)
+        {
+            _session = session;
+        }
+
+        public bool TryGetPromptSnapshot(BlockId promptId, out PromptSnapshot prompt)
+        {
+            if (_session.TryGetPrompt(promptId, out var block))
+            {
+                prompt = new PromptSnapshot(block.Id, block.Prompt, block.Input, block.CaretIndex, block.Owner);
+                return true;
+            }
+
+            prompt = default;
+            return false;
+        }
+
+        public PromptSnapshot? GetLastPromptSnapshot()
+        {
+            var prompt = FindLastPrompt(_session._document.Transcript);
+            if (prompt is null)
+            {
+                return null;
+            }
+
+            return new PromptSnapshot(prompt.Id, prompt.Prompt, prompt.Input, prompt.CaretIndex, prompt.Owner);
+        }
+
+        public BlockId AllocateBlockId() => new(_session.AllocateNewBlockId());
+    }
+
     private sealed class InspectHostAdapter : IInspectHost
     {
         private readonly ConsoleHostSession _session;
@@ -1370,7 +1261,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         public BlockId AllocateBlockId() => new(_session.AllocateNewBlockId());
 
-        public void HandleFileDrop(string path) => _session.HandleFileDrop(path);
+        public void HandleFileDrop(string path) => _session.HandleFileDropFromInspect(path);
 
         public void RequestContentRebuild() => _session._pendingContentRebuild = true;
 
@@ -1536,48 +1427,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
 
 
-    private static GridSize ComputeGrid(int framebufferWidth, int framebufferHeight, LayoutSettings settings)
-    {
-        var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
-        var grid = FixedCellGrid.FromViewport(viewport, settings);
-        return new GridSize(grid.Cols, grid.Rows);
-    }
-
-    private void HandleFramebufferChanged(int width, int height, long nowTicks)
-    {
-        var changed = width != _latestFramebufferWidth || height != _latestFramebufferHeight;
-        _latestFramebufferWidth = width;
-        _latestFramebufferHeight = height;
-
-        if (!changed)
-        {
-            return;
-        }
-
-        _lastFramebufferChangeTicks = nowTicks;
-
-        var newGrid = ComputeGrid(width, height, _layoutSettings);
-
-        if (newGrid != _latestGrid)
-        {
-            _latestGrid = newGrid;
-            _lastGridChangeTicks = nowTicks;
-            _pendingResizeRebuild = true;
-        }
-
-        if (_resizeVsyncDisabled)
-        {
-            return;
-        }
-
-        if (_lastLayout is not null)
-        {
-            ScrollAnchoring.CaptureAnchor(_document.Scroll, _lastLayout);
-        }
-
-        _pendingSetVSync = false;
-        _resizeVsyncDisabled = true;
-    }
 
     private static int GetScrollOffsetRows(ConsoleDocument document, LayoutFrame layout)
     {

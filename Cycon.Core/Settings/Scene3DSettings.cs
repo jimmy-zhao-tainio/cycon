@@ -40,6 +40,12 @@ public sealed class Scene3DSettings
 
     public float PanSensitivity { get; set; } = 0.0025f;
 
+    public float MouseSmoothingTauSeconds { get; set; } = 0.06f;
+
+    public float FreeflyLookTauSeconds { get; set; } = 0.05f;
+
+    public float FreeflyLookSensitivity { get; set; } = 0.006f;
+
     public float ZoomSensitivity { get; set; } = 0.10f;
 
     public float KeyboardPanSpeed { get; set; } = 0.80f;

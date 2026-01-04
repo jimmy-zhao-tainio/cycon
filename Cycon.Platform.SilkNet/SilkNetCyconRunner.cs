@@ -12,8 +12,6 @@ public static class SilkNetCyconRunner
 {
     private const int KeyRepeatInitialDelayMs = 400;
     private const int KeyRepeatIntervalMs = 33;
-    private static readonly bool ResizeTrace =
-        string.Equals(Environment.GetEnvironmentVariable("CYCON_RESIZE_TRACE"), "1", StringComparison.Ordinal);
 
     public static void Run2D(CyconAppOptions options)
     {
@@ -31,9 +29,6 @@ public static class SilkNetCyconRunner
 
         var pressedKeys = new HashSet<Key>();
         var repeatKeys = new Dictionary<HostKey, long>();
-        var frameIndex = 0;
-        int lastTraceFbW = -1;
-        int lastTraceFbH = -1;
 
         window.Loaded += () =>
         {
@@ -195,19 +190,6 @@ public static class SilkNetCyconRunner
             if (executor is null)
             {
                 return;
-            }
-
-            if (ResizeTrace)
-            {
-                frameIndex++;
-                var fbW = window.FramebufferWidth;
-                var fbH = window.FramebufferHeight;
-                if (fbW != lastTraceFbW || fbH != lastTraceFbH)
-                {
-                    lastTraceFbW = fbW;
-                    lastTraceFbH = fbH;
-                    Console.WriteLine($"[RUN] f={frameIndex} fb={fbW}x{fbH}");
-                }
             }
 
             if (repeatKeys.Count > 0)

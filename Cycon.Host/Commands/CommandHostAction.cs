@@ -1,21 +1,30 @@
 using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
-using Cycon.Core.Transcript.Blocks;
 using Cycon.Commands;
 
 namespace Cycon.Host.Commands;
 
 internal abstract record CommandHostAction
 {
-    public sealed record InsertBlockBefore(BlockId BeforeId, IBlock Block) : CommandHostAction;
+    public sealed record InsertTextBlockBefore(
+        BlockId BeforeId,
+        BlockId NewId,
+        string Text,
+        ConsoleTextStream Stream) : CommandHostAction;
 
-    public sealed record InsertBlockAfter(BlockId AfterId, IBlock Block) : CommandHostAction;
+    public sealed record InsertTextBlockAfter(
+        BlockId AfterId,
+        BlockId NewId,
+        string Text,
+        ConsoleTextStream Stream) : CommandHostAction;
 
     public sealed record UpdatePrompt(BlockId PromptId, string Input, int CaretIndex) : CommandHostAction;
 
     public sealed record SubmitParsedCommand(
         CommandRequest Request,
         string CommandForParse,
+        string RawCommand,
+        string HeaderText,
         BlockId HeaderId,
         BlockId ShellPromptId) : CommandHostAction;
 

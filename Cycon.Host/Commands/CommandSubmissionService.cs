@@ -36,6 +36,16 @@ internal sealed class CommandSubmissionService
             return CommandSubmissionResult.ParseFailed;
         }
 
+        return SubmitParsed(request, commandForParse, headerId, shellPromptId, session);
+    }
+
+    public CommandSubmissionResult SubmitParsed(
+        CommandRequest request,
+        string commandForParse,
+        BlockId headerId,
+        BlockId shellPromptId,
+        IBlockCommandSession session)
+    {
         var ctx = new BlockCommandContext(session, headerId, shellPromptId);
         var handled = _blockCommands.TryExecuteOrFallback(request, commandForParse, ctx);
         return new CommandSubmissionResult(handled, ctx.StartedBlockingActivity, false);

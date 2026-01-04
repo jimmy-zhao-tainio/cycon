@@ -16,17 +16,6 @@ public static class StlLoader
         var fullPath = Path.GetFullPath(path);
         var data = Load(fullPath);
 
-        LogDiagnostics(
-            fullPath,
-            data.Format,
-            data.TriangleCount,
-            data.VertexCount,
-            data.BytesRead,
-            data.FileLength,
-            data.Bounds.Min,
-            data.Bounds.Max,
-            data.HasNaN);
-
         if (data.TriangleCount <= 0 || data.VertexCount <= 0)
         {
             throw new InvalidOperationException($"STL produced empty mesh. fmt={data.Format} len={data.FileLength} bytesRead={data.BytesRead}");
@@ -316,22 +305,6 @@ public static class StlLoader
         data[o + 3] = normal.X;
         data[o + 4] = normal.Y;
         data[o + 5] = normal.Z;
-    }
-
-    private static void LogDiagnostics(
-        string path,
-        StlFormat format,
-        int triCount,
-        int vertexCount,
-        long bytesRead,
-        long fileLength,
-        Vector3 min,
-        Vector3 max,
-        bool hasNaN)
-    {
-        Console.WriteLine(
-            $"STL {path}: fmt={format} tris={triCount} verts={vertexCount} bytesRead={bytesRead}/{fileLength} " +
-            $"aabbMin=({min.X:0.####},{min.Y:0.####},{min.Z:0.####}) aabbMax=({max.X:0.####},{max.Y:0.####},{max.Z:0.####}) hasNaN={hasNaN}");
     }
 
     private sealed class CountingStream : Stream

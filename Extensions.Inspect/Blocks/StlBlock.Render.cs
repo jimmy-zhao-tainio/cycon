@@ -39,7 +39,6 @@ public sealed partial class StlBlock
         {
             _loggedFirstRender = true;
             var b = MeshBounds;
-            Console.WriteLine($"[STL] vertsUploaded={VertexCount} tris={TriangleCount} aabb=({b.Min.X:0.####},{b.Min.Y:0.####},{b.Min.Z:0.####})..({b.Max.X:0.####},{b.Max.Y:0.####},{b.Max.Z:0.####})");
         }
 #endif
 
@@ -83,8 +82,6 @@ public sealed partial class StlBlock
         {
             _loggedViewportW = w;
             _loggedViewportH = h;
-            Console.WriteLine(
-                $"[STL-PROJ] vp={w}x{h} aspect={aspect:0.####} hfovDeg={_lastHorizontalFovDegrees:0.####} vfovDeg={(_lastVerticalFovRadians * (180f / MathF.PI)):0.####} focus={FocusDistance:0.####} near={near:0.####} far={far:0.####}");
         }
 #endif
 
