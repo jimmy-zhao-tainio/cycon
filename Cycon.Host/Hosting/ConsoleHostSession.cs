@@ -244,13 +244,19 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         if (_inspectController.IsActive)
         {
             _inspectController.DrainPendingEvents(pendingEvents, framebufferWidth, framebufferHeight);
+            ApplyInspectActions(_inspectController.DrainActions());
             pendingEvents = null;
             if (_inspectController.IsActive)
             {
                 _ = _inspectController.TickScene3DKeys(TimeSpan.FromMilliseconds(dtMs));
                 var timeSecondsInspect = nowTicks / (double)Stopwatch.Frequency;
-                var inspectFrame = _inspectController.BuildInspectFrame(framebufferWidth, framebufferHeight, timeSecondsInspect);
+                var inspectFrame = _inspectController.BuildInspectFrame(
+                    framebufferWidth,
+                    framebufferHeight,
+                    timeSecondsInspect,
+                    TakePendingMeshReleases());
                 var backendInspectFrame = RenderFrameAdapter.Adapt(inspectFrame);
+                ClearPendingMeshReleases();
                 var setVSyncInspect = _resizeCoordinator.ConsumeVSyncRequest();
                 var requestExitInspect = _pendingExit;
                 _pendingExit = false;
@@ -340,8 +346,13 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         if (_inspectController.IsActive)
         {
             var timeSecondsInspect = nowTicks / (double)Stopwatch.Frequency;
-            var inspectFrame = _inspectController.BuildInspectFrame(framebufferWidth, framebufferHeight, timeSecondsInspect);
+            var inspectFrame = _inspectController.BuildInspectFrame(
+                framebufferWidth,
+                framebufferHeight,
+                timeSecondsInspect,
+                TakePendingMeshReleases());
             var backendInspectFrame = RenderFrameAdapter.Adapt(inspectFrame);
+            ClearPendingMeshReleases();
             var setVSyncInspect = _resizeCoordinator.ConsumeVSyncRequest();
             var requestExitInspect = _pendingExit;
             _pendingExit = false;
@@ -857,6 +868,46 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
     }
 
+    private void ApplyInspectActions(IReadOnlyList<InspectAction> actions)
+    {
+        for (var i = 0; i < actions.Count; i++)
+        {
+            switch (actions[i])
+            {
+                case InspectRequestContentRebuild:
+                    _pendingContentRebuild = true;
+                    break;
+                case InspectHandleFileDrop drop:
+                    HandleFileDropFromInspect(drop.Path);
+                    break;
+                case InspectWriteReceipt receipt:
+                {
+                    if (string.IsNullOrWhiteSpace(receipt.ReceiptLine))
+                    {
+                        break;
+                    }
+
+                    var receiptId = new BlockId(AllocateNewBlockId());
+                    var blocks = _document.Transcript.Blocks;
+                    var insertAt = blocks.Count;
+                    for (var b = 0; b < blocks.Count; b++)
+                    {
+                        if (blocks[b].Id == receipt.CommandEchoId)
+                        {
+                            insertAt = b + 1;
+                            break;
+                        }
+                    }
+
+                    insertAt = Math.Clamp(insertAt, 0, blocks.Count);
+                    _document.Transcript.Insert(insertAt, new TextBlock(receiptId, receipt.ReceiptLine, ConsoleTextStream.System));
+                    _pendingContentRebuild = true;
+                    break;
+                }
+            }
+        }
+    }
+
     private void StopFocusedBlock(StopLevel? levelOverride)
     {
         var focused = _interaction.Snapshot.Focused;
@@ -1248,26 +1299,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         public ConsoleDocument Document => _session._document;
         public IConsoleFont Font => _session._font;
-        public ConsoleRenderer Renderer => _session._renderer;
-        public SelectionStyle SelectionStyle => _session._selectionStyle;
-        public IReadOnlyList<IBlock> TranscriptBlocks => _session._document.Transcript.Blocks;
-
-        public void InsertTranscriptBlock(int index, IBlock block)
-        {
-            var blocks = _session._document.Transcript.Blocks;
-            var insertAt = Math.Clamp(index, 0, blocks.Count);
-            _session._document.Transcript.Insert(insertAt, block);
-        }
-
-        public BlockId AllocateBlockId() => new(_session.AllocateNewBlockId());
-
-        public void HandleFileDrop(string path) => _session.HandleFileDropFromInspect(path);
-
-        public void RequestContentRebuild() => _session._pendingContentRebuild = true;
-
-        public IReadOnlyList<int>? TakePendingMeshReleases() => _session.TakePendingMeshReleases();
-
-        public void ClearPendingMeshReleases() => _session.ClearPendingMeshReleases();
     }
 
     private void QueueMeshReleasesForAllBlocks()
@@ -1467,6 +1498,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     void IBlockCommandSession.OpenInspect(InspectKind kind, string path, string title, IBlock viewBlock, string receiptLine, BlockId commandEchoId)
     {
         _inspectController.OpenInspect(kind, path, title, viewBlock, receiptLine, commandEchoId);
+        ApplyInspectActions(_inspectController.DrainActions());
     }
 
     void IBlockCommandSession.ClearTranscript() => ClearTranscript();

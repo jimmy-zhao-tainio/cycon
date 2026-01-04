@@ -22,6 +22,7 @@ internal sealed class InspectModeController
 
     private readonly IInspectHost _host;
     private readonly List<InspectEntry> _inspectHistory = new();
+    private readonly List<InspectAction> _pendingActions = new();
     private int _nextInspectEntryId;
     private InspectEntry? _activeInspect;
     private Scene3DCapture? _inspectScene3DCapture;
@@ -69,7 +70,7 @@ internal sealed class InspectModeController
             _inspectScene3DMouseFocus = viewBlock.Id;
         }
 
-        _host.RequestContentRebuild();
+        _pendingActions.Add(new InspectRequestContentRebuild());
     }
 
     public void OnWindowFocusChanged(bool isFocused)
@@ -89,7 +90,11 @@ internal sealed class InspectModeController
         _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
     }
 
-    public Cycon.Rendering.RenderFrame BuildInspectFrame(int framebufferWidth, int framebufferHeight, double timeSeconds)
+    public Cycon.Rendering.RenderFrame BuildInspectFrame(
+        int framebufferWidth,
+        int framebufferHeight,
+        double timeSeconds,
+        IReadOnlyList<int>? meshReleases)
     {
         if (_activeInspect is null)
         {
@@ -101,7 +106,6 @@ internal sealed class InspectModeController
             BuiltGrid = new GridSize(0, 0)
         };
 
-        var meshReleases = _host.TakePendingMeshReleases();
         if (meshReleases is { Count: > 0 })
         {
             for (var i = 0; i < meshReleases.Count; i++)
@@ -148,8 +152,19 @@ internal sealed class InspectModeController
 
         BlockViewRenderer.RenderFullscreen(frame, _host.Font, renderBlock, ctx, framebufferWidth, framebufferHeight);
 
-        _host.ClearPendingMeshReleases();
         return frame;
+    }
+
+    public IReadOnlyList<InspectAction> DrainActions()
+    {
+        if (_pendingActions.Count == 0)
+        {
+            return Array.Empty<InspectAction>();
+        }
+
+        var snapshot = _pendingActions.ToArray();
+        _pendingActions.Clear();
+        return snapshot;
     }
 
     public void DrainPendingEvents(List<PendingEvent>? events, int framebufferWidth, int framebufferHeight)
@@ -174,7 +189,7 @@ internal sealed class InspectModeController
             {
                 case PendingEvent.FileDrop fileDrop:
                     // File drop should behave like typing a new `inspect "<path>"` command, even while in InspectMode.
-                    _host.HandleFileDrop(fileDrop.Path);
+                    _pendingActions.Add(new InspectHandleFileDrop(fileDrop.Path));
                     break;
                 case PendingEvent.Key key when key.IsDown && (key.KeyCode == HostKey.Escape || key.KeyCode == HostKey.Q):
                     ExitInspectMode();
@@ -501,7 +516,7 @@ internal sealed class InspectModeController
         _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
         _hasScene3DMousePos = false;
         _activeInspect = null;
-        _host.RequestContentRebuild();
+        _pendingActions.Add(new InspectRequestContentRebuild());
     }
 
     private void WriteInspectReceiptIfNeeded(InspectEntry entry)
@@ -518,22 +533,7 @@ internal sealed class InspectModeController
             return;
         }
 
-        var receiptId = _host.AllocateBlockId();
-        // Insert directly after the originating command echo (even if it is the last block at the moment).
-        // `InsertBlockAfter` clamps to keep the shell prompt last, but inspect temporarily removes the prompt.
-        var blocks = _host.TranscriptBlocks;
-        var insertAt = blocks.Count;
-        for (var i = 0; i < blocks.Count; i++)
-        {
-            if (blocks[i].Id == entry.CommandEchoId)
-            {
-                insertAt = i + 1;
-                break;
-            }
-        }
-
-        insertAt = Math.Clamp(insertAt, 0, blocks.Count);
-        _host.InsertTranscriptBlock(insertAt, new TextBlock(receiptId, entry.ReceiptLine, ConsoleTextStream.System));
+        _pendingActions.Add(new InspectWriteReceipt(entry.CommandEchoId, entry.ReceiptLine));
     }
 
     private static void ApplySceneDragDelta(IScene3DViewBlock stl, Scene3DSettings settings, Scene3DDragMode mode, float dx, float dy)
