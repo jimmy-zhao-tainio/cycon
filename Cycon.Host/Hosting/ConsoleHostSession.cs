@@ -24,6 +24,7 @@ using Cycon.Host.Inspect;
 using Cycon.Host.Interaction;
 using Cycon.Host.Input;
 using Cycon.Host.Scrolling;
+using Cycon.Host.Rendering;
 using Cycon.Host.Services;
 using Cycon.Layout;
 using Cycon.Layout.Metrics;
@@ -35,7 +36,7 @@ using Cycon.Runtime.Jobs;
 
 namespace Cycon.Host.Hosting;
 
-public sealed class ConsoleHostSession
+public sealed class ConsoleHostSession : IBlockCommandSession
 {
     private static readonly bool ResizeTrace =
         string.Equals(Environment.GetEnvironmentVariable("CYCON_RESIZE_TRACE"), "1", StringComparison.Ordinal);
@@ -47,37 +48,32 @@ public sealed class ConsoleHostSession
     private readonly LayoutSettings _layoutSettings;
     private readonly LayoutEngine _layoutEngine;
     private readonly ConsoleRenderer _renderer;
+    private readonly RenderPipeline _renderPipeline;
     private readonly IConsoleFont _font;
     private readonly GlyphAtlasData _atlasData;
     private readonly SelectionStyle _selectionStyle;
     private readonly InteractionReducer _interaction = new();
     private readonly IClipboard _clipboard;
-    private readonly Queue<PendingEvent> _pendingEvents = new();
-    private readonly object _pendingEventsLock = new();
+    private readonly PendingEventQueue _pendingEventQueue = new();
     private readonly JobScheduler _jobScheduler;
     private readonly CommandDispatcher _commandDispatcher;
     private readonly BlockCommandRegistry _blockCommands;
     private readonly InputPreprocessorRegistry _inputPreprocessors = new();
-    private readonly Dictionary<JobId, JobProjection> _jobProjections = new();
+    private readonly CommandSubmissionService _commandSubmission;
+    private readonly JobProjectionService _jobProjectionService;
+    private readonly JobEventApplier _jobEventApplier;
     private readonly string _defaultPromptText;
-    private long _nextPromptId;
-    private readonly Dictionary<BlockId, JobPromptRef> _jobPromptRefs = new();
-    private readonly Dictionary<JobId, BlockId> _activeJobPromptBlocks = new();
-    private long _nextOwnedPromptId;
-    private readonly Dictionary<BlockId, OwnedPromptRef> _ownedPromptRefs = new();
+    private readonly PromptLifecycle _promptLifecycle;
     private readonly Dictionary<BlockId, BlockId> _commandIndicators = new();
     private readonly Dictionary<BlockId, long> _commandIndicatorStartTicks = new();
     private readonly Dictionary<BlockId, BlockId> _visibleCommandIndicators = new();
-    private bool _pendingShellPrompt;
-    private readonly Dictionary<(JobId JobId, TextStream Stream), ChunkAccumulator> _chunkAccumulators = new();
     private readonly List<int> _pendingMesh3DReleases = new();
     private readonly HashSet<int> _pendingMesh3DReleaseSet = new();
     private readonly InputHistory _history;
     private readonly InputCompletionController _completion;
     private bool _pendingExit;
 
-    private readonly ConsoleScrollModel _scrollModel;
-    private readonly ScrollbarWidget _scrollbar;
+    private readonly ScrollbarController _scrollbarController;
     private readonly InspectModeController _inspectController;
 
     private LayoutFrame? _lastLayout;
@@ -93,7 +89,6 @@ public sealed class ConsoleHostSession
     private long _lastFramebufferChangeTicks;
     private GridSize _latestGrid;
     private long _lastGridChangeTicks;
-    private bool _logged;
     private bool _initialized;
     private bool? _pendingSetVSync;
     private bool _pendingContentRebuild;
@@ -124,6 +119,7 @@ public sealed class ConsoleHostSession
         _interaction.Initialize(_document.Transcript);
         SetCaretToEndOfLastPrompt(_document.Transcript);
         _defaultPromptText = FindLastPrompt(_document.Transcript)?.Prompt ?? "> ";
+        _promptLifecycle = new PromptLifecycle(_document, _defaultPromptText);
         _layoutSettings = new LayoutSettings();
         var fontService = new FontService();
         _font = fontService.CreateDefaultFont(_layoutSettings);
@@ -159,9 +155,22 @@ public sealed class ConsoleHostSession
         configureBlockCommands?.Invoke(_blockCommands);
 
         _completion = new InputCompletionController(new CommandCompletionProvider(_blockCommands));
-        _scrollModel = new ConsoleScrollModel(_document, _layoutSettings);
-        _scrollbar = new ScrollbarWidget(_scrollModel, _document.Scroll.ScrollbarUi);
+        _commandSubmission = new CommandSubmissionService(_blockCommands, _inputPreprocessors);
+        _jobProjectionService = new JobProjectionService(
+            _document,
+            AllocateNewBlockId,
+            InsertBlockAfter,
+            ReplaceTextBlock);
+        _jobEventApplier = new JobEventApplier(
+            _jobProjectionService,
+            _promptLifecycle,
+            AllocateNewBlockId,
+            TryGetPromptNullable,
+            ReplacePromptWithArchivedText,
+            EnsureShellPromptAtEndIfNeeded);
+        _scrollbarController = new ScrollbarController(_document, _layoutSettings);
         _inspectController = new InspectModeController(new InspectHostAdapter(this));
+        _renderPipeline = new RenderPipeline(_layoutEngine, _renderer, _font, _selectionStyle);
     }
 
     public static ConsoleHostSession CreateVga(
@@ -178,26 +187,17 @@ public sealed class ConsoleHostSession
 
     public void OnTextInput(HostTextInputEvent e)
     {
-        lock (_pendingEventsLock)
-        {
-            _pendingEvents.Enqueue(new PendingEvent.Text(e.Ch));
-        }
+        _pendingEventQueue.Enqueue(new PendingEvent.Text(e.Ch));
     }
 
     public void OnKeyEvent(HostKeyEvent e)
     {
-        lock (_pendingEventsLock)
-        {
-            _pendingEvents.Enqueue(new PendingEvent.Key(e.Key, e.Mods, e.IsDown));
-        }
+        _pendingEventQueue.Enqueue(new PendingEvent.Key(e.Key, e.Mods, e.IsDown));
     }
 
     public void OnMouseEvent(HostMouseEvent e)
     {
-        lock (_pendingEventsLock)
-        {
-            _pendingEvents.Enqueue(new PendingEvent.Mouse(e));
-        }
+        _pendingEventQueue.Enqueue(new PendingEvent.Mouse(e));
     }
 
     public void OnWindowFocusChanged(bool isFocused)
@@ -207,15 +207,12 @@ public sealed class ConsoleHostSession
 
     public void OnPointerInWindowChanged(bool isInWindow)
     {
-        _scrollbar.OnPointerInWindowChanged(isInWindow);
+        _scrollbarController.OnPointerInWindowChanged(isInWindow);
     }
 
     public void OnFileDrop(HostFileDropEvent e)
     {
-        lock (_pendingEventsLock)
-        {
-            _pendingEvents.Enqueue(new PendingEvent.FileDrop(e.Path));
-        }
+        _pendingEventQueue.Enqueue(new PendingEvent.FileDrop(e.Path));
     }
 
     public void ReportRenderFailure(int blockId, string reason)
@@ -301,7 +298,7 @@ public sealed class ConsoleHostSession
             }
         }
 
-        _scrollbar.BeginTick();
+        _scrollbarController.BeginTick();
 
         if (TickRunnableBlocks(TimeSpan.FromMilliseconds(dtMs)))
         {
@@ -367,23 +364,27 @@ public sealed class ConsoleHostSession
             {
                 var passNowTicks = Stopwatch.GetTimestamp();
 
-                var (frame, builtGrid, layout, renderFrame) = BuildFrameFor(
-                    snapW,
-                    snapH,
+                var viewport = new ConsoleViewport(snapW, snapH);
+                var result = _renderPipeline.BuildFrame(
+                    _document,
+                    _layoutSettings,
+                    viewport,
                     restoreAnchor,
                     caretAlphaNow,
-                    timeSeconds);
+                    timeSeconds,
+                    _visibleCommandIndicators,
+                    TakePendingMeshReleases());
 
-                _lastFrame = frame;
-                _renderedGrid = builtGrid;
-                _lastLayout = layout;
+                _lastFrame = result.BackendFrame;
+                _renderedGrid = result.BuiltGrid;
+                _lastLayout = result.Layout;
                 _lastBuiltFramebufferWidth = snapW;
                 _lastBuiltFramebufferHeight = snapH;
-                LogOnce(_atlasData, layout, renderFrame, snapW, snapH);
                 _lastRebuildTicks = passNowTicks;
                 _lastCaretAlpha = caretAlphaNow;
                 _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(passNowTicks);
                 _lastCaretRenderTicks = passNowTicks;
+                ClearPendingMeshReleases();
 
                 var verifyGrid = _latestGrid;
                 var verifyW = _latestFramebufferWidth;
@@ -422,26 +423,30 @@ public sealed class ConsoleHostSession
 
         DrainJobEvents();
 
-        _scrollbar.AdvanceAnimation(dtMs, _document.Settings.Scrollbar);
+        _scrollbarController.AdvanceAnimation(dtMs);
 
         if (_pendingContentRebuild)
         {
-            var (frame, builtGrid, layout, renderFrame) = BuildFrameFor(
-                framebufferWidth,
-                framebufferHeight,
+            var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
+            var result = _renderPipeline.BuildFrame(
+                _document,
+                _layoutSettings,
+                viewport,
                 restoreAnchor: false,
                 caretAlpha: caretAlphaNow,
-                timeSeconds: timeSeconds);
+                timeSeconds: timeSeconds,
+                _visibleCommandIndicators,
+                TakePendingMeshReleases());
 
-            _lastFrame = frame;
-            _renderedGrid = builtGrid;
-            _lastLayout = layout;
-            LogOnce(_atlasData, layout, renderFrame, framebufferWidth, framebufferHeight);
+            _lastFrame = result.BackendFrame;
+            _renderedGrid = result.BuiltGrid;
+            _lastLayout = result.Layout;
             _lastRebuildTicks = Stopwatch.GetTimestamp();
             _lastCaretAlpha = caretAlphaNow;
             _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(_lastRebuildTicks);
             _lastCaretRenderTicks = _lastRebuildTicks;
             _pendingContentRebuild = false;
+            ClearPendingMeshReleases();
         }
 
         MaybeUpdateOverlays(framebufferWidth, framebufferHeight, nowTicks, framebufferSettled);
@@ -451,10 +456,9 @@ public sealed class ConsoleHostSession
             throw new InvalidOperationException("Tick invariant violated: frame must be available.");
         }
 
-        _scrollModel.TotalRows = _lastLayout?.TotalRows ?? 0;
-        var overlayFrame = _scrollbar.BuildOverlayFrame(
+        _scrollbarController.UpdateTotalRows(_lastLayout);
+        var overlayFrame = _scrollbarController.BuildOverlayFrame(
             new PxRect(0, 0, framebufferWidth, framebufferHeight),
-            _document.Settings.Scrollbar,
             _document.Settings.DefaultTextStyle.ForegroundRgba);
 
         var setVSync = _pendingSetVSync;
@@ -634,21 +638,7 @@ public sealed class ConsoleHostSession
 
     private List<PendingEvent>? DequeuePendingEvents()
     {
-        lock (_pendingEventsLock)
-        {
-            if (_pendingEvents.Count == 0)
-            {
-                return null;
-            }
-
-            var events = new List<PendingEvent>(_pendingEvents.Count);
-            while (_pendingEvents.Count > 0)
-            {
-                events.Add(_pendingEvents.Dequeue());
-            }
-
-            return events;
-        }
+        return _pendingEventQueue.DequeueAll();
     }
 
     private void DrainPendingEvents(List<PendingEvent>? events, int framebufferWidth, int framebufferHeight)
@@ -659,15 +649,13 @@ public sealed class ConsoleHostSession
         }
 
         EnsureLayoutExists(framebufferWidth, framebufferHeight);
-        _scrollModel.TotalRows = _lastLayout?.TotalRows ?? 0;
-
         for (var i = 0; i < events.Count; i++)
         {
             if (events[i] is PendingEvent.FileDrop fileDrop)
             {
                 HandleFileDrop(fileDrop.Path);
                 EnsureLayoutExists(framebufferWidth, framebufferHeight);
-                _scrollModel.TotalRows = _lastLayout?.TotalRows ?? 0;
+                _scrollbarController.UpdateTotalRows(_lastLayout);
                 continue;
             }
 
@@ -683,48 +671,25 @@ public sealed class ConsoleHostSession
 
             if (events[i] is PendingEvent.Mouse mouseRaw && _lastLayout is not null)
             {
-                _scrollModel.TotalRows = _lastLayout.TotalRows;
                 var mouseEvent = mouseRaw.Event;
                 var viewportRectPx = new PxRect(0, 0, _latestFramebufferWidth, _latestFramebufferHeight);
 
-                if (mouseEvent.Kind == HostMouseEventKind.Wheel)
+                var consumed = _scrollbarController.TryHandleMouse(
+                    mouseEvent,
+                    viewportRectPx,
+                    _interaction.Snapshot,
+                    _lastLayout,
+                    out var scrollChanged);
+
+                if (consumed)
                 {
-                    if (!_document.Scroll.ScrollbarUi.IsDragging && _interaction.Snapshot.MouseCaptured is not null)
+                    if (scrollChanged ||
+                        (mouseEvent.Kind == HostMouseEventKind.Move && _document.Scroll.ScrollbarUi.IsDragging))
                     {
-                        // leave for other handlers
+                        _pendingContentRebuild = true;
                     }
-                    else
-                    {
-                        var consumed = _scrollbar.HandleMouse(mouseEvent, viewportRectPx, _document.Settings.Scrollbar, out var scrollChanged);
-                        if (consumed)
-                        {
-                            if (scrollChanged)
-                            {
-                                _pendingContentRebuild = true;
-                            }
-                            continue;
-                        }
-                    }
-                }
-                else
-                {
-                    if (!_document.Scroll.ScrollbarUi.IsDragging && _interaction.Snapshot.MouseCaptured is not null)
-                    {
-                        // leave for other handlers
-                    }
-                    else
-                    {
-                        var consumed = _scrollbar.HandleMouse(mouseEvent, viewportRectPx, _document.Settings.Scrollbar, out var scrollChanged);
-                        if (consumed)
-                        {
-                            if (scrollChanged ||
-                                (mouseEvent.Kind == HostMouseEventKind.Move && _document.Scroll.ScrollbarUi.IsDragging))
-                            {
-                                _pendingContentRebuild = true;
-                            }
-                            continue;
-                        }
-                    }
+
+                    continue;
                 }
             }
 
@@ -758,23 +723,27 @@ public sealed class ConsoleHostSession
         UpdateVisibleCommandIndicators(nowTicks);
         var caretAlphaNow = ComputeCaretAlpha(nowTicks);
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
-        var (frame, builtGrid, layout, renderFrame) = BuildFrameFor(
-            framebufferWidth,
-            framebufferHeight,
+        var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
+        var result = _renderPipeline.BuildFrame(
+            _document,
+            _layoutSettings,
+            viewport,
             restoreAnchor: false,
             caretAlpha: caretAlphaNow,
-            timeSeconds: timeSeconds);
+            timeSeconds: timeSeconds,
+            _visibleCommandIndicators,
+            TakePendingMeshReleases());
 
-        _lastFrame = frame;
-        _renderedGrid = builtGrid;
-        _lastLayout = layout;
+        _lastFrame = result.BackendFrame;
+        _renderedGrid = result.BuiltGrid;
+        _lastLayout = result.Layout;
         _lastBuiltFramebufferWidth = framebufferWidth;
         _lastBuiltFramebufferHeight = framebufferHeight;
-        LogOnce(_atlasData, layout, renderFrame, framebufferWidth, framebufferHeight);
         _lastRebuildTicks = nowTicks;
         _lastCaretAlpha = caretAlphaNow;
         _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(nowTicks);
         _lastCaretRenderTicks = nowTicks;
+        ClearPendingMeshReleases();
     }
 
     private InputEvent? Translate(PendingEvent e)
@@ -996,24 +965,24 @@ public sealed class ConsoleHostSession
 
         _document.Scroll.IsFollowingTail = true;
 
-        if (_pendingShellPrompt)
+        if (_promptLifecycle.PendingShellPrompt)
         {
             EnsureShellPromptAtEndIfNeeded();
         }
 
-        if (block is PromptBlock { Owner: not null } && _ownedPromptRefs.ContainsKey(block.Id))
+        if (block is PromptBlock { Owner: not null } && _promptLifecycle.TryGetOwnedPrompt(block.Id, out _))
         {
             if (TryGetPrompt(block.Id, out var ownedPrompt))
             {
                 ReplacePromptWithArchivedText(block.Id, ownedPrompt.Prompt + ownedPrompt.Input, ConsoleTextStream.Default);
             }
 
-            _ownedPromptRefs.Remove(block.Id);
-            _pendingShellPrompt = true;
+            _promptLifecycle.RemoveOwnedPrompt(block.Id);
+            _promptLifecycle.PendingShellPrompt = true;
             EnsureShellPromptAtEndIfNeeded();
         }
 
-        if (block is PromptBlock { Owner: not null } && _jobPromptRefs.TryGetValue(block.Id, out var jobPrompt))
+        if (block is PromptBlock { Owner: not null } && _promptLifecycle.TryGetJobPrompt(block.Id, out var jobPrompt))
         {
             if (_jobScheduler.TryGetJob(jobPrompt.JobId, out var job))
             {
@@ -1061,13 +1030,13 @@ public sealed class ConsoleHostSession
 
         var command = prompt.Input;
 
-        if (_ownedPromptRefs.ContainsKey(promptId))
+        if (_promptLifecycle.TryGetOwnedPrompt(promptId, out _))
         {
             var promptLine = prompt.Prompt + command;
             ReplacePromptWithArchivedText(promptId, promptLine, ConsoleTextStream.Default);
 
-            _ownedPromptRefs.Remove(promptId);
-            _pendingShellPrompt = true;
+            _promptLifecycle.RemoveOwnedPrompt(promptId);
+            _promptLifecycle.PendingShellPrompt = true;
             EnsureShellPromptAtEndIfNeeded();
 
             _document.Scroll.IsFollowingTail = true;
@@ -1075,7 +1044,7 @@ public sealed class ConsoleHostSession
             return;
         }
 
-        if (_jobPromptRefs.TryGetValue(promptId, out var jobPrompt))
+        if (_promptLifecycle.TryGetJobPrompt(promptId, out var jobPrompt))
         {
             var promptLine = prompt.Prompt + command;
             ReplacePromptWithArchivedText(promptId, promptLine, ConsoleTextStream.Default);
@@ -1086,12 +1055,12 @@ public sealed class ConsoleHostSession
             }
             else
             {
-                AppendJobText(jobPrompt.JobId, TextStream.System, "Interactive job is no longer running.");
+                _jobProjectionService.AppendText(jobPrompt.JobId, TextStream.System, "Interactive job is no longer running.");
             }
 
-            _jobPromptRefs.Remove(promptId);
-            _activeJobPromptBlocks.Remove(jobPrompt.JobId);
-            _pendingShellPrompt = true;
+            _promptLifecycle.RemoveJobPrompt(promptId);
+            _promptLifecycle.RemoveActiveJobPrompt(jobPrompt.JobId);
+            _promptLifecycle.PendingShellPrompt = true;
 
             _document.Scroll.IsFollowingTail = true;
             _pendingContentRebuild = true;
@@ -1104,14 +1073,8 @@ public sealed class ConsoleHostSession
 
             RecordCommandHistory(command);
 
-            var commandForParse = command;
-            if (_inputPreprocessors.TryRewrite(command, out var rewritten))
-            {
-                commandForParse = rewritten;
-            }
-
-            var request = CommandLineParser.Parse(commandForParse);
-            if (request is null)
+            var submitResult = _commandSubmission.Submit(command, headerId, promptId, this);
+            if (submitResult.IsParseFailed)
             {
                 prompt.Input = string.Empty;
                 prompt.SetCaret(0);
@@ -1119,16 +1082,15 @@ public sealed class ConsoleHostSession
                 return;
             }
 
-            var ctx = new BlockCommandContext(this, headerId, promptId);
-            if (_blockCommands.TryExecuteOrFallback(request, commandForParse, ctx))
+            if (submitResult.Handled)
             {
                 _document.Scroll.IsFollowingTail = true;
                 _pendingContentRebuild = true;
 
-                if (ctx.StartedBlockingActivity)
+                if (submitResult.StartedBlockingActivity)
                 {
                     RemoveShellPromptIfPresent(promptId);
-                    _pendingShellPrompt = true;
+                    _promptLifecycle.PendingShellPrompt = true;
                 }
             }
             else if (!string.IsNullOrWhiteSpace(command))
@@ -1160,23 +1122,16 @@ public sealed class ConsoleHostSession
 
         RecordCommandHistory(commandText);
 
-        var commandForParse = commandText;
-        if (_inputPreprocessors.TryRewrite(commandText, out var rewritten))
-        {
-            commandForParse = rewritten;
-        }
-
-        var request = CommandLineParser.Parse(commandForParse);
-        if (request is null)
+        var shellPromptId = FindLastPrompt(_document.Transcript)?.Id ?? headerId;
+        var submitResult = _commandSubmission.Submit(commandText, headerId, shellPromptId, this);
+        if (submitResult.IsParseFailed)
         {
             _document.Scroll.IsFollowingTail = true;
             _pendingContentRebuild = true;
             return;
         }
 
-        var shellPromptId = FindLastPrompt(_document.Transcript)?.Id ?? headerId;
-        var ctx = new BlockCommandContext(this, headerId, shellPromptId);
-        if (_blockCommands.TryExecuteOrFallback(request, commandForParse, ctx))
+        if (submitResult.Handled)
         {
             _document.Scroll.IsFollowingTail = true;
             _pendingContentRebuild = true;
@@ -1197,116 +1152,6 @@ public sealed class ConsoleHostSession
     private void RecordCommandHistory(string commandText)
     {
         _history.RecordSubmitted(commandText);
-    }
-
-    private void AppendOwnedPrompt(string promptText)
-    {
-        var blocks = _document.Transcript.Blocks;
-        if (blocks.Count == 0)
-        {
-            return;
-        }
-
-        var lastIndex = blocks.Count - 1;
-        if (blocks[lastIndex] is PromptBlock existingShellPrompt && existingShellPrompt.Owner is null)
-        {
-            if (string.IsNullOrEmpty(existingShellPrompt.Input))
-            {
-                RemoveBlockAt(lastIndex);
-            }
-            else
-            {
-                var archivedText = existingShellPrompt.Prompt + existingShellPrompt.Input;
-                var archived = new TextBlock(existingShellPrompt.Id, archivedText, ConsoleTextStream.Default);
-                ReplaceBlockAt(lastIndex, archived);
-            }
-        }
-
-        var promptId = Interlocked.Increment(ref _nextOwnedPromptId);
-        var promptBlockId = new BlockId(AllocateNewBlockId());
-        var block = new PromptBlock(promptBlockId, promptText, new PromptOwner(OwnerId: 1, PromptId: promptId))
-        {
-            Input = string.Empty,
-            CaretIndex = 0
-        };
-
-        _document.Transcript.Add(block);
-        _ownedPromptRefs[promptBlockId] = new OwnedPromptRef(promptId);
-        _pendingShellPrompt = true;
-    }
-
-    private sealed class BlockCommandContext : IBlockCommandContext
-    {
-        private readonly ConsoleHostSession _session;
-        private readonly BlockId _commandEchoId;
-        private readonly BlockId _shellPromptId;
-        private BlockId _insertAfterId;
-        private bool _startedBlockingActivity;
-
-        public BlockCommandContext(ConsoleHostSession session, BlockId commandEchoId, BlockId shellPromptId)
-        {
-            _session = session;
-            _commandEchoId = commandEchoId;
-            _shellPromptId = shellPromptId;
-            _insertAfterId = commandEchoId;
-        }
-
-        public bool StartedBlockingActivity => _startedBlockingActivity;
-
-        public BlockId CommandEchoId => _commandEchoId;
-
-        public void InsertTextAfterCommandEcho(string text, ConsoleTextStream stream)
-        {
-            var id = new BlockId(_session.AllocateNewBlockId());
-            _session.InsertBlockAfter(_insertAfterId, new TextBlock(id, text, stream));
-            _insertAfterId = id;
-        }
-
-        public BlockId AllocateBlockId() => new(_session.AllocateNewBlockId());
-
-        public void InsertBlockAfterCommandEcho(IBlock block)
-        {
-            _session.InsertBlockAfter(_insertAfterId, block);
-            _insertAfterId = block.Id;
-
-            if (block is IRunnableBlock runnable &&
-                runnable.State == BlockRunState.Running &&
-                block is not PromptBlock)
-            {
-                _startedBlockingActivity = true;
-            }
-        }
-
-        public void OpenInspect(InspectKind kind, string path, string title, IBlock viewBlock, string receiptLine)
-        {
-            _startedBlockingActivity = true;
-            _session._inspectController.OpenInspect(kind, path, title, viewBlock, receiptLine, _commandEchoId);
-        }
-
-        public void AttachIndicator(BlockId activityBlockId)
-        {
-            _session._commandIndicators[_commandEchoId] = activityBlockId;
-            _session._pendingContentRebuild = true;
-        }
-
-        public void AppendOwnedPrompt(string promptText)
-        {
-            if (_session.TryGetPrompt(_shellPromptId, out var prompt))
-            {
-                prompt.Input = string.Empty;
-                prompt.SetCaret(0);
-            }
-
-            _session.AppendOwnedPrompt(promptText);
-        }
-
-        public void ClearTranscript() => _session.ClearTranscript();
-
-        public void RequestExit()
-        {
-            _session._pendingExit = true;
-            _session._pendingContentRebuild = true;
-        }
     }
 
     private void NavigateHistory(BlockId promptId, int delta)
@@ -1339,14 +1184,11 @@ public sealed class ConsoleHostSession
         _interaction.Initialize(_document.Transcript);
         SetCaretToEndOfLastPrompt(_document.Transcript);
 
-        _jobProjections.Clear();
-        _jobPromptRefs.Clear();
-        _activeJobPromptBlocks.Clear();
-        _ownedPromptRefs.Clear();
+        _jobProjectionService.Clear();
+        _promptLifecycle.Clear();
         _commandIndicators.Clear();
         _commandIndicatorStartTicks.Clear();
         _visibleCommandIndicators.Clear();
-        _chunkAccumulators.Clear();
 
         _document.Scroll.ScrollOffsetRows = 0;
         _document.Scroll.IsFollowingTail = true;
@@ -1358,7 +1200,6 @@ public sealed class ConsoleHostSession
         _document.Scroll.ScrollbarUi.MsSinceInteraction = 0;
         _document.Scroll.ScrollbarUi.DragGrabOffsetYPx = 0;
 
-        _pendingShellPrompt = false;
         _pendingContentRebuild = true;
 
         _history.ResetNavigation();
@@ -1375,7 +1216,7 @@ public sealed class ConsoleHostSession
         var changed = false;
         foreach (var ev in events)
         {
-            changed |= ApplyJobEvent(ev);
+            changed |= _jobEventApplier.Apply(ev);
         }
 
         if (changed)
@@ -1385,80 +1226,6 @@ public sealed class ConsoleHostSession
         }
     }
 
-    private bool ApplyJobEvent(JobScheduler.PublishedEvent published)
-    {
-        var jobId = published.JobId;
-        EnsureJobProjection(jobId);
-
-        var e = published.Event;
-        switch (e)
-        {
-            case TextEvent text:
-                AppendJobText(jobId, text.Stream, text.Text);
-                return true;
-            case ProgressEvent progress:
-                var pct = progress.Fraction is { } f ? $"{Math.Round(f * 100.0)}%" : string.Empty;
-                var phase = string.IsNullOrWhiteSpace(progress.Phase) ? "Progress" : progress.Phase;
-                AppendJobText(jobId, TextStream.System, $"{phase} {pct}".Trim());
-                return true;
-            case PromptEvent prompt:
-                AppendJobPrompt(jobId, prompt.Prompt);
-                return true;
-            case ResultEvent result:
-                if (result.ExitCode != 0 || !string.IsNullOrWhiteSpace(result.Summary))
-                {
-                    var summary = string.IsNullOrWhiteSpace(result.Summary) ? string.Empty : $": {result.Summary}";
-                    AppendJobText(jobId, TextStream.System, $"(exit {result.ExitCode}){summary}");
-                }
-
-                FinalizeActiveJobPromptIfAny(jobId);
-                ClearChunkAccumulatorsForJob(jobId);
-                _pendingShellPrompt = true;
-                EnsureShellPromptAtEndIfNeeded();
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private void EnsureJobProjection(JobId jobId)
-    {
-        if (_jobProjections.ContainsKey(jobId))
-        {
-            return;
-        }
-
-        var headerId = new BlockId(AllocateNewBlockId());
-        var insertIndex = Math.Max(0, _document.Transcript.Blocks.Count - 1);
-        _document.Transcript.Insert(insertIndex, new TextBlock(headerId, $"$ [job {jobId}]"));
-        _jobProjections[jobId] = new JobProjection(headerId, headerId);
-    }
-
-    private void AppendJobText(JobId jobId, TextStream stream, string text)
-    {
-        if (!_jobProjections.TryGetValue(jobId, out var proj))
-        {
-            EnsureJobProjection(jobId);
-            proj = _jobProjections[jobId];
-        }
-
-        var mappedStream = MapTextStream(stream);
-
-        if (stream == TextStream.System)
-        {
-            foreach (var line in SplitLines(text ?? string.Empty))
-            {
-                var id = new BlockId(AllocateNewBlockId());
-                InsertBlockAfter(proj.LastId, new TextBlock(id, line, mappedStream));
-                proj = proj with { LastId = id };
-            }
-
-            _jobProjections[jobId] = proj;
-            return;
-        }
-
-        AppendChunkedJobText(jobId, stream, text ?? string.Empty, mappedStream, proj);
-    }
 
     private void InsertBlockAfter(BlockId afterId, IBlock block)
     {
@@ -1496,156 +1263,14 @@ public sealed class ConsoleHostSession
         _document.Transcript.Insert(insertAt, block);
     }
 
-    private void AppendChunkedJobText(
-        JobId jobId,
-        TextStream stream,
-        string text,
-        ConsoleTextStream mappedStream,
-        JobProjection proj)
-    {
-        var key = (jobId, stream);
-        if (!_chunkAccumulators.TryGetValue(key, out var acc))
-        {
-            acc = new ChunkAccumulator();
-            _chunkAccumulators[key] = acc;
-        }
-
-        if (acc.PendingCR && text.Length > 0 && text[0] == '\n')
-        {
-            text = text.Substring(1);
-            acc.PendingCR = false;
-        }
-
-        var combined = acc.Pending + text;
-        var (lines, remainder, endsWithCR) = SplitLinesAndRemainder(combined);
-        acc.PendingCR = endsWithCR;
-
-        if (lines.Count == 0 && string.IsNullOrEmpty(remainder))
-        {
-            acc.Pending = string.Empty;
-            _chunkAccumulators[key] = acc;
-            _jobProjections[jobId] = proj;
-            return;
-        }
-
-        if (lines.Count == 0)
-        {
-            if (acc.ActiveBlockId is { } activeId)
-            {
-                ReplaceTextBlock(activeId, remainder, mappedStream);
-                proj = proj with { LastId = activeId };
-            }
-            else
-            {
-                var id = new BlockId(AllocateNewBlockId());
-                InsertBlockAfter(proj.LastId, new TextBlock(id, remainder, mappedStream));
-                proj = proj with { LastId = id };
-                acc.ActiveBlockId = id;
-            }
-
-            acc.Pending = remainder;
-            _chunkAccumulators[key] = acc;
-            _jobProjections[jobId] = proj;
-            return;
-        }
-
-        if (acc.ActiveBlockId is { } existingActiveId)
-        {
-            ReplaceTextBlock(existingActiveId, lines[0], mappedStream);
-            proj = proj with { LastId = existingActiveId };
-            acc.ActiveBlockId = null;
-        }
-        else
-        {
-            var firstId = new BlockId(AllocateNewBlockId());
-            InsertBlockAfter(proj.LastId, new TextBlock(firstId, lines[0], mappedStream));
-            proj = proj with { LastId = firstId };
-        }
-
-        for (var i = 1; i < lines.Count; i++)
-        {
-            var id = new BlockId(AllocateNewBlockId());
-            InsertBlockAfter(proj.LastId, new TextBlock(id, lines[i], mappedStream));
-            proj = proj with { LastId = id };
-        }
-
-        if (!string.IsNullOrEmpty(remainder))
-        {
-            var id = new BlockId(AllocateNewBlockId());
-            InsertBlockAfter(proj.LastId, new TextBlock(id, remainder, mappedStream));
-            proj = proj with { LastId = id };
-            acc.ActiveBlockId = id;
-        }
-
-        acc.Pending = remainder;
-        _chunkAccumulators[key] = acc;
-        _jobProjections[jobId] = proj;
-    }
-
-    private void AppendJobPrompt(JobId jobId, string promptText)
-    {
-        var blocks = _document.Transcript.Blocks;
-        if (blocks.Count == 0)
-        {
-            return;
-        }
-
-        var lastIndex = blocks.Count - 1;
-        if (blocks[lastIndex] is PromptBlock existingShellPrompt && existingShellPrompt.Owner is null)
-        {
-            if (string.IsNullOrEmpty(existingShellPrompt.Input))
-            {
-                RemoveBlockAt(lastIndex);
-            }
-            else
-            {
-                var archivedText = existingShellPrompt.Prompt + existingShellPrompt.Input;
-                var archived = new TextBlock(existingShellPrompt.Id, archivedText, ConsoleTextStream.Default);
-                ReplaceBlockAt(lastIndex, archived);
-            }
-        }
-
-        var promptId = Interlocked.Increment(ref _nextPromptId);
-        var promptBlockId = new BlockId(AllocateNewBlockId());
-        var block = new PromptBlock(promptBlockId, promptText, new PromptOwner(jobId.Value, promptId))
-        {
-            Input = string.Empty,
-            CaretIndex = 0
-        };
-
-        _document.Transcript.Add(block);
-        _jobPromptRefs[promptBlockId] = new JobPromptRef(jobId, promptId);
-        _activeJobPromptBlocks[jobId] = promptBlockId;
-        _pendingShellPrompt = true;
-    }
-
-    private void FinalizeActiveJobPromptIfAny(JobId jobId)
-    {
-        if (!_activeJobPromptBlocks.TryGetValue(jobId, out var promptBlockId))
-        {
-            return;
-        }
-
-        if (!TryGetPrompt(promptBlockId, out var prompt))
-        {
-            _activeJobPromptBlocks.Remove(jobId);
-            _jobPromptRefs.Remove(promptBlockId);
-            return;
-        }
-
-        ReplacePromptWithArchivedText(promptBlockId, prompt.Prompt + prompt.Input, ConsoleTextStream.Default);
-        _activeJobPromptBlocks.Remove(jobId);
-        _jobPromptRefs.Remove(promptBlockId);
-    }
-
     private void EnsureShellPromptAtEndIfNeeded()
     {
-        if (_ownedPromptRefs.Count > 0)
+        if (_promptLifecycle.HasOwnedPrompts)
         {
             return;
         }
 
-        if (_activeJobPromptBlocks.Count > 0)
+        if (_promptLifecycle.HasActiveJobPrompts)
         {
             return;
         }
@@ -1658,17 +1283,16 @@ public sealed class ConsoleHostSession
         var blocks = _document.Transcript.Blocks;
         if (blocks.Count > 0 && blocks[^1] is PromptBlock prompt && prompt.Owner is null)
         {
-            _pendingShellPrompt = false;
+            _promptLifecycle.PendingShellPrompt = false;
             return;
         }
 
-        if (!_pendingShellPrompt && blocks.Count > 0)
+        if (!_promptLifecycle.PendingShellPrompt && blocks.Count > 0)
         {
             return;
         }
 
-        _document.Transcript.Add(new PromptBlock(new BlockId(AllocateNewBlockId()), _defaultPromptText));
-        _pendingShellPrompt = false;
+        _promptLifecycle.EnsureShellPromptAtEndIfNeeded(AllocateNewBlockId);
         _pendingContentRebuild = true;
     }
 
@@ -1692,46 +1316,8 @@ public sealed class ConsoleHostSession
 
     private void RemoveShellPromptIfPresent(BlockId promptId)
     {
-        var blocks = _document.Transcript.Blocks;
-        if (blocks.Count == 0)
-        {
-            return;
-        }
-
-        var lastIndex = blocks.Count - 1;
-        if (blocks[lastIndex] is PromptBlock prompt && prompt.Id == promptId && prompt.Owner is null)
-        {
-            RemoveBlockAt(lastIndex);
-            _pendingContentRebuild = true;
-        }
-    }
-
-    private void ClearChunkAccumulatorsForJob(JobId jobId)
-    {
-        if (_chunkAccumulators.Count == 0)
-        {
-            return;
-        }
-
-        List<(JobId, TextStream)>? toRemove = null;
-        foreach (var key in _chunkAccumulators.Keys)
-        {
-            if (key.JobId == jobId)
-            {
-                toRemove ??= new List<(JobId, TextStream)>();
-                toRemove.Add(key);
-            }
-        }
-
-        if (toRemove is null)
-        {
-            return;
-        }
-
-        foreach (var key in toRemove)
-        {
-            _chunkAccumulators.Remove(key);
-        }
+        _promptLifecycle.RemoveShellPromptIfPresent(promptId, RemoveBlockAt);
+        _pendingContentRebuild = true;
     }
 
     private void ReplacePromptWithArchivedText(BlockId promptId, string line, ConsoleTextStream stream)
@@ -1759,57 +1345,6 @@ public sealed class ConsoleHostSession
             }
         }
     }
-
-    private static ConsoleTextStream MapTextStream(TextStream stream) =>
-        stream switch
-        {
-            TextStream.Stdout => ConsoleTextStream.Stdout,
-            TextStream.Stderr => ConsoleTextStream.Stderr,
-            TextStream.System => ConsoleTextStream.System,
-            _ => ConsoleTextStream.Default
-        };
-
-    private static (List<string> Lines, string Remainder, bool EndsWithCR) SplitLinesAndRemainder(string text)
-    {
-        var lines = new List<string>();
-        var start = 0;
-        var endsWithCR = false;
-
-        for (var i = 0; i < text.Length; i++)
-        {
-            var ch = text[i];
-            if (ch != '\r' && ch != '\n')
-            {
-                continue;
-            }
-
-            lines.Add(text.Substring(start, i - start));
-            start = i + 1;
-
-            if (ch == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
-            {
-                start++;
-                i++;
-            }
-            else if (ch == '\r' && i == text.Length - 1)
-            {
-                endsWithCR = true;
-            }
-        }
-
-        var remainder = start >= text.Length ? string.Empty : text.Substring(start);
-        return (lines, remainder, endsWithCR);
-    }
-
-    private sealed class ChunkAccumulator
-    {
-        public BlockId? ActiveBlockId;
-        public string Pending = string.Empty;
-        public bool PendingCR;
-    }
-
-    private readonly record struct JobPromptRef(JobId JobId, long PromptId);
-    private readonly record struct OwnedPromptRef(long PromptId);
 
     private sealed class InspectHostAdapter : IInspectHost
     {
@@ -1951,6 +1486,11 @@ public sealed class ConsoleHostSession
         return false;
     }
 
+    private PromptBlock? TryGetPromptNullable(BlockId id)
+    {
+        return TryGetPrompt(id, out var prompt) ? prompt : null;
+    }
+
     private bool TryGetBlock(BlockId id, out IBlock block)
     {
         foreach (var candidate in _document.Transcript.Blocks)
@@ -1996,57 +1536,6 @@ public sealed class ConsoleHostSession
 
 
 
-    private void LogOnce(
-        GlyphAtlasData atlas,
-        LayoutFrame layout,
-        Cycon.Rendering.RenderFrame renderFrame,
-        int framebufferWidth,
-        int framebufferHeight)
-    {
-        if (_logged)
-        {
-            return;
-        }
-
-        var nonZero = CountNonZero(atlas.Pixels);
-        var glyphCount = CountGlyphs(renderFrame);
-
-        Console.WriteLine($"Atlas {atlas.Width}x{atlas.Height} cell={atlas.CellWidthPx}x{atlas.CellHeightPx} baseline={atlas.BaselinePx} nonZero={nonZero}");
-        Console.WriteLine($"Grid cols={layout.Grid.Cols} rows={layout.Grid.Rows} padding={layout.Grid.PaddingLeftPx},{layout.Grid.PaddingTopPx}");
-        Console.WriteLine($"Lines={layout.Lines.Count} Commands={renderFrame.Commands.Count} Glyphs={glyphCount}");
-        Console.WriteLine($"Window {framebufferWidth}x{framebufferHeight} Framebuffer {framebufferWidth}x{framebufferHeight}");
-
-        _logged = true;
-    }
-
-    private static int CountNonZero(byte[] data)
-    {
-        var count = 0;
-        foreach (var value in data)
-        {
-            if (value != 0)
-            {
-                count++;
-            }
-        }
-
-        return count;
-    }
-
-    private static int CountGlyphs(Cycon.Rendering.RenderFrame frame)
-    {
-        var total = 0;
-        foreach (var command in frame.Commands)
-        {
-            if (command is Cycon.Rendering.Commands.DrawGlyphRun run)
-            {
-                total += run.Glyphs.Count;
-            }
-        }
-
-        return total;
-    }
-
     private static GridSize ComputeGrid(int framebufferWidth, int framebufferHeight, LayoutSettings settings)
     {
         var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
@@ -2090,57 +1579,6 @@ public sealed class ConsoleHostSession
         _resizeVsyncDisabled = true;
     }
 
-    private (RenderFrame Frame, GridSize BuiltGrid, LayoutFrame Layout, Cycon.Rendering.RenderFrame RenderFrame)
-        BuildFrameFor(
-            int framebufferWidth,
-            int framebufferHeight,
-            bool restoreAnchor,
-            byte caretAlpha,
-            double timeSeconds)
-    {
-        var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
-        var layout = _layoutEngine.Layout(_document, _layoutSettings, viewport);
-        if (restoreAnchor)
-        {
-            ScrollAnchoring.RestoreFromAnchor(_document.Scroll, layout);
-        }
-
-        var maxScrollOffsetRows = layout.Grid.Rows <= 0
-            ? 0
-            : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
-
-        if (_document.Scroll.IsFollowingTail)
-        {
-            if (_document.Scroll.ScrollOffsetRows != maxScrollOffsetRows)
-            {
-                _document.Scroll.ScrollOffsetRows = maxScrollOffsetRows;
-                _document.Scroll.ScrollRowsFromBottom = 0;
-            }
-        }
-        else
-        {
-            _document.Scroll.ScrollOffsetRows = Math.Clamp(_document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
-            _document.Scroll.ScrollRowsFromBottom = maxScrollOffsetRows - _document.Scroll.ScrollOffsetRows;
-        }
-
-        var scrollbar = ScrollbarLayouter.Layout(
-            layout.Grid,
-            layout.TotalRows,
-            _document.Scroll.ScrollOffsetRows,
-            _document.Settings.Scrollbar);
-
-        if (scrollbar != layout.Scrollbar)
-        {
-            layout = new LayoutFrame(layout.Grid, layout.Lines, layout.HitTestMap, layout.TotalRows, scrollbar, layout.Scene3DViewports);
-        }
-
-        var renderFrame = _renderer.Render(_document, layout, _font, _selectionStyle, timeSeconds: timeSeconds, commandIndicators: _visibleCommandIndicators, caretAlpha: caretAlpha, meshReleases: TakePendingMeshReleases());
-        var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
-        ClearPendingMeshReleases();
-        var builtGrid = backendFrame.BuiltGrid;
-        return (backendFrame, builtGrid, layout, renderFrame);
-    }
-
     private static int GetScrollOffsetRows(ConsoleDocument document, LayoutFrame layout)
     {
         var maxScrollOffsetRows = layout.Grid.Rows <= 0
@@ -2150,12 +1588,44 @@ public sealed class ConsoleHostSession
         return Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
     }
 
-    private sealed record JobProjection(BlockId HeaderId, BlockId LastId);
-
     private sealed class EmptyServiceProvider : IServiceProvider
     {
         public static readonly EmptyServiceProvider Instance = new();
         public object? GetService(Type serviceType) => null;
+    }
+
+    int IBlockCommandSession.AllocateNewBlockId() => AllocateNewBlockId();
+
+    void IBlockCommandSession.InsertBlockAfter(BlockId afterId, IBlock block) => InsertBlockAfter(afterId, block);
+
+    bool IBlockCommandSession.TryGetPrompt(BlockId id, out PromptBlock prompt) => TryGetPrompt(id, out prompt);
+
+    void IBlockCommandSession.AppendOwnedPromptInternal(string promptText)
+    {
+        _promptLifecycle.AppendOwnedPrompt(
+            promptText,
+            AllocateNewBlockId,
+            RemoveBlockAt,
+            ReplaceBlockAt);
+    }
+
+    void IBlockCommandSession.AttachIndicator(BlockId commandEchoId, BlockId activityBlockId)
+    {
+        _commandIndicators[commandEchoId] = activityBlockId;
+        _pendingContentRebuild = true;
+    }
+
+    void IBlockCommandSession.OpenInspect(InspectKind kind, string path, string title, IBlock viewBlock, string receiptLine, BlockId commandEchoId)
+    {
+        _inspectController.OpenInspect(kind, path, title, viewBlock, receiptLine, commandEchoId);
+    }
+
+    void IBlockCommandSession.ClearTranscript() => ClearTranscript();
+
+    void IBlockCommandSession.RequestExit()
+    {
+        _pendingExit = true;
+        _pendingContentRebuild = true;
     }
 }
 
