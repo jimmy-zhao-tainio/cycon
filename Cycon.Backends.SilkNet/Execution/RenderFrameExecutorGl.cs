@@ -5,6 +5,7 @@ using System.Numerics;
 using Cycon.Backends.Abstractions.Rendering;
 using Cycon.Render;
 using Cycon.Backends.SilkNet.Execution.Shaders;
+using Silk.NET.Core.Native;
 using Silk.NET.OpenGL;
 
 namespace Cycon.Backends.SilkNet.Execution;
@@ -17,6 +18,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private uint _glyphProgram;
     private uint _quadProgram;
     private uint _mesh3dProgram;
+    private uint _imageProgram;
     private uint _vignetteProgram;
     private uint _vao;
     private uint _vbo;
@@ -26,6 +28,8 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private int _uViewportLocationGlyph;
     private int _uAtlasLocationGlyph;
     private int _uViewportLocationQuad;
+    private int _uViewportLocationImage;
+    private int _uImageLocationImage;
     private int _uViewportLocationVignette;
     private int _uRectLocationVignette;
     private int _uParamsLocationVignette;
@@ -48,8 +52,10 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private readonly HashSet<int> _loggedFailureTags = new();
     private readonly HashSet<int> _loggedMesh3DStateTags = new();
     private readonly Dictionary<int, Mesh3D> _meshes3D = new();
+    private readonly Dictionary<int, Image2D> _images2D = new();
 
     private readonly record struct Mesh3D(uint Vao, uint Vbo, int VertexCount);
+    private readonly record struct Image2D(uint Texture, int Width, int Height);
 
     public RenderFrameExecutorGl(GL gl)
     {
@@ -81,6 +87,10 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         _quadProgram = CreateProgram(ShaderSources.Vertex, ShaderSources.FragmentQuad);
         _uViewportLocationQuad = _gl.GetUniformLocation(_quadProgram, "uViewport");
+
+        _imageProgram = CreateProgram(ShaderSources.Vertex, ShaderSources.FragmentImage);
+        _uViewportLocationImage = _gl.GetUniformLocation(_imageProgram, "uViewport");
+        _uImageLocationImage = _gl.GetUniformLocation(_imageProgram, "uImage");
 
         _mesh3dProgram = CreateProgram(ShaderSources.VertexMesh3D, ShaderSources.FragmentMesh3D);
         _uModelLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uModel");
@@ -345,6 +355,11 @@ public sealed class RenderFrameExecutorGl : IDisposable
                 case DrawVignetteQuad vignette:
                     Flush();
                     DrawVignette(vignette);
+                    currentKind = null;
+                    break;
+                case DrawImage2D image:
+                    Flush();
+                    DrawImage2D(image);
                     currentKind = null;
                     break;
             }
@@ -832,6 +847,155 @@ public sealed class RenderFrameExecutorGl : IDisposable
         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(verts.Count / FloatsPerVertex));
     }
 
+    private void UploadImage2D(int imageId, byte[] rgbaPixels, int width, int height)
+    {
+        if (rgbaPixels is null || rgbaPixels.Length == 0)
+        {
+            LogFailure(_debugTag, $"[GL] UploadImage2D missing data imageId={imageId}");
+            return;
+        }
+
+        var required = width * height * 4;
+        if (width <= 0 || height <= 0 || rgbaPixels.Length < required)
+        {
+            LogFailure(_debugTag, $"[GL] UploadImage2D invalid data imageId={imageId} size={width}x{height} bytes={rgbaPixels.Length} required={required}");
+            return;
+        }
+
+        if (_images2D.TryGetValue(imageId, out var existing))
+        {
+            if (existing.Width == width && existing.Height == height)
+            {
+                return;
+            }
+
+            ReleaseImage2D(imageId);
+        }
+
+        var texture = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, texture);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+
+        _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+        unsafe
+        {
+            fixed (byte* p = rgbaPixels)
+            {
+                _gl.TexImage2D(
+                    TextureTarget.Texture2D,
+                    0,
+                    InternalFormat.Rgba8,
+                    (uint)width,
+                    (uint)height,
+                    0,
+                    PixelFormat.Rgba,
+                    PixelType.UnsignedByte,
+                    p);
+            }
+        }
+
+        _gl.GenerateMipmap(TextureTarget.Texture2D);
+
+        unsafe
+        {
+            var extPtr = _gl.GetString(StringName.Extensions);
+            var extensions = extPtr == null ? string.Empty : SilkMarshal.PtrToString((nint)extPtr);
+            if (!string.IsNullOrEmpty(extensions) &&
+                extensions.Contains("GL_EXT_texture_filter_anisotropic", StringComparison.Ordinal))
+            {
+                var max = _gl.GetFloat((GLEnum)0x84FF); // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
+                var aniso = MathF.Min(8f, max);
+                _gl.TexParameter(TextureTarget.Texture2D, (TextureParameterName)0x84FE, aniso); // GL_TEXTURE_MAX_ANISOTROPY_EXT
+            }
+        }
+
+        CheckGlError("image2d_upload");
+        _images2D[imageId] = new Image2D(texture, width, height);
+    }
+
+    private void ReleaseImage2D(int imageId)
+    {
+        if (!_images2D.TryGetValue(imageId, out var image))
+        {
+            return;
+        }
+
+        if (image.Texture != 0) _gl.DeleteTexture(image.Texture);
+        _images2D.Remove(imageId);
+        CheckGlError("image2d_release");
+    }
+
+    private void DrawImage2D(DrawImage2D draw)
+    {
+        if (!_images2D.TryGetValue(draw.ImageId, out var image))
+        {
+            UploadImage2D(draw.ImageId, draw.RgbaPixels, draw.Width, draw.Height);
+            if (!_images2D.TryGetValue(draw.ImageId, out image))
+            {
+                LogFailure(_debugTag, $"[GL] DrawImage2D missing image imageId={draw.ImageId}");
+                return;
+            }
+        }
+
+        if (draw.DestRectPx.Width <= 0 || draw.DestRectPx.Height <= 0)
+        {
+            return;
+        }
+
+        _gl.UseProgram(_imageProgram);
+        _gl.Uniform2(_uViewportLocationImage, (float)_viewportWidth, (float)_viewportHeight);
+        _gl.Uniform1(_uImageLocationImage, 0);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, image.Texture);
+
+        var verts = new List<float>();
+        AddImageVertices(verts, draw.DestRectPx, unchecked((int)0xFFFFFFFF));
+        if (verts.Count == 0)
+        {
+            return;
+        }
+
+        _gl.BindVertexArray(_vao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
+        var data = verts.ToArray();
+        unsafe
+        {
+            fixed (float* ptr = data)
+            {
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), ptr, BufferUsageARB.StreamDraw);
+            }
+        }
+
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(verts.Count / FloatsPerVertex));
+        CheckGlError("image2d_draw");
+    }
+
+    private static void AddImageVertices(List<float> vertices, RectPx rect, int rgba)
+    {
+        if (rect.Width <= 0 || rect.Height <= 0)
+        {
+            return;
+        }
+
+        var x0 = rect.X;
+        var y0 = rect.Y;
+        var x1 = x0 + rect.Width;
+        var y1 = y0 + rect.Height;
+
+        var (r, g, b, a) = ToColor(rgba);
+
+        AddVertex(vertices, x0, y0, 0f, 0f, r, g, b, a);
+        AddVertex(vertices, x1, y0, 1f, 0f, r, g, b, a);
+        AddVertex(vertices, x1, y1, 1f, 1f, r, g, b, a);
+
+        AddVertex(vertices, x0, y0, 0f, 0f, r, g, b, a);
+        AddVertex(vertices, x1, y1, 1f, 1f, r, g, b, a);
+        AddVertex(vertices, x0, y1, 0f, 1f, r, g, b, a);
+    }
+
     private static void AddVertex(List<float> vertices, float x, float y, float u, float v, float r, float g, float b, float a)
     {
         vertices.Add(x);
@@ -954,8 +1118,15 @@ public sealed class RenderFrameExecutorGl : IDisposable
         }
         _meshes3D.Clear();
 
+        foreach (var image in _images2D.Values)
+        {
+            if (image.Texture != 0) _gl.DeleteTexture(image.Texture);
+        }
+        _images2D.Clear();
+
         if (_glyphProgram != 0) _gl.DeleteProgram(_glyphProgram);
         if (_quadProgram != 0) _gl.DeleteProgram(_quadProgram);
+        if (_imageProgram != 0) _gl.DeleteProgram(_imageProgram);
         if (_mesh3dProgram != 0) _gl.DeleteProgram(_mesh3dProgram);
         if (_vignetteProgram != 0) _gl.DeleteProgram(_vignetteProgram);
 

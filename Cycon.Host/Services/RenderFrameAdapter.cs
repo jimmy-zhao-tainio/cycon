@@ -57,6 +57,14 @@ public static class RenderFrameAdapter
                         vignette.Inner,
                         vignette.Outer));
                     break;
+                case RenderingCommands.DrawImage2D image:
+                    adapted.Add(new BackendRender.DrawImage2D(
+                        image.ImageId,
+                        image.RgbaPixels,
+                        image.Width,
+                        image.Height,
+                        image.DestRectPx));
+                    break;
                 case RenderingCommands.SetDebugTag tag:
                     adapted.Add(new BackendRender.SetDebugTag(tag.Tag));
                     break;

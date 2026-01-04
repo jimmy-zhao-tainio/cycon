@@ -1078,7 +1078,21 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private void HandleFileDropFromInspect(string path)
     {
+        EnsureShellPromptForFileDrop();
         ApplyCommandHostActions(_commandHost.HandleFileDrop(path, _commandHostView));
+    }
+
+    private void EnsureShellPromptForFileDrop()
+    {
+        var prompt = FindLastPrompt(_document.Transcript);
+        if (prompt is not null)
+        {
+            return;
+        }
+
+        _document.Transcript.Add(new PromptBlock(new BlockId(AllocateNewBlockId()), _defaultPromptText));
+        _promptLifecycle.PendingShellPrompt = false;
+        _pendingContentRebuild = true;
     }
 
     private void ClearTranscript()

@@ -49,6 +49,21 @@ void main()
 }
 ";
 
+    public const string FragmentImage = @"#version 330 core
+in vec2 vTexCoord;
+in vec4 vColor;
+
+out vec4 FragColor;
+
+uniform sampler2D uImage;
+
+void main()
+{
+    vec4 t = texture(uImage, vTexCoord);
+    FragColor = vec4(t.rgb, t.a) * vColor;
+}
+";
+
     public const string FragmentVignette = @"#version 330 core
 uniform vec2 uViewport;
 uniform vec4 uRect;   // x,y,w,h in TOP-LEFT pixel space

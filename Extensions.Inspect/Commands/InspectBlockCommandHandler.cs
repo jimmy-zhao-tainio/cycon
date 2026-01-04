@@ -58,6 +58,26 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
             return true;
         }
 
+        if (IsImageExtension(file.Extension))
+        {
+            try
+            {
+                var blockId = ctx.AllocateBlockId();
+                var image = ImageBlock.Load(blockId, fullPath);
+                var receipt = InspectReceiptFormatter.CreateBinary(file);
+                ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, image, InspectReceiptFormatter.FormatSingleLine(receipt));
+            }
+            catch (Exception ex)
+            {
+                ctx.InsertTextAfterCommandEcho($"Image load failed: {ex.Message}", ConsoleTextStream.System);
+                var fallback = InspectInfoBlock.FromFile(ctx.AllocateBlockId(), file);
+                var receipt = InspectReceiptFormatter.CreateBinary(file);
+                ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, fallback, InspectReceiptFormatter.FormatSingleLine(receipt));
+            }
+
+            return true;
+        }
+
         if (TextSniffer.LooksLikeTextFile(fullPath))
         {
             try
@@ -83,6 +103,14 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
         var binaryReceipt = InspectReceiptFormatter.CreateBinary(file);
         ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, info, InspectReceiptFormatter.FormatSingleLine(binaryReceipt));
         return true;
+    }
+
+    private static bool IsImageExtension(string extension)
+    {
+        return extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".webp", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryParseArgs(

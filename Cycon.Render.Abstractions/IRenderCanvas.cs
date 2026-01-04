@@ -37,4 +37,6 @@ public interface IRenderCanvas
     void DrawVignette(in RectPx rectPx, float strength01, float inner, float outer);
 
     void DrawText(string text, int start, int length, int xPx, int yPx, int rgba);
+
+    void DrawImage2D(int imageId, byte[] rgbaPixels, int width, int height, in RectPx destRectPx);
 }

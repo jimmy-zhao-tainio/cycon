@@ -102,6 +102,21 @@ internal sealed class RenderCanvas : IRenderCanvas
         }
     }
 
+    public void DrawImage2D(int imageId, byte[] rgbaPixels, int width, int height, in RectPx destRectPx)
+    {
+        if (rgbaPixels is null || rgbaPixels.Length == 0 || width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        if (destRectPx.Width <= 0 || destRectPx.Height <= 0)
+        {
+            return;
+        }
+
+        _frame.Add(new DrawImage2D(imageId, rgbaPixels, width, height, destRectPx));
+    }
+
     private static DepthFuncKind Map(DepthFunc func) =>
         func switch
         {

@@ -28,6 +28,13 @@ public sealed record DrawMesh3D(
 
 public sealed record DrawVignetteQuad(int X, int Y, int Width, int Height, float Strength, float Inner, float Outer) : DrawCommand;
 
+public sealed record DrawImage2D(
+    int ImageId,
+    byte[] RgbaPixels,
+    int Width,
+    int Height,
+    RectPx DestRectPx) : DrawCommand;
+
 // Debug/profiling metadata for renderers/executors. Not intended for UI logic.
 public sealed record SetDebugTag(int Tag) : DrawCommand;
 
