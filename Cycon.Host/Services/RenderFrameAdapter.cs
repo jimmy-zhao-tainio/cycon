@@ -63,7 +63,8 @@ public static class RenderFrameAdapter
                         image.RgbaPixels,
                         image.Width,
                         image.Height,
-                        image.DestRectPx));
+                        image.DestRectPx,
+                        image.UseNearest));
                     break;
                 case RenderingCommands.SetDebugTag tag:
                     adapted.Add(new BackendRender.SetDebugTag(tag.Tag));

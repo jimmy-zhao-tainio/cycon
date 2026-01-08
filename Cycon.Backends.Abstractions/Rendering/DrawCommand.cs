@@ -33,7 +33,8 @@ public sealed record DrawImage2D(
     byte[] RgbaPixels,
     int Width,
     int Height,
-    RectPx DestRectPx) : DrawCommand;
+    RectF DestRectPx,
+    bool UseNearest) : DrawCommand;
 
 // Debug/profiling metadata for renderers/executors. Not intended for UI logic.
 public sealed record SetDebugTag(int Tag) : DrawCommand;

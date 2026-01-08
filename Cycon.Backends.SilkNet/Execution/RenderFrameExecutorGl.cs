@@ -945,16 +945,43 @@ public sealed class RenderFrameExecutorGl : IDisposable
             return;
         }
 
+        var scale = draw.DestRectPx.Width / (float)image.Width;
+        var wasMultisample = _gl.IsEnabled(EnableCap.Multisample);
+        if (wasMultisample)
+        {
+            _gl.Disable(EnableCap.Multisample);
+        }
+
         _gl.UseProgram(_imageProgram);
         _gl.Uniform2(_uViewportLocationImage, (float)_viewportWidth, (float)_viewportHeight);
         _gl.Uniform1(_uImageLocationImage, 0);
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.BindTexture(TextureTarget.Texture2D, image.Texture);
 
+        if (draw.UseNearest)
+        {
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+        }
+        else if (scale >= 1.0f - 1e-4f)
+        {
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        }
+        else
+        {
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        }
+
         var verts = new List<float>();
         AddImageVertices(verts, draw.DestRectPx, unchecked((int)0xFFFFFFFF));
         if (verts.Count == 0)
         {
+            if (wasMultisample)
+            {
+                _gl.Enable(EnableCap.Multisample);
+            }
             return;
         }
 
@@ -970,10 +997,14 @@ public sealed class RenderFrameExecutorGl : IDisposable
         }
 
         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(verts.Count / FloatsPerVertex));
+        if (wasMultisample)
+        {
+            _gl.Enable(EnableCap.Multisample);
+        }
         CheckGlError("image2d_draw");
     }
 
-    private static void AddImageVertices(List<float> vertices, RectPx rect, int rgba)
+    private static void AddImageVertices(List<float> vertices, RectF rect, int rgba)
     {
         if (rect.Width <= 0 || rect.Height <= 0)
         {

@@ -102,7 +102,7 @@ internal sealed class RenderCanvas : IRenderCanvas
         }
     }
 
-    public void DrawImage2D(int imageId, byte[] rgbaPixels, int width, int height, in RectPx destRectPx)
+    public void DrawImage2D(int imageId, byte[] rgbaPixels, int width, int height, in RectF destRectPx, bool useNearest)
     {
         if (rgbaPixels is null || rgbaPixels.Length == 0 || width <= 0 || height <= 0)
         {
@@ -114,7 +114,7 @@ internal sealed class RenderCanvas : IRenderCanvas
             return;
         }
 
-        _frame.Add(new DrawImage2D(imageId, rgbaPixels, width, height, destRectPx));
+        _frame.Add(new DrawImage2D(imageId, rgbaPixels, width, height, destRectPx, useNearest));
     }
 
     private static DepthFuncKind Map(DepthFunc func) =>

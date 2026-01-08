@@ -38,5 +38,5 @@ public interface IRenderCanvas
 
     void DrawText(string text, int start, int length, int xPx, int yPx, int rgba);
 
-    void DrawImage2D(int imageId, byte[] rgbaPixels, int width, int height, in RectPx destRectPx);
+    void DrawImage2D(int imageId, byte[] rgbaPixels, int width, int height, in RectF destRectPx, bool useNearest);
 }
