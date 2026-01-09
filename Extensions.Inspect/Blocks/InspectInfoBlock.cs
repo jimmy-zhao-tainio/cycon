@@ -9,6 +9,7 @@ namespace Extensions.Inspect.Blocks;
 public sealed class InspectInfoBlock : IBlock, IRenderBlock, IMeasureBlock
 {
     private readonly IReadOnlyList<string> _lines;
+    private int _initialHeightRows = -1;
 
     public InspectInfoBlock(BlockId id, IReadOnlyList<string> lines)
     {
@@ -30,7 +31,13 @@ public sealed class InspectInfoBlock : IBlock, IRenderBlock, IMeasureBlock
 
         var contentRows = Math.Max(1, _lines.Count);
         var desiredRows = Math.Min(availableRows, contentRows);
-        return new BlockSize(width, checked(desiredRows * cellH));
+        if (_initialHeightRows < 0)
+        {
+            _initialHeightRows = desiredRows;
+        }
+
+        var heightRows = Math.Min(availableRows, _initialHeightRows);
+        return new BlockSize(width, checked(heightRows * cellH));
     }
 
     public void Render(IRenderCanvas canvas, in BlockRenderContext ctx)

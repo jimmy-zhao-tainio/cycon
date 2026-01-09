@@ -21,6 +21,7 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
     private readonly ScrollbarUiState _scrollbarUi = new();
     private readonly ScrollbarSettings _scrollbarSettings = new();
     private double _lastRenderTimeSeconds;
+    private int _initialHeightRows = -1;
 
     public InspectTextBlock(BlockId id, string path)
     {
@@ -110,7 +111,13 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
         var contentRows = _scrollModel.ComputeWrappedRowsCapped(cols, capRows);
         var contentHeightPx = checked((contentRows * cellH) + (PaddingTopBottomPx * 2));
 
-        var heightPx = Math.Min(availableHeightPx, contentHeightPx);
+        if (_initialHeightRows < 0)
+        {
+            _initialHeightRows = Math.Min(availableRows, contentRows);
+        }
+
+        var initialHeightPx = checked((_initialHeightRows * cellH) + (PaddingTopBottomPx * 2));
+        var heightPx = Math.Min(availableHeightPx, Math.Min(contentHeightPx, initialHeightPx));
         heightPx = Math.Max(cellH, heightPx);
         return new BlockSize(ctx.ContentWidthPx, heightPx);
     }

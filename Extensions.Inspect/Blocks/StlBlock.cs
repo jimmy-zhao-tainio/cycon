@@ -14,6 +14,7 @@ public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IM
     private float _lastProjectionAspect = float.NaN;
     private float _lastHorizontalFovDegrees = DefaultHorizontalFovDegrees;
     private float _lastVerticalFovRadians = float.NaN;
+    private int _initialHeightRows = -1;
 
     public Scene3DNavigationMode NavigationMode { get; set; } = Scene3DNavigationMode.Orbit;
     public Vector3 OrbitTarget { get; set; }
@@ -98,7 +99,13 @@ public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IM
         var viewportRows = Math.Max(1, ctx.ViewportRows);
         var promptReservedRows = 2;
         var availableRows = Math.Max(1, viewportRows - promptReservedRows);
-        return new BlockSize(width, checked(availableRows * cellH));
+        if (_initialHeightRows < 0)
+        {
+            _initialHeightRows = availableRows;
+        }
+
+        var heightRows = Math.Min(availableRows, _initialHeightRows);
+        return new BlockSize(width, checked(heightRows * cellH));
     }
 
     private static float ComputeFitDistance(float radius, float vfovRadians)
