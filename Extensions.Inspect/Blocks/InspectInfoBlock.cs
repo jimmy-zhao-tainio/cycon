@@ -6,7 +6,7 @@ using Cycon.Render;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed class InspectInfoBlock : IBlock, IRenderBlock, IMeasureBlock
+public sealed class InspectInfoBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockChromeProvider
 {
     private readonly IReadOnlyList<string> _lines;
     private int _initialHeightRows = -1;
@@ -20,6 +20,8 @@ public sealed class InspectInfoBlock : IBlock, IRenderBlock, IMeasureBlock
     public BlockId Id { get; }
 
     public BlockKind Kind => BlockKind.Scene3D;
+
+    public BlockChromeSpec ChromeSpec => BlockChromeSpec.ViewDefault;
 
     public BlockSize Measure(in BlockMeasureContext ctx)
     {

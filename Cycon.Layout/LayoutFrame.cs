@@ -39,4 +39,6 @@ public readonly record struct Scene3DViewportLayout(
     int BlockIndex,
     int RowIndex,
     PxRect ViewportRectPx,
+    PxRect InnerViewportRectPx,
+    BlockChromeSpec Chrome,
     double PreferredAspectRatio);

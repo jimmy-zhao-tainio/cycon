@@ -755,15 +755,26 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 return false;
             }
 
-            var consumed = DispatchInlineViewportPointer(block, viewportRectPx, e);
+            _ = DispatchInlineViewportPointer(block, viewportRectPx, e);
             UpdateInlineViewportCapture(block, viewport.BlockId, e);
-            return consumed;
+            return true;
+        }
+
+        if (e.Kind is HostMouseEventKind.Move or HostMouseEventKind.Up)
+        {
+            return false;
         }
 
         if (!TryHitTestInlineViewport(_lastLayout, e.X, e.Y, scrollYPx, out var hitViewport, out var hitViewportRectPx) ||
             !TryGetInlineViewportBlock(hitViewport, out var hitBlock))
         {
             return false;
+        }
+
+        if (e.Kind == HostMouseEventKind.Down &&
+            (e.Buttons & HostMouseButtons.Left) != 0)
+        {
+            _capturedInlineViewportBlockId = hitViewport.BlockId;
         }
 
         var hitConsumed = DispatchInlineViewportPointer(hitBlock, hitViewportRectPx, e);
@@ -806,15 +817,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             return;
         }
 
-        if (_inlineScene3DPointer.CapturedBlockId is { } capturedScene && capturedScene == blockId)
+        if (block is IBlockPointerCaptureState captureState &&
+            _capturedInlineViewportBlockId == blockId &&
+            !captureState.HasPointerCapture)
         {
-            _capturedInlineViewportBlockId = blockId;
-            return;
-        }
-
-        if (block is IBlockPointerCaptureState captureState)
-        {
-            _capturedInlineViewportBlockId = captureState.HasPointerCapture ? blockId : null;
+            _capturedInlineViewportBlockId = null;
         }
     }
 
@@ -835,7 +842,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             }
 
             viewport = candidate;
-            var rect = candidate.ViewportRectPx;
+            var rect = candidate.InnerViewportRectPx;
             viewportRectPx = new PxRect(rect.X, rect.Y - scrollYPx, rect.Width, rect.Height);
             return true;
         }
@@ -869,7 +876,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             }
 
             viewport = candidate;
-            viewportRectPx = screenRect;
+            var innerRect = candidate.InnerViewportRectPx;
+            viewportRectPx = new PxRect(innerRect.X, innerRect.Y - scrollYPx, innerRect.Width, innerRect.Height);
             return true;
         }
 

@@ -10,7 +10,7 @@ using Cycon.Core.Scrolling;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockPointerCaptureState
+public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockPointerCaptureState, IBlockChromeProvider
 {
     private const int PaddingLeftRightPx = 5;
     private const int PaddingTopBottomPx = 3;
@@ -37,6 +37,8 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
     public BlockKind Kind => BlockKind.Scene3D;
 
     public string Path { get; }
+
+    public BlockChromeSpec ChromeSpec => BlockChromeSpec.ViewDefault;
 
     public int LineCount => _lines.Count;
 

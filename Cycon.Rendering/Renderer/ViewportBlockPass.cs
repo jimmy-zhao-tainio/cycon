@@ -2,6 +2,7 @@ using System;
 using Cycon.Core;
 using Cycon.Core.Fonts;
 using Cycon.Core.Settings;
+using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Layout;
 using Cycon.Layout.Metrics;
@@ -11,6 +12,9 @@ namespace Cycon.Rendering.Renderer;
 
 internal static class ViewportBlockPass
 {
+    private const int PanelBgRgba = unchecked((int)0x111111FF);
+    private const int FrameRgba = unchecked((int)0x333333FF);
+
     public static void RenderViewportsStartingAtRow(
         RenderCanvas canvas,
         ConsoleDocument document,
@@ -50,15 +54,15 @@ internal static class ViewportBlockPass
                 continue;
             }
 
-            var rect = viewport.ViewportRectPx;
-            var viewportRect = new RectPx(rect.X, rect.Y - scrollYPx, rect.Width, rect.Height);
-            if (viewportRect.Width <= 0 || viewportRect.Height <= 0)
+            var outerRect = viewport.ViewportRectPx;
+            var outerViewportRect = new RectPx(outerRect.X, outerRect.Y - scrollYPx, outerRect.Width, outerRect.Height);
+            if (outerViewportRect.Width <= 0 || outerViewportRect.Height <= 0)
             {
                 continue;
             }
 
             // Skip fully off-screen.
-            if (viewportRect.Y >= layout.Grid.FramebufferHeightPx || viewportRect.Y + viewportRect.Height <= 0)
+            if (outerViewportRect.Y >= layout.Grid.FramebufferHeightPx || outerViewportRect.Y + outerViewportRect.Height <= 0)
             {
                 continue;
             }
@@ -68,13 +72,64 @@ internal static class ViewportBlockPass
                 continue;
             }
 
+            if (viewport.Chrome.Enabled)
+            {
+                DrawChrome(canvas, viewport.Chrome, outerViewportRect);
+            }
+
+            var innerRect = viewport.InnerViewportRectPx;
+            var innerViewportRect = new RectPx(innerRect.X, innerRect.Y - scrollYPx, innerRect.Width, innerRect.Height);
+            if (innerViewportRect.Width <= 0 || innerViewportRect.Height <= 0)
+            {
+                continue;
+            }
+
             canvas.SetDebugTag(viewport.BlockId.Value);
-            canvas.PushClipRect(viewportRect);
-            renderBlock.Render(canvas, new BlockRenderContext(viewportRect, timeSeconds, theme, textMetrics, scene3D));
+            canvas.PushClipRect(innerViewportRect);
+            renderBlock.Render(canvas, new BlockRenderContext(innerViewportRect, timeSeconds, theme, textMetrics, scene3D));
 
             canvas.PopClipRect();
             canvas.SetDebugTag(0);
         }
+    }
+
+    private static void DrawChrome(RenderCanvas canvas, BlockChromeSpec chrome, RectPx rect)
+    {
+        if (rect.Width <= 0 || rect.Height <= 0)
+        {
+            return;
+        }
+
+        switch (chrome.Style)
+        {
+            case BlockChromeStyle.PanelBg:
+                canvas.FillRect(rect, PanelBgRgba);
+                break;
+            case BlockChromeStyle.Frame2Px:
+                DrawFrame(canvas, rect, Math.Max(1, chrome.BorderPx), FrameRgba);
+                break;
+        }
+    }
+
+    private static void DrawFrame(RenderCanvas canvas, RectPx rect, int thickness, int rgba)
+    {
+        if (rect.Width <= 0 || rect.Height <= 0)
+        {
+            return;
+        }
+
+        var maxThickness = Math.Min(rect.Width / 2, rect.Height / 2);
+        thickness = Math.Max(1, Math.Min(thickness, maxThickness));
+
+        if (thickness <= 0)
+        {
+            return;
+        }
+
+        canvas.FillRect(new RectPx(rect.X, rect.Y, rect.Width, thickness), rgba);
+        canvas.FillRect(new RectPx(rect.X, rect.Y + rect.Height - thickness, rect.Width, thickness), rgba);
+        canvas.FillRect(new RectPx(rect.X, rect.Y + thickness, thickness, rect.Height - (thickness * 2)), rgba);
+        canvas.FillRect(new RectPx(rect.X + rect.Width - thickness, rect.Y + thickness, thickness, rect.Height - (thickness * 2)), rgba);
     }
 
     private static Scene3DRenderSettings MapScene3D(Scene3DSettings s)

@@ -38,7 +38,21 @@ public sealed class LayoutEngine
 
                 var viewportRect = Scene3DLayouter.LayoutViewport(grid, rowIndex, desiredHeightPx: desiredHeight);
                 var aspect = desiredHeight > 0 ? (grid.ContentWidthPx / (double)desiredHeight) : 0;
-                sceneViewports.Add(new Scene3DViewportLayout(block.Id, blockIndex, rowIndex, viewportRect, aspect));
+                var chrome = block is IBlockChromeProvider chromeProvider
+                    ? chromeProvider.ChromeSpec
+                    : BlockChromeSpec.Disabled;
+                var innerViewport = chrome.Enabled
+                    ? DeflateRect(viewportRect, Math.Max(0, chrome.BorderPx + chrome.PaddingPx))
+                    : viewportRect;
+
+                sceneViewports.Add(new Scene3DViewportLayout(
+                    block.Id,
+                    blockIndex,
+                    rowIndex,
+                    viewportRect,
+                    innerViewport,
+                    chrome,
+                    aspect));
 
                 var consumedRows = Math.Max(1, (viewportRect.Height + grid.CellHeightPx - 1) / grid.CellHeightPx);
                 for (var r = 0; r < consumedRows; r++)
@@ -80,5 +94,19 @@ public sealed class LayoutEngine
             Scene3DBlock => throw new NotSupportedException("Scene3DBlock layout not implemented in Blocks v0."),
             _ => string.Empty
         };
+    }
+
+    private static PxRect DeflateRect(PxRect rect, int inset)
+    {
+        if (inset <= 0)
+        {
+            return rect;
+        }
+
+        var x = rect.X + inset;
+        var y = rect.Y + inset;
+        var w = Math.Max(0, rect.Width - (inset * 2));
+        var h = Math.Max(0, rect.Height - (inset * 2));
+        return new PxRect(x, y, w, h);
     }
 }

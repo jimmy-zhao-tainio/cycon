@@ -9,7 +9,7 @@ using SixLabors.ImageSharp.PixelFormats;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockPointerCaptureState
+public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockPointerCaptureState, IBlockChromeProvider
 {
     private const float ZoomBase = 1.008f;
     private const float WheelZoomSpeed = 20.0f;
@@ -60,6 +60,7 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
     public int ImageHeight { get; }
     public byte[] RgbaPixels { get; }
     public bool HasPointerCapture => _input.Dragging;
+    public BlockChromeSpec ChromeSpec => BlockChromeSpec.ViewDefault;
 
     public BlockSize Measure(in BlockMeasureContext ctx)
     {

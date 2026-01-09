@@ -6,7 +6,7 @@ using Cycon.Render;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IMouseFocusableViewportBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner
+public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IMouseFocusableViewportBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner, IBlockChromeProvider
 {
     private const float DefaultHorizontalFovDegrees = 80f;
     private const float FitPaddingMultiplier = 0.75f;
@@ -58,6 +58,8 @@ public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IM
     public bool HasMouseFocus { get; set; }
 
     public string FilePath { get; }
+
+    public BlockChromeSpec ChromeSpec => BlockChromeSpec.ViewDefault;
 
     /// <summary>
     /// Interleaved triangle soup: (x,y,z,nx,ny,nz) per vertex, 3 vertices per triangle.
