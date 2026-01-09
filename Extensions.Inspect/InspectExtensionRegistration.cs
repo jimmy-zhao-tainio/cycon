@@ -8,6 +8,7 @@ public static class InspectExtensionRegistration
     public static void Register(BlockCommandRegistry registry)
     {
         registry.Register(new InspectBlockCommandHandler());
+        registry.Register(new ViewBlockCommandHandler());
         registry.RegisterHelpProvider(new InspectHelpProvider());
     }
 }

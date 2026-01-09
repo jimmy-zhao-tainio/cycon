@@ -6,7 +6,7 @@ using Cycon.Render;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed class InspectInfoBlock : IBlock, IRenderBlock
+public sealed class InspectInfoBlock : IBlock, IRenderBlock, IMeasureBlock
 {
     private readonly IReadOnlyList<string> _lines;
 
@@ -18,8 +18,20 @@ public sealed class InspectInfoBlock : IBlock, IRenderBlock
 
     public BlockId Id { get; }
 
-    // Rendered via IRenderBlock in fullscreen inspect mode; layout kind is irrelevant.
-    public BlockKind Kind => BlockKind.Text;
+    public BlockKind Kind => BlockKind.Scene3D;
+
+    public BlockSize Measure(in BlockMeasureContext ctx)
+    {
+        var width = Math.Max(0, ctx.ContentWidthPx);
+        var cellH = Math.Max(1, ctx.CellHeightPx);
+        var viewportRows = Math.Max(1, ctx.ViewportRows);
+        var promptReservedRows = 1;
+        var availableRows = Math.Max(1, viewportRows - promptReservedRows);
+
+        var contentRows = Math.Max(1, _lines.Count);
+        var desiredRows = Math.Min(availableRows, contentRows);
+        return new BlockSize(width, checked(desiredRows * cellH));
+    }
 
     public void Render(IRenderCanvas canvas, in BlockRenderContext ctx)
     {
@@ -53,4 +65,3 @@ public sealed class InspectInfoBlock : IBlock, IRenderBlock
         return new InspectInfoBlock(id, lines);
     }
 }
-

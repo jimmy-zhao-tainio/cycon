@@ -277,6 +277,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         var currentGrid = resizePlan.CurrentGrid;
 
         var caretAlphaNow = ComputeCaretAlpha(nowTicks);
+        if (_document.Selection.ActiveRange is { } range && range.Anchor != range.Caret)
+        {
+            caretAlphaNow = 0;
+        }
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
 
         var renderedGrid = _lastFrame?.BuiltGrid ?? default;
@@ -429,6 +433,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         var caretAlpha = ComputeCaretAlpha(nowTicks);
+        if (_document.Selection.ActiveRange is { } range && range.Anchor != range.Caret)
+        {
+            caretAlpha = 0;
+        }
         if (caretAlpha == _lastCaretAlpha &&
             spinnerIndex == _lastSpinnerFrameIndex)
         {
@@ -658,6 +666,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         var nowTicks = Stopwatch.GetTimestamp();
         UpdateVisibleCommandIndicators(nowTicks);
         var caretAlphaNow = ComputeCaretAlpha(nowTicks);
+        if (_document.Selection.ActiveRange is { } range && range.Anchor != range.Caret)
+        {
+            caretAlphaNow = 0;
+        }
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
         var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
         var result = _renderPipeline.BuildFrame(

@@ -9,7 +9,7 @@ using SixLabors.ImageSharp.PixelFormats;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed class ImageBlock : IBlock, IRenderBlock, IBlockPointerHandler, IBlockWheelHandler
+public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler
 {
     private const float ZoomBase = 1.008f;
     private const float WheelZoomSpeed = 20.0f;
@@ -41,6 +41,7 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IBlockPointerHandler, IBl
     private bool _fitToView = true;
     private readonly ZoomState _zoom = new();
     private readonly InputState _input = new();
+    private int _initialHeightRows = -1;
 
     private ImageBlock(BlockId id, string path, int width, int height, byte[] rgbaPixels)
     {
@@ -53,11 +54,30 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IBlockPointerHandler, IBl
     }
 
     public BlockId Id { get; }
-    public BlockKind Kind => BlockKind.Image;
+    public BlockKind Kind => BlockKind.Scene3D;
     public string Path { get; }
     public int ImageWidth { get; }
     public int ImageHeight { get; }
     public byte[] RgbaPixels { get; }
+
+    public BlockSize Measure(in BlockMeasureContext ctx)
+    {
+        var width = Math.Max(0, ctx.ContentWidthPx);
+        var cellH = Math.Max(1, ctx.CellHeightPx);
+        var viewportRows = Math.Max(1, ctx.ViewportRows);
+        var promptReservedRows = 1;
+        var availableRows = Math.Max(1, viewportRows - promptReservedRows);
+
+        var imageRows = Math.Max(1, (ImageHeight + cellH - 1) / cellH);
+        var desiredInitialRows = Math.Min(availableRows, imageRows);
+        if (_initialHeightRows < 0)
+        {
+            _initialHeightRows = desiredInitialRows;
+        }
+
+        var heightRows = Math.Min(availableRows, Math.Min(imageRows, _initialHeightRows));
+        return new BlockSize(width, checked(heightRows * cellH));
+    }
 
     public static ImageBlock Load(BlockId id, string path)
     {

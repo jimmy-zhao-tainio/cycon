@@ -21,7 +21,7 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
 
     public bool TryExecute(CommandRequest request, IBlockCommandContext ctx)
     {
-        if (!TryParseArgs(request, out var fullPath, out var navMode, out var usageError))
+        if (!TryParseArgs(request, out var fullPath, out var navMode, out var inline, out var usageError))
         {
             ctx.InsertTextAfterCommandEcho(usageError, ConsoleTextStream.System);
             return true;
@@ -45,14 +45,28 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
                     orbit.NavigationMode = navMode;
                 }
                 var receipt = InspectReceiptFormatter.CreateStl(file, stl.TriangleCount, stl.VertexCount);
-                ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, stl, InspectReceiptFormatter.FormatSingleLine(receipt));
+                if (inline)
+                {
+                    ctx.InsertBlockAfterCommandEcho(stl);
+                }
+                else
+                {
+                    ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, stl, InspectReceiptFormatter.FormatSingleLine(receipt));
+                }
             }
             catch (Exception ex)
             {
                 ctx.InsertTextAfterCommandEcho($"STL load failed: {ex.Message}", ConsoleTextStream.System);
                 var fallback = InspectInfoBlock.FromFile(ctx.AllocateBlockId(), file);
                 var receipt = InspectReceiptFormatter.CreateBinary(file);
-                ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, fallback, InspectReceiptFormatter.FormatSingleLine(receipt));
+                if (inline)
+                {
+                    ctx.InsertBlockAfterCommandEcho(fallback);
+                }
+                else
+                {
+                    ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, fallback, InspectReceiptFormatter.FormatSingleLine(receipt));
+                }
             }
 
             return true;
@@ -65,14 +79,28 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
                 var blockId = ctx.AllocateBlockId();
                 var image = ImageBlock.Load(blockId, fullPath);
                 var receipt = InspectReceiptFormatter.CreateBinary(file);
-                ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, image, InspectReceiptFormatter.FormatSingleLine(receipt));
+                if (inline)
+                {
+                    ctx.InsertBlockAfterCommandEcho(image);
+                }
+                else
+                {
+                    ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, image, InspectReceiptFormatter.FormatSingleLine(receipt));
+                }
             }
             catch (Exception ex)
             {
                 ctx.InsertTextAfterCommandEcho($"Image load failed: {ex.Message}", ConsoleTextStream.System);
                 var fallback = InspectInfoBlock.FromFile(ctx.AllocateBlockId(), file);
                 var receipt = InspectReceiptFormatter.CreateBinary(file);
-                ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, fallback, InspectReceiptFormatter.FormatSingleLine(receipt));
+                if (inline)
+                {
+                    ctx.InsertBlockAfterCommandEcho(fallback);
+                }
+                else
+                {
+                    ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, fallback, InspectReceiptFormatter.FormatSingleLine(receipt));
+                }
             }
 
             return true;
@@ -86,14 +114,28 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
                 var view = new InspectTextBlock(blockId, fullPath);
                 var lineCount = view.LineCount;
                 var receipt = InspectReceiptFormatter.CreateText(file, lineCount);
-                ctx.OpenInspect(InspectKind.Text, fullPath, file.Name, view, InspectReceiptFormatter.FormatSingleLine(receipt));
+                if (inline)
+                {
+                    ctx.InsertBlockAfterCommandEcho(view);
+                }
+                else
+                {
+                    ctx.OpenInspect(InspectKind.Text, fullPath, file.Name, view, InspectReceiptFormatter.FormatSingleLine(receipt));
+                }
             }
             catch (Exception ex)
             {
                 ctx.InsertTextAfterCommandEcho($"Text load failed: {ex.Message}", ConsoleTextStream.System);
                 var fallback = InspectInfoBlock.FromFile(ctx.AllocateBlockId(), file);
                 var receipt = InspectReceiptFormatter.CreateText(file, lineCount: 0);
-                ctx.OpenInspect(InspectKind.Text, fullPath, file.Name, fallback, InspectReceiptFormatter.FormatSingleLine(receipt));
+                if (inline)
+                {
+                    ctx.InsertBlockAfterCommandEcho(fallback);
+                }
+                else
+                {
+                    ctx.OpenInspect(InspectKind.Text, fullPath, file.Name, fallback, InspectReceiptFormatter.FormatSingleLine(receipt));
+                }
             }
 
             return true;
@@ -101,7 +143,14 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
 
         var info = InspectInfoBlock.FromFile(ctx.AllocateBlockId(), file);
         var binaryReceipt = InspectReceiptFormatter.CreateBinary(file);
-        ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, info, InspectReceiptFormatter.FormatSingleLine(binaryReceipt));
+        if (inline)
+        {
+            ctx.InsertBlockAfterCommandEcho(info);
+        }
+        else
+        {
+            ctx.OpenInspect(InspectKind.Binary, fullPath, file.Name, info, InspectReceiptFormatter.FormatSingleLine(binaryReceipt));
+        }
         return true;
     }
 
@@ -117,15 +166,31 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
         CommandRequest request,
         out string fullPath,
         out Scene3DNavigationMode navMode,
+        out bool inline,
         out string usageError)
     {
         fullPath = string.Empty;
         navMode = Scene3DNavigationMode.FreeFly;
-        usageError = "Usage: inspect <path> [--free-fly|--orbit]";
+        inline = false;
+        usageError = "Usage: inspect <path> [--inline|--fullscreen] [--free-fly|--orbit]";
 
         string? rawPath = null;
+        var inlineRequested = false;
+        var fullscreenRequested = false;
         foreach (var arg in request.Args)
         {
+            if (arg is "--inline")
+            {
+                inlineRequested = true;
+                continue;
+            }
+
+            if (arg is "--fullscreen")
+            {
+                fullscreenRequested = true;
+                continue;
+            }
+
             if (arg is "--orbit")
             {
                 if (navMode != Scene3DNavigationMode.FreeFly)
@@ -164,6 +229,14 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
 
             rawPath = arg;
         }
+
+        if (inlineRequested && fullscreenRequested)
+        {
+            usageError = $"Conflicting view mode flags. {usageError}";
+            return false;
+        }
+
+        inline = inlineRequested && !fullscreenRequested;
 
         if (string.IsNullOrWhiteSpace(rawPath))
         {

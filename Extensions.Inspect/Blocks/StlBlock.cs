@@ -94,9 +94,11 @@ public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IM
     public BlockSize Measure(in BlockMeasureContext ctx)
     {
         var width = Math.Max(0, ctx.ContentWidthPx);
-        var aspect = PreferredAspectRatio <= 0 ? (16.0 / 9.0) : PreferredAspectRatio;
-        var idealHeight = (int)Math.Round(width / aspect);
-        return new BlockSize(width, idealHeight);
+        var cellH = Math.Max(1, ctx.CellHeightPx);
+        var viewportRows = Math.Max(1, ctx.ViewportRows);
+        var promptReservedRows = 1;
+        var availableRows = Math.Max(1, viewportRows - promptReservedRows);
+        return new BlockSize(width, checked(availableRows * cellH));
     }
 
     private static float ComputeFitDistance(float radius, float vfovRadians)

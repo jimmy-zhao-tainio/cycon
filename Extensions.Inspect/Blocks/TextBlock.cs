@@ -101,13 +101,17 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
         var cols = Math.Max(1, usableWidth / Math.Max(1, ctx.CellWidthPx));
         var viewportRows = Math.Max(1, ctx.ViewportRows);
 
-        var rowsReserved = 2; // command echo + new prompt
-        var maxBlockRows = Math.Max(3, viewportRows - rowsReserved);
+        var promptReservedRows = 1;
+        var cellH = Math.Max(1, ctx.CellHeightPx);
+        var availableRows = Math.Max(0, viewportRows - promptReservedRows);
+        var availableHeightPx = checked(availableRows * cellH);
 
-        var contentRows = _scrollModel.ComputeWrappedRowsCapped(cols, maxBlockRows + 1);
-        var initialRows = Math.Clamp(contentRows, 3, maxBlockRows);
+        var capRows = Math.Max(1, availableRows + 1);
+        var contentRows = _scrollModel.ComputeWrappedRowsCapped(cols, capRows);
+        var contentHeightPx = checked((contentRows * cellH) + (PaddingTopBottomPx * 2));
 
-        var heightPx = checked(initialRows * Math.Max(1, ctx.CellHeightPx));
+        var heightPx = Math.Min(availableHeightPx, contentHeightPx);
+        heightPx = Math.Max(cellH, heightPx);
         return new BlockSize(ctx.ContentWidthPx, heightPx);
     }
 

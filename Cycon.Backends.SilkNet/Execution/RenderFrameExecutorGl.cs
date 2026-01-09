@@ -899,19 +899,6 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         _gl.GenerateMipmap(TextureTarget.Texture2D);
 
-        unsafe
-        {
-            var extPtr = _gl.GetString(StringName.Extensions);
-            var extensions = extPtr == null ? string.Empty : SilkMarshal.PtrToString((nint)extPtr);
-            if (!string.IsNullOrEmpty(extensions) &&
-                extensions.Contains("GL_EXT_texture_filter_anisotropic", StringComparison.Ordinal))
-            {
-                var max = _gl.GetFloat((GLEnum)0x84FF); // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
-                var aniso = MathF.Min(8f, max);
-                _gl.TexParameter(TextureTarget.Texture2D, (TextureParameterName)0x84FE, aniso); // GL_TEXTURE_MAX_ANISOTROPY_EXT
-            }
-        }
-
         CheckGlError("image2d_upload");
         _images2D[imageId] = new Image2D(texture, width, height);
     }
