@@ -181,17 +181,28 @@ public sealed class ScrollbarWidget
                 return false;
             }
 
-            if (!sb.ThumbRectPx.Contains(e.X, e.Y))
+            if (sb.ThumbRectPx.Contains(e.X, e.Y))
             {
-                return false;
+                _ui.IsDragging = true;
+                _ui.IsHovering = true;
+                _thumbHover = true;
+                _ui.DragGrabOffsetYPx = e.Y - sb.ThumbRectPx.Y;
+                _interactedThisTick = true;
+                return true;
             }
 
-            _ui.IsDragging = true;
-            _ui.IsHovering = true;
-            _thumbHover = true;
-            _ui.DragGrabOffsetYPx = e.Y - sb.ThumbRectPx.Y;
-            _interactedThisTick = true;
-            return true;
+            if (sb.HitTrackRectPx.Contains(e.X, e.Y))
+            {
+                var grab = Math.Clamp(sb.ThumbRectPx.Height / 2, 0, sb.ThumbRectPx.Height);
+                var changed = _model.DragThumbTo(e.Y, grab, viewportRectPx, sb);
+                _ui.IsHovering = true;
+                _thumbHover = sb.ThumbRectPx.Contains(e.X, e.Y);
+                _interactedThisTick = true;
+                scrollChanged = changed;
+                return true;
+            }
+
+            return false;
         }
 
         if (e.Kind == HostMouseEventKind.Up)
