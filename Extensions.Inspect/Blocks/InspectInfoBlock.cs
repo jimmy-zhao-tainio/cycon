@@ -25,7 +25,7 @@ public sealed class InspectInfoBlock : IBlock, IRenderBlock, IMeasureBlock
         var width = Math.Max(0, ctx.ContentWidthPx);
         var cellH = Math.Max(1, ctx.CellHeightPx);
         var viewportRows = Math.Max(1, ctx.ViewportRows);
-        var promptReservedRows = 1;
+        var promptReservedRows = 2;
         var availableRows = Math.Max(1, viewportRows - promptReservedRows);
 
         var contentRows = Math.Max(1, _lines.Count);

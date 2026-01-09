@@ -67,6 +67,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private readonly ScrollbarController _scrollbarController;
     private readonly InspectModeController _inspectController;
+    private readonly Scene3DPointerController _inlineScene3DPointer = new();
+    private BlockId? _capturedInlineViewportBlockId;
 
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
@@ -618,6 +620,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 var mouseEvent = mouseRaw.Event;
                 var viewportRectPx = new PxRect(0, 0, framebufferWidth, framebufferHeight);
 
+                if (TryHandleInlineViewportPointer(mouseEvent))
+                {
+                    _pendingContentRebuild = true;
+                    continue;
+                }
+
                 var consumed = _scrollbarController.TryHandleMouse(
                     mouseEvent,
                     viewportRectPx,
@@ -726,6 +734,162 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             HostMouseEventKind.Wheel => null,
             _ => null
         };
+    }
+
+    private bool TryHandleInlineViewportPointer(in HostMouseEvent e)
+    {
+        if (_lastLayout is null)
+        {
+            return false;
+        }
+
+        var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
+        var scrollYPx = scrollOffsetRows * _font.Metrics.CellHeightPx;
+
+        if (_capturedInlineViewportBlockId is { } capturedId)
+        {
+            if (!TryGetInlineViewportByBlockId(_lastLayout, capturedId, scrollYPx, out var viewport, out var viewportRectPx) ||
+                !TryGetInlineViewportBlock(viewport, out var block))
+            {
+                _capturedInlineViewportBlockId = null;
+                return false;
+            }
+
+            var consumed = DispatchInlineViewportPointer(block, viewportRectPx, e);
+            UpdateInlineViewportCapture(block, viewport.BlockId, e);
+            return consumed;
+        }
+
+        if (!TryHitTestInlineViewport(_lastLayout, e.X, e.Y, scrollYPx, out var hitViewport, out var hitViewportRectPx) ||
+            !TryGetInlineViewportBlock(hitViewport, out var hitBlock))
+        {
+            return false;
+        }
+
+        var hitConsumed = DispatchInlineViewportPointer(hitBlock, hitViewportRectPx, e);
+        UpdateInlineViewportCapture(hitBlock, hitViewport.BlockId, e);
+        return hitConsumed;
+    }
+
+    private bool DispatchInlineViewportPointer(IBlock block, in PxRect viewportRectPx, in HostMouseEvent e)
+    {
+        if (block is IBlockWheelHandler wheelHandler && e.Kind == HostMouseEventKind.Wheel)
+        {
+            return wheelHandler.HandleWheel(e, viewportRectPx);
+        }
+
+        if (block is IBlockPointerHandler pointerHandler &&
+            e.Kind is HostMouseEventKind.Down or HostMouseEventKind.Up or HostMouseEventKind.Move)
+        {
+            if (e.Kind == HostMouseEventKind.Move)
+            {
+                return pointerHandler.HandlePointer(e, viewportRectPx);
+            }
+
+            _ = pointerHandler.HandlePointer(e, viewportRectPx);
+            return true;
+        }
+
+        if (block is IScene3DViewBlock stl)
+        {
+            return _inlineScene3DPointer.Handle(stl, viewportRectPx, e, _document.Settings.Scene3D);
+        }
+
+        return false;
+    }
+
+    private void UpdateInlineViewportCapture(IBlock block, BlockId blockId, in HostMouseEvent e)
+    {
+        if (e.Kind == HostMouseEventKind.Up)
+        {
+            _capturedInlineViewportBlockId = null;
+            return;
+        }
+
+        if (_inlineScene3DPointer.CapturedBlockId is { } capturedScene && capturedScene == blockId)
+        {
+            _capturedInlineViewportBlockId = blockId;
+            return;
+        }
+
+        if (block is IBlockPointerCaptureState captureState)
+        {
+            _capturedInlineViewportBlockId = captureState.HasPointerCapture ? blockId : null;
+        }
+    }
+
+    private static bool TryGetInlineViewportByBlockId(
+        LayoutFrame layout,
+        BlockId blockId,
+        int scrollYPx,
+        out Scene3DViewportLayout viewport,
+        out PxRect viewportRectPx)
+    {
+        var viewports = layout.Scene3DViewports;
+        for (var i = 0; i < viewports.Count; i++)
+        {
+            var candidate = viewports[i];
+            if (candidate.BlockId != blockId)
+            {
+                continue;
+            }
+
+            viewport = candidate;
+            var rect = candidate.ViewportRectPx;
+            viewportRectPx = new PxRect(rect.X, rect.Y - scrollYPx, rect.Width, rect.Height);
+            return true;
+        }
+
+        viewport = default;
+        viewportRectPx = default;
+        return false;
+    }
+
+    private static bool TryHitTestInlineViewport(
+        LayoutFrame layout,
+        int x,
+        int y,
+        int scrollYPx,
+        out Scene3DViewportLayout viewport,
+        out PxRect viewportRectPx)
+    {
+        var viewports = layout.Scene3DViewports;
+        for (var i = 0; i < viewports.Count; i++)
+        {
+            var candidate = viewports[i];
+            var rect = candidate.ViewportRectPx;
+            var screenRect = new PxRect(rect.X, rect.Y - scrollYPx, rect.Width, rect.Height);
+
+            if (x < screenRect.X ||
+                y < screenRect.Y ||
+                x >= screenRect.X + screenRect.Width ||
+                y >= screenRect.Y + screenRect.Height)
+            {
+                continue;
+            }
+
+            viewport = candidate;
+            viewportRectPx = screenRect;
+            return true;
+        }
+
+        viewport = default;
+        viewportRectPx = default;
+        return false;
+    }
+
+    private bool TryGetInlineViewportBlock(in Scene3DViewportLayout viewport, out IBlock block)
+    {
+        var blockIndex = viewport.BlockIndex;
+        var blocks = _document.Transcript.Blocks;
+        if (blockIndex < 0 || blockIndex >= blocks.Count)
+        {
+            block = null!;
+            return false;
+        }
+
+        block = blocks[blockIndex];
+        return block.Id == viewport.BlockId;
     }
 
     private static ConsoleDocument CreateDocument(string text)

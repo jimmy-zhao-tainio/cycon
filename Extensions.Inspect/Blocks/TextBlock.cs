@@ -101,7 +101,7 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
         var cols = Math.Max(1, usableWidth / Math.Max(1, ctx.CellWidthPx));
         var viewportRows = Math.Max(1, ctx.ViewportRows);
 
-        var promptReservedRows = 1;
+        var promptReservedRows = 2;
         var cellH = Math.Max(1, ctx.CellHeightPx);
         var availableRows = Math.Max(0, viewportRows - promptReservedRows);
         var availableHeightPx = checked(availableRows * cellH);

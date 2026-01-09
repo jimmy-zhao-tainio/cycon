@@ -9,7 +9,7 @@ using SixLabors.ImageSharp.PixelFormats;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler
+public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockPointerCaptureState
 {
     private const float ZoomBase = 1.008f;
     private const float WheelZoomSpeed = 20.0f;
@@ -59,16 +59,17 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
     public int ImageWidth { get; }
     public int ImageHeight { get; }
     public byte[] RgbaPixels { get; }
+    public bool HasPointerCapture => _input.Dragging;
 
     public BlockSize Measure(in BlockMeasureContext ctx)
     {
         var width = Math.Max(0, ctx.ContentWidthPx);
         var cellH = Math.Max(1, ctx.CellHeightPx);
         var viewportRows = Math.Max(1, ctx.ViewportRows);
-        var promptReservedRows = 1;
+        var promptReservedRows = 2;
         var availableRows = Math.Max(1, viewportRows - promptReservedRows);
 
-        var imageRows = Math.Max(1, (ImageHeight + cellH - 1) / cellH);
+        var imageRows = Math.Max(1, ImageHeight / cellH);
         var desiredInitialRows = Math.Min(availableRows, imageRows);
         if (_initialHeightRows < 0)
         {

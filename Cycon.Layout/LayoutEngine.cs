@@ -33,7 +33,7 @@ public sealed class LayoutEngine
                     desiredHeight = Math.Max(1, measure.Measure(new BlockMeasureContext(grid.ContentWidthPx, grid.CellWidthPx, grid.CellHeightPx, grid.Rows)).HeightPx);
                 }
 
-                var maxHeight = Math.Max(grid.CellHeightPx, grid.ContentHeightPx - grid.CellHeightPx);
+                var maxHeight = Math.Max(grid.CellHeightPx, grid.ContentHeightPx - (grid.CellHeightPx * 2));
                 desiredHeight = Math.Min(desiredHeight, maxHeight);
 
                 var viewportRect = Scene3DLayouter.LayoutViewport(grid, rowIndex, desiredHeightPx: desiredHeight);

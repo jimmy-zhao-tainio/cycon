@@ -170,7 +170,8 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
         out string usageError)
     {
         fullPath = string.Empty;
-        navMode = Scene3DNavigationMode.FreeFly;
+        navMode = Scene3DNavigationMode.Orbit;
+        var navModeSet = false;
         inline = false;
         usageError = "Usage: inspect <path> [--inline|--fullscreen] [--free-fly|--orbit]";
 
@@ -193,25 +194,27 @@ public sealed class InspectBlockCommandHandler : IBlockCommandHandler
 
             if (arg is "--orbit")
             {
-                if (navMode != Scene3DNavigationMode.FreeFly)
+                if (navModeSet && navMode != Scene3DNavigationMode.Orbit)
                 {
                     usageError = $"Conflicting mode flag: {arg}. {usageError}";
                     return false;
                 }
 
                 navMode = Scene3DNavigationMode.Orbit;
+                navModeSet = true;
                 continue;
             }
 
             if (arg is "--free-fly")
             {
-                if (navMode != Scene3DNavigationMode.FreeFly)
+                if (navModeSet && navMode != Scene3DNavigationMode.FreeFly)
                 {
                     usageError = $"Conflicting mode flag: {arg}. {usageError}";
                     return false;
                 }
 
                 navMode = Scene3DNavigationMode.FreeFly;
+                navModeSet = true;
                 continue;
             }
 
