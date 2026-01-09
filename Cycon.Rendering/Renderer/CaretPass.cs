@@ -63,7 +63,7 @@ internal static class CaretPass
         var cellX = grid.PaddingLeftPx + (caretQuad.ColIndex * grid.CellWidthPx);
         var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
         var underlineY = fontMetrics.GetUnderlineTopY(cellY);
-        var underlineH = Math.Max(1, fontMetrics.UnderlineThicknessPx);
+        var underlineH = Math.Max(2, fontMetrics.UnderlineThicknessPx);
 
         var caretColor = WithAlpha(caretColorRgba, caretAlpha);
         frame.Add(new DrawQuad(cellX, underlineY, grid.CellWidthPx, underlineH, caretColor));

@@ -265,7 +265,12 @@ public sealed class TextScrollModel : IScrollModel
 
         var totalRows = GetEstimatedTotalRows(_wrapCols);
         var maxScrollOffsetRows = Math.Max(0, totalRows - _viewportRows);
-        _scrollOffsetRows = Math.Clamp(_scrollOffsetRows, 0, maxScrollOffsetRows);
+        var clampedScrollOffsetRows = Math.Clamp(_scrollOffsetRows, 0, maxScrollOffsetRows);
+        if (clampedScrollOffsetRows != _scrollOffsetRows)
+        {
+            _scrollOffsetRows = clampedScrollOffsetRows;
+            UpdateAnchorFromScrollOffset(clampedScrollOffsetRows);
+        }
     }
 
     private int GetEstimatedTotalRows(int wrapCols)
