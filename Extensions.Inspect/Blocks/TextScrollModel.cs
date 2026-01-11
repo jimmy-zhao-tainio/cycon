@@ -23,6 +23,7 @@ public sealed class TextScrollModel : IScrollModel
     private int _insetTopPx;
     private int _insetRightPx;
     private int _insetBottomPx;
+    private int _scrollbarChromeInsetPx;
 
     private int _topLineIndex;
     private int _topLineSubRow;
@@ -59,6 +60,11 @@ public sealed class TextScrollModel : IScrollModel
         _insetBottomPx = Math.Max(0, bottomPx);
     }
 
+    public void SetScrollbarChromeInsetPx(int insetPx)
+    {
+        _scrollbarChromeInsetPx = Math.Max(0, insetPx);
+    }
+
     public void UpdateViewport(PxRect viewportRectPx)
     {
         var availableWidth = Math.Max(0, viewportRectPx.Width - _insetLeftPx - _insetRightPx - _rightPaddingPx);
@@ -89,14 +95,14 @@ public sealed class TextScrollModel : IScrollModel
         UpdateViewport(viewportRectPx);
 
         var totalRows = GetEstimatedTotalRows(_wrapCols);
-        var viewportRows = _viewportRows;
-        if (totalRows <= viewportRows || viewportRows <= 0)
+        var scrollbarTrackH = viewportRectPx.Height + (_scrollbarChromeInsetPx * 2);
+        var scrollbarViewportRows = Math.Max(1, scrollbarTrackH / Math.Max(1, _cellHeightPx));
+        if (totalRows <= scrollbarViewportRows || scrollbarViewportRows <= 0)
         {
             layout = new ScrollbarLayout(false, default, default, default, default);
             return true;
         }
 
-        var margin = Math.Max(0, settings.MarginPx);
         var thickness = Math.Max(0, settings.ThicknessPx);
         thickness = Math.Min(thickness, viewportRectPx.Width);
         if (thickness <= 0)
@@ -105,21 +111,21 @@ public sealed class TextScrollModel : IScrollModel
             return true;
         }
 
-        var trackX = viewportRectPx.X + (viewportRectPx.Width - thickness);
-        var trackY = viewportRectPx.Y + margin;
-        var trackH = viewportRectPx.Height - (margin * 2);
+        var trackX = viewportRectPx.X + (viewportRectPx.Width - thickness) + _scrollbarChromeInsetPx;
+        var trackY = viewportRectPx.Y - _scrollbarChromeInsetPx;
+        var trackH = scrollbarTrackH;
         if (trackH <= 0)
         {
             layout = new ScrollbarLayout(false, default, default, default, default);
             return true;
         }
 
-        var maxScrollOffsetRows = Math.Max(0, totalRows - viewportRows);
+        var maxScrollOffsetRows = Math.Max(0, totalRows - scrollbarViewportRows);
         var clampedScrollOffsetRows = Math.Clamp(_scrollOffsetRows, 0, maxScrollOffsetRows);
         _scrollOffsetRows = clampedScrollOffsetRows;
 
         var contentHeightPx = checked(totalRows * _cellHeightPx);
-        var viewportHeightPx = checked(viewportRows * _cellHeightPx);
+        var viewportHeightPx = checked(scrollbarViewportRows * _cellHeightPx);
         var maxScrollYPx = Math.Max(0, contentHeightPx - viewportHeightPx);
         var scrollYPx = (int)Math.Clamp(clampedScrollOffsetRows * (long)_cellHeightPx, 0, maxScrollYPx);
 

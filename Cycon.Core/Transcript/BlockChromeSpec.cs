@@ -10,5 +10,5 @@ public readonly record struct BlockChromeSpec(bool Enabled, BlockChromeStyle Sty
 {
     public static BlockChromeSpec Disabled => new(false, BlockChromeStyle.Frame2Px, 0, 0);
 
-    public static BlockChromeSpec ViewDefault => new(true, BlockChromeStyle.PanelBg, 4, 0);
+    public static BlockChromeSpec ViewDefault => new(true, BlockChromeStyle.Frame2Px, 14, 2);
 }

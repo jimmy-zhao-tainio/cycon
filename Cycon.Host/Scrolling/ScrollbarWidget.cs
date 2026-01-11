@@ -69,7 +69,7 @@ public sealed class ScrollbarWidget
         _ui.Visibility = MoveTowards(_ui.Visibility, target, step);
     }
 
-    public RenderFrame? BuildOverlayFrame(PxRect viewportRectPx, ScrollbarSettings settings, int rgba)
+    public RenderFrame? BuildOverlayFrame(PxRect viewportRectPx, ScrollbarSettings settings, int rgba, string debugTag, PxRect? clipRectPx = null)
     {
         if (!_model.TryGetScrollbarLayout(viewportRectPx, settings, out var sb))
         {
@@ -77,37 +77,18 @@ public sealed class ScrollbarWidget
         }
 
         var visibility = Math.Clamp(_ui.Visibility, 0f, 1f);
-        if (visibility <= 0f && !_ui.IsHovering && !_ui.IsDragging)
+        if (visibility <= 0f)
         {
             return null;
         }
 
-        var thumbOpacity = _ui.IsDragging
-            ? settings.ThumbOpacityDrag
-            : _thumbHover
-                ? settings.ThumbOpacityHover
-                : settings.ThumbOpacityIdle;
+        var thumbColor = rgba;
 
-        var trackAlpha = ToAlpha(visibility * settings.TrackOpacityIdle);
-        var thumbAlpha = ToAlpha(visibility * thumbOpacity);
-
-        if (trackAlpha == 0 && thumbAlpha == 0)
-        {
-            return null;
-        }
-
-        var trackColor = WithAlpha(rgba, trackAlpha);
-        var thumbColor = WithAlpha(rgba, thumbAlpha);
-
+        var clip = clipRectPx ?? viewportRectPx;
         var frame = new RenderFrame();
-        frame.Add(new PushClip(viewportRectPx.X, viewportRectPx.Y, viewportRectPx.Width, viewportRectPx.Height));
+        frame.Add(new PushClip(clip.X, clip.Y, clip.Width, clip.Height));
 
-        if (trackAlpha != 0 && sb.IsScrollable)
-        {
-            frame.Add(new DrawQuad(sb.TrackRectPx.X, sb.TrackRectPx.Y, sb.TrackRectPx.Width, sb.TrackRectPx.Height, trackColor));
-        }
-
-        if (thumbAlpha != 0 && sb.IsScrollable)
+        if (sb.IsScrollable)
         {
             frame.Add(new DrawQuad(sb.ThumbRectPx.X, sb.ThumbRectPx.Y, sb.ThumbRectPx.Width, sb.ThumbRectPx.Height, thumbColor));
         }
@@ -254,14 +235,4 @@ public sealed class ScrollbarWidget
         return value;
     }
 
-    private static byte ToAlpha(float alpha01)
-    {
-        alpha01 = Math.Clamp(alpha01, 0f, 1f);
-        return (byte)Math.Clamp((int)Math.Round(alpha01 * 255f), 0, 255);
-    }
-
-    private static int WithAlpha(int rgba, byte alpha)
-    {
-        return (rgba & unchecked((int)0xFFFFFF00)) | alpha;
-    }
 }

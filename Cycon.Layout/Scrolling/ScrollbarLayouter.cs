@@ -23,28 +23,19 @@ public static class ScrollbarLayouter
             return new ScrollbarLayout(false, default, default, default, default);
         }
 
-        var margin = Math.Max(0, settings.MarginPx);
         var thickness = Math.Max(0, settings.ThicknessPx);
         thickness = Math.Min(thickness, grid.FramebufferWidthPx);
 
-        // Overlay scrollbar: do not reserve layout width; anchor to the framebuffer right edge.
+        // Align scrollbar to the framebuffer right edge and grid rows.
         var trackX = grid.FramebufferWidthPx - thickness;
-        var trackY = margin;
-        var trackH = grid.FramebufferHeightPx - (margin * 2);
+        var trackY = 0;
+        var trackH = grid.FramebufferHeightPx;
         if (trackH <= 0)
         {
             return new ScrollbarLayout(false, default, default, default, default);
         }
 
-        if (trackX < 0)
-        {
-            trackX = 0;
-        }
-
-        if (thickness <= 0)
-        {
-            return new ScrollbarLayout(false, default, default, default, default);
-        }
+        trackX = Math.Clamp(trackX, 0, Math.Max(0, grid.FramebufferWidthPx - thickness));
 
         var cellH = grid.CellHeightPx;
         var contentHeightPx = checked(totalRows * cellH);

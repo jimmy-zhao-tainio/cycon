@@ -2,7 +2,7 @@ namespace Cycon.Core.Scrolling;
 
 public sealed class ScrollbarSettings
 {
-    public int ThicknessPx { get; set; } = 14;
+    public int ThicknessPx { get; set; } = 8;
     public int MarginPx { get; set; } = 0;
     public int MinThumbPx { get; set; } = 18;
 

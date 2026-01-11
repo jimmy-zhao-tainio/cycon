@@ -10,10 +10,10 @@ using Cycon.Core.Scrolling;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockPointerCaptureState, IBlockChromeProvider
+public sealed class InspectTextBlock : IBlock, IRenderBlock, IBlockOverlayRenderer, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockPointerCaptureState, IBlockChromeProvider
 {
-    private const int PaddingLeftRightPx = 5;
-    private const int PaddingTopBottomPx = 3;
+    private const int PaddingLeftRightPx = 0;
+    private const int PaddingTopBottomPx = 0;
 
     private readonly IReadOnlyList<string> _lines;
     private readonly TextScrollModel _scrollModel;
@@ -48,6 +48,7 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
     {
         _scrollModel.SetRightPaddingPx(_scrollbarSettings.ThicknessPx + PaddingLeftRightPx);
         _scrollModel.SetContentInsetsPx(PaddingLeftRightPx, PaddingTopBottomPx, PaddingLeftRightPx, PaddingTopBottomPx);
+        _scrollModel.SetScrollbarChromeInsetPx(GetChromeInsetPx());
         _scrollModel.UpdateViewport(viewportRectPx);
 
         if (e.Kind == HostMouseEventKind.Move && !_scrollbarUi.IsDragging)
@@ -87,6 +88,7 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
     {
         _scrollModel.SetRightPaddingPx(_scrollbarSettings.ThicknessPx + PaddingLeftRightPx);
         _scrollModel.SetContentInsetsPx(PaddingLeftRightPx, PaddingTopBottomPx, PaddingLeftRightPx, PaddingTopBottomPx);
+        _scrollModel.SetScrollbarChromeInsetPx(GetChromeInsetPx());
         _scrollModel.UpdateViewport(viewportRectPx);
 
         var consumed = _scrollbar.HandleMouse(e, viewportRectPx, _scrollbarSettings, out var scrollChanged);
@@ -136,6 +138,7 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
         _scrollModel.UpdateTextMetrics(ctx.TextMetrics.CellWidthPx, ctx.TextMetrics.CellHeightPx);
         _scrollModel.SetRightPaddingPx(_scrollbarSettings.ThicknessPx + PaddingLeftRightPx);
         _scrollModel.SetContentInsetsPx(PaddingLeftRightPx, PaddingTopBottomPx, PaddingLeftRightPx, PaddingTopBottomPx);
+        _scrollModel.SetScrollbarChromeInsetPx(GetChromeInsetPx());
         _scrollModel.UpdateViewport(viewportPx);
 
         var dtMs = _lastRenderTimeSeconds <= 0
@@ -183,7 +186,16 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
             subRow = 0;
         }
 
-        var overlayFrame = _scrollbar.BuildOverlayFrame(viewportPx, _scrollbarSettings, ctx.Theme.ForegroundRgba);
+    }
+
+    public void RenderOverlay(IRenderCanvas canvas, RectPx outerViewportRectPx, in BlockRenderContext ctx)
+    {
+        var viewport = ctx.ViewportRectPx;
+        var viewportPx = new PxRect(viewport.X, viewport.Y, viewport.Width, viewport.Height);
+        var outerViewportPx = new PxRect(outerViewportRectPx.X, outerViewportRectPx.Y, outerViewportRectPx.Width, outerViewportRectPx.Height);
+
+        _scrollModel.SetScrollbarChromeInsetPx(GetChromeInsetPx());
+        var overlayFrame = _scrollbar.BuildOverlayFrame(viewportPx, _scrollbarSettings, ctx.Theme.ForegroundRgba, "TextBlock", outerViewportPx);
         if (overlayFrame is not null)
         {
             ReplayOverlay(canvas, overlayFrame);
@@ -207,6 +219,18 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IMeasureBlock, IBlo
                     break;
             }
         }
+    }
+
+    private int GetChromeInsetPx()
+    {
+        if (!ChromeSpec.Enabled)
+        {
+            return 0;
+        }
+
+        var reservation = Math.Max(0, ChromeSpec.PaddingPx + ChromeSpec.BorderPx);
+        var border = Math.Max(0, ChromeSpec.BorderPx);
+        return Math.Max(0, (reservation - border) / 2);
     }
 
     private static IReadOnlyList<string> LoadLines(string path)
