@@ -293,23 +293,50 @@ internal sealed class InspectModeController
 
     private bool HandleInspectPointer(IBlock block, in PxRect viewportRectPx, in HostMouseEvent e)
     {
+        var inputViewport = GetInputViewport(block, viewportRectPx);
         if (block is IBlockWheelHandler wheelHandler && e.Kind == HostMouseEventKind.Wheel)
         {
-            return wheelHandler.HandleWheel(e, viewportRectPx);
+            return wheelHandler.HandleWheel(e, inputViewport);
         }
 
         if (block is IBlockPointerHandler pointerHandler &&
             e.Kind is HostMouseEventKind.Down or HostMouseEventKind.Up or HostMouseEventKind.Move)
         {
-            return pointerHandler.HandlePointer(e, viewportRectPx);
+            return pointerHandler.HandlePointer(e, inputViewport);
         }
 
         if (block is IScene3DViewBlock stl)
         {
-            return _scene3DPointer.Handle(stl, viewportRectPx, e, _host.Document.Settings.Scene3D);
+            return _scene3DPointer.Handle(stl, inputViewport, e, _host.Document.Settings.Scene3D);
         }
 
         return false;
+    }
+
+    private static PxRect GetInputViewport(IBlock block, in PxRect viewportRectPx)
+    {
+        if (block is not IBlockChromeProvider chromeProvider)
+        {
+            return viewportRectPx;
+        }
+
+        var chrome = chromeProvider.ChromeSpec;
+        if (!chrome.Enabled)
+        {
+            return viewportRectPx;
+        }
+
+        var inset = Math.Max(0, chrome.BorderPx + chrome.PaddingPx);
+        if (inset <= 0)
+        {
+            return viewportRectPx;
+        }
+
+        var x = viewportRectPx.X + inset;
+        var y = viewportRectPx.Y + inset;
+        var w = Math.Max(0, viewportRectPx.Width - (inset * 2));
+        var h = Math.Max(0, viewportRectPx.Height - (inset * 2));
+        return new PxRect(x, y, w, h);
     }
 
     public void ExitInspectMode()
