@@ -10,7 +10,7 @@ using Cycon.Core.Scrolling;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed class InspectTextBlock : IBlock, IRenderBlock, IBlockOverlayRenderer, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockPointerCaptureState, IBlockChromeProvider
+public sealed class InspectTextBlock : IBlock, IRenderBlock, IBlockOverlayRenderer, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockPointerCaptureState, IBlockChromeProvider, IInspectResettableBlock
 {
     private const int PaddingLeftRightPx = 0;
     private const int PaddingTopBottomPx = 0;
@@ -22,6 +22,7 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IBlockOverlayRender
     private readonly ScrollbarSettings _scrollbarSettings = new();
     private double _lastRenderTimeSeconds;
     private int _initialHeightRows = -1;
+    private int _fixedHeightPx = -1;
 
     public InspectTextBlock(BlockId id, string path)
     {
@@ -46,10 +47,7 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IBlockOverlayRender
 
     public bool HandlePointer(in HostMouseEvent e, in PxRect viewportRectPx)
     {
-        _scrollModel.SetRightPaddingPx(_scrollbarSettings.ThicknessPx + PaddingLeftRightPx);
-        _scrollModel.SetContentInsetsPx(PaddingLeftRightPx, PaddingTopBottomPx, PaddingLeftRightPx, PaddingTopBottomPx);
-        _scrollModel.SetScrollbarChromeInsetPx(GetChromeInsetPx());
-        _scrollModel.UpdateViewport(viewportRectPx);
+        UpdateViewportForText(viewportRectPx);
 
         if (e.Kind == HostMouseEventKind.Move && !_scrollbarUi.IsDragging)
         {
@@ -86,10 +84,7 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IBlockOverlayRender
 
     public bool HandleWheel(in HostMouseEvent e, in PxRect viewportRectPx)
     {
-        _scrollModel.SetRightPaddingPx(_scrollbarSettings.ThicknessPx + PaddingLeftRightPx);
-        _scrollModel.SetContentInsetsPx(PaddingLeftRightPx, PaddingTopBottomPx, PaddingLeftRightPx, PaddingTopBottomPx);
-        _scrollModel.SetScrollbarChromeInsetPx(GetChromeInsetPx());
-        _scrollModel.UpdateViewport(viewportRectPx);
+        UpdateViewportForText(viewportRectPx);
 
         var consumed = _scrollbar.HandleMouse(e, viewportRectPx, _scrollbarSettings, out var scrollChanged);
         if (consumed || scrollChanged)
@@ -105,25 +100,33 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IBlockOverlayRender
         var usableWidth = Math.Max(0, ctx.ContentWidthPx - (PaddingLeftRightPx * 2) - _scrollbarSettings.ThicknessPx);
         var cols = Math.Max(1, usableWidth / Math.Max(1, ctx.CellWidthPx));
         var viewportRows = Math.Max(1, ctx.ViewportRows);
-
-        var promptReservedRows = 2;
         var cellH = Math.Max(1, ctx.CellHeightPx);
-        var availableRows = Math.Max(0, viewportRows - promptReservedRows);
-        var availableHeightPx = checked(availableRows * cellH);
 
-        var capRows = Math.Max(1, availableRows + 1);
+        var maxRows = Math.Max(1, viewportRows - 2);
+        var chromeInsetPx = ChromeSpec.Enabled ? Math.Max(0, ChromeSpec.PaddingPx + ChromeSpec.BorderPx) : 0;
+        var chromeRows = (chromeInsetPx * 2 + (cellH - 1)) / cellH;
+
+        var capRows = Math.Max(1, maxRows + 1);
         var contentRows = _scrollModel.ComputeWrappedRowsCapped(cols, capRows);
-        var contentHeightPx = checked((contentRows * cellH) + (PaddingTopBottomPx * 2));
 
         if (_initialHeightRows < 0)
         {
-            _initialHeightRows = Math.Min(availableRows, contentRows);
+            _initialHeightRows = Math.Min(maxRows, contentRows + chromeRows);
         }
 
-        var initialHeightPx = checked((_initialHeightRows * cellH) + (PaddingTopBottomPx * 2));
-        var heightPx = Math.Min(availableHeightPx, Math.Min(contentHeightPx, initialHeightPx));
-        heightPx = Math.Max(cellH, heightPx);
-        return new BlockSize(ctx.ContentWidthPx, heightPx);
+        if (_fixedHeightPx < 0)
+        {
+            var heightRows = Math.Min(maxRows, Math.Min(contentRows + chromeRows, _initialHeightRows));
+            _fixedHeightPx = Math.Max(cellH, heightRows * cellH);
+        }
+
+        return new BlockSize(ctx.ContentWidthPx, _fixedHeightPx);
+    }
+
+    public void ResetViewModeSize()
+    {
+        _fixedHeightPx = -1;
+        _initialHeightRows = -1;
     }
 
     public void Render(IRenderCanvas canvas, in BlockRenderContext ctx)
@@ -136,10 +139,7 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IBlockOverlayRender
         }
 
         _scrollModel.UpdateTextMetrics(ctx.TextMetrics.CellWidthPx, ctx.TextMetrics.CellHeightPx);
-        _scrollModel.SetRightPaddingPx(_scrollbarSettings.ThicknessPx + PaddingLeftRightPx);
-        _scrollModel.SetContentInsetsPx(PaddingLeftRightPx, PaddingTopBottomPx, PaddingLeftRightPx, PaddingTopBottomPx);
-        _scrollModel.SetScrollbarChromeInsetPx(GetChromeInsetPx());
-        _scrollModel.UpdateViewport(viewportPx);
+        var reservedScrollbarPx = UpdateViewportForText(viewportPx);
 
         var dtMs = _lastRenderTimeSeconds <= 0
             ? 0
@@ -153,7 +153,7 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IBlockOverlayRender
 
         var cellW = Math.Max(1, ctx.TextMetrics.CellWidthPx);
         var cellH = Math.Max(1, ctx.TextMetrics.CellHeightPx);
-        var cols = Math.Max(1, Math.Max(0, viewport.Width - (PaddingLeftRightPx * 2) - _scrollbarSettings.ThicknessPx) / cellW);
+        var cols = Math.Max(1, Math.Max(0, viewport.Width - (PaddingLeftRightPx * 2) - reservedScrollbarPx) / cellW);
         var rows = Math.Max(1, Math.Max(0, viewport.Height - (PaddingTopBottomPx * 2)) / cellH);
 
         var fg = ctx.Theme.ForegroundRgba;
@@ -231,6 +231,24 @@ public sealed class InspectTextBlock : IBlock, IRenderBlock, IBlockOverlayRender
         var reservation = Math.Max(0, ChromeSpec.PaddingPx + ChromeSpec.BorderPx);
         var border = Math.Max(0, ChromeSpec.BorderPx);
         return Math.Max(0, (reservation - border) / 2);
+    }
+
+    private int UpdateViewportForText(PxRect viewportRectPx)
+    {
+        _scrollModel.SetScrollbarChromeInsetPx(GetChromeInsetPx());
+        _scrollModel.SetContentInsetsPx(PaddingLeftRightPx, PaddingTopBottomPx, PaddingLeftRightPx, PaddingTopBottomPx);
+
+        _scrollModel.SetRightPaddingPx(_scrollbarSettings.ThicknessPx);
+        _scrollModel.UpdateViewport(viewportRectPx);
+
+        if (_scrollModel.TryGetScrollbarLayout(viewportRectPx, _scrollbarSettings, out var layout) && layout.IsScrollable)
+        {
+            return _scrollbarSettings.ThicknessPx;
+        }
+
+        _scrollModel.SetRightPaddingPx(0);
+        _scrollModel.UpdateViewport(viewportRectPx);
+        return 0;
     }
 
     private static IReadOnlyList<string> LoadLines(string path)
