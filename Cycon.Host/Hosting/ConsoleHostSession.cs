@@ -99,7 +99,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _layoutSettings.PaddingPolicy = PaddingPolicy.None;
         _layoutSettings.BorderLeftRightPx = 5;
         _layoutSettings.BorderTopBottomPx = 3;
-        _layoutSettings.RightGutterPx = _document.Settings.Scrollbar.ThicknessPx;
+        _layoutSettings.RightGutterPx = Math.Max(0, _document.Settings.Scrollbar.ThicknessPx - 6);
 
         _atlasData = _font.Atlas;
         _renderer = new ConsoleRenderer();

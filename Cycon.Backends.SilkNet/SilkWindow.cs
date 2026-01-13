@@ -18,10 +18,12 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     private bool _lastPolledLeftPressed;
     private bool _lastPolledRightPressed;
     private bool _disposed;
+    private bool _resizingSnap;
 
     private SilkWindow(Silk.NET.Windowing.IWindow window)
     {
         _window = window;
+        _window.Resize += OnResize;
         _window.FramebufferResize += OnFramebufferResize;
         _window.Closing += HandleClosing;
         _window.FileDrop += OnFileDrop;
@@ -62,12 +64,20 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
     public void Close() => _window.Close();
 
+    public void SetSize(int width, int height)
+    {
+        _window.Size = new Vector2D<int>(width, height);
+    }
+
     internal Silk.NET.Windowing.IWindow Native => _window;
 
     public static SilkWindow Create(int width, int height, string title)
     {
         var options = WindowOptions.Default;
-        options.Size = new Vector2D<int>(width, height);
+        // Snap the initial size so the framebuffer grid starts aligned without requiring a manual resize.
+        var snapWidth = SnapToStep(width, 8);
+        var snapHeight = SnapToStep(height, 16);
+        options.Size = new Vector2D<int>(snapWidth, snapHeight);
         options.Title = title;
         options.IsVisible = false;
         options.API = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.ForwardCompatible, new APIVersion(3, 3));
@@ -176,6 +186,23 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     private void OnFramebufferResize(Vector2D<int> size)
     {
         FramebufferResized?.Invoke(size.X, size.Y);
+    }
+
+    private void OnResize(Vector2D<int> size)
+    {
+        if (_resizingSnap)
+        {
+            return;
+        }
+
+        var targetWidth = SnapToStep(size.X, 8);
+        var targetHeight = SnapToStep(size.Y, 16);
+        if (targetWidth != size.X || targetHeight != size.Y)
+        {
+            _resizingSnap = true;
+            _window.Size = new Vector2D<int>(targetWidth, targetHeight);
+            _resizingSnap = false;
+        }
     }
 
     private void OnFileDrop(string[] paths)
@@ -319,5 +346,11 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
         _lastPointerInWindow = inWindow;
         PointerInWindowChanged?.Invoke(inWindow);
+    }
+
+    private static int SnapToStep(int value, int step)
+    {
+        step = Math.Max(1, step);
+        return Math.Max(step, (int)Math.Round(value / (double)step) * step);
     }
 }

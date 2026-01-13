@@ -47,6 +47,8 @@ public static class BlockViewRenderer
             ? DeflateRect(outerRect, Math.Max(0, chrome.BorderPx + chrome.PaddingPx))
             : outerRect;
 
+        innerRect = SnapToCellGrid(innerRect, ctx.TextMetrics.CellWidthPx, ctx.TextMetrics.CellHeightPx);
+
         var innerCtx = new BlockRenderContext(innerRect, ctx.TimeSeconds, ctx.Theme, ctx.TextMetrics, ctx.Scene3D);
         canvas.PushClipRect(innerRect);
         block.Render(canvas, innerCtx);
@@ -123,5 +125,20 @@ public static class BlockViewRenderer
         var w = Math.Max(0, rect.Width - (inset * 2));
         var h = Math.Max(0, rect.Height - (inset * 2));
         return new RectPx(x, y, w, h);
+    }
+
+    private static RectPx SnapToCellGrid(RectPx rect, int cellW, int cellH)
+    {
+        if (rect.Width <= 0 || rect.Height <= 0)
+        {
+            return rect;
+        }
+
+        cellW = Math.Max(1, cellW);
+        cellH = Math.Max(1, cellH);
+
+        var snappedW = rect.Width >= cellW ? rect.Width - (rect.Width % cellW) : rect.Width;
+        var snappedH = rect.Height >= cellH ? rect.Height - (rect.Height % cellH) : rect.Height;
+        return new RectPx(rect.X, rect.Y, snappedW, snappedH);
     }
 }

@@ -6,7 +6,7 @@ using Cycon.Render;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IMouseFocusableViewportBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner, IBlockChromeProvider
+public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IMouseFocusableViewportBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner, IBlockChromeProvider, IInspectLayoutBlock
 {
     private const float DefaultHorizontalFovDegrees = 80f;
     private const float FitPaddingMultiplier = 0.75f;
@@ -16,6 +16,9 @@ public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IM
     private float _lastVerticalFovRadians = float.NaN;
     private int _initialHeightRows = -1;
     private int _fixedHeightPx = -1;
+    private bool _inspectLayoutEnabled;
+    private RectPx _inspectViewRectPx;
+    private bool _hasInspectViewRect;
 
     public Scene3DNavigationMode NavigationMode { get; set; } = Scene3DNavigationMode.Orbit;
     public Vector3 OrbitTarget { get; set; }
@@ -114,6 +117,21 @@ public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IM
         }
 
         return new BlockSize(width, _fixedHeightPx);
+    }
+
+    public void SetInspectLayoutEnabled(bool enabled)
+    {
+        _inspectLayoutEnabled = enabled;
+        if (!enabled)
+        {
+            _hasInspectViewRect = false;
+        }
+    }
+
+    public bool TryGetInspectViewport(out RectPx rect)
+    {
+        rect = _inspectViewRectPx;
+        return _hasInspectViewRect;
     }
 
     private static float ComputeFitDistance(float radius, float vfovRadians)

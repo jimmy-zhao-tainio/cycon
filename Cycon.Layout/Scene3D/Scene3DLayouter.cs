@@ -20,8 +20,7 @@ public static class Scene3DLayouter
         var width = Math.Max(0, grid.ContentWidthPx);
 
         var minHeight = Math.Max(1, grid.CellHeightPx);
-        var maxHeight = Math.Max(1, grid.ContentHeightPx - (grid.CellHeightPx * 2));
-        var height = Math.Max(minHeight, Math.Min(desiredHeightPx, maxHeight));
+        var height = Math.Max(minHeight, desiredHeightPx);
 
         var x = grid.PaddingLeftPx;
         var y = grid.PaddingTopPx + (blockStartRowIndex * grid.CellHeightPx);

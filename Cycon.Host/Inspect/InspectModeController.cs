@@ -136,7 +136,17 @@ internal sealed class InspectModeController
             throw new InvalidOperationException("Active inspect view does not implement IRenderBlock.");
         }
 
+        if (_activeInspect.View is IInspectLayoutBlock layoutBlock)
+        {
+            layoutBlock.SetInspectLayoutEnabled(true);
+        }
+
         BlockViewRenderer.RenderFullscreen(frame, _host.Font, renderBlock, ctx, framebufferWidth, framebufferHeight);
+
+        if (_activeInspect.View is IInspectLayoutBlock layoutBlockAfter)
+        {
+            layoutBlockAfter.SetInspectLayoutEnabled(false);
+        }
 
         return frame;
     }
@@ -315,6 +325,12 @@ internal sealed class InspectModeController
 
     private static PxRect GetInputViewport(IBlock block, in PxRect viewportRectPx)
     {
+        if (block is IInspectLayoutBlock layoutBlock &&
+            layoutBlock.TryGetInspectViewport(out var inspectViewport))
+        {
+            return new PxRect(inspectViewport.X, inspectViewport.Y, inspectViewport.Width, inspectViewport.Height);
+        }
+
         if (block is not IBlockChromeProvider chromeProvider)
         {
             return viewportRectPx;
@@ -351,6 +367,11 @@ internal sealed class InspectModeController
         if (_activeInspect.View is IMouseFocusableViewportBlock focusable)
         {
             focusable.HasMouseFocus = false;
+        }
+
+        if (_activeInspect.View is IInspectResettableBlock resettable)
+        {
+            resettable.ResetViewModeSize();
         }
 
         _scene3DPointer.Reset();
