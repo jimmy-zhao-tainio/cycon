@@ -8,6 +8,7 @@ using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Core.Metrics;
+using Cycon.Layout.Inspect;
 using Cycon.Layout.Scrolling;
 using Cycon.Render;
 using Cycon.Rendering.Renderer;
@@ -25,6 +26,13 @@ internal sealed class InspectModeController
     private int _nextInspectEntryId;
     private InspectEntry? _activeInspect;
     private Scene3DNavKeys _inspectScene3DNavKeysDown;
+    private InspectLayoutResult _inspectLayout;
+    private InspectChromeSpec _inspectChromeSpec;
+    private bool _hasInspectLayout;
+    private int _inspectLayoutFramebufferWidth = -1;
+    private int _inspectLayoutFramebufferHeight = -1;
+    private int _inspectLayoutInspectEntryId = -1;
+    private InspectChromeDataBuilder _inspectChromeData = new(capacity: 128);
 
     public InspectModeController(IInspectHost host)
     {
@@ -48,6 +56,7 @@ internal sealed class InspectModeController
 
         _scene3DPointer.Reset();
         _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
+        _hasInspectLayout = false;
 
         // NOTE: If drag mysteriously needs a priming click again,
         // check Windows keyboard/trackpad/trackpoint delay settings.
@@ -74,6 +83,7 @@ internal sealed class InspectModeController
 
         _scene3DPointer.Reset();
         _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
+        _hasInspectLayout = false;
     }
 
     public Cycon.Rendering.RenderFrame BuildInspectFrame(
@@ -136,16 +146,35 @@ internal sealed class InspectModeController
             throw new InvalidOperationException("Active inspect view does not implement IRenderBlock.");
         }
 
-        if (_activeInspect.View is IInspectLayoutBlock layoutBlock)
+        if (_activeInspect.View is IInspectChromeProvider inspectChromeProvider &&
+            TryEnsureInspectLayout(_activeInspect, framebufferWidth, framebufferHeight, textMetrics, out var inspectLayout, out var inspectChromeSpec))
         {
-            layoutBlock.SetInspectLayoutEnabled(true);
+            _inspectChromeData.Clear();
+            inspectChromeProvider.PopulateInspectChromeData(ref _inspectChromeData);
+            BlockViewRenderer.RenderFullscreenInspect(
+                frame,
+                _host.Font,
+                renderBlock,
+                ctx,
+                framebufferWidth,
+                framebufferHeight,
+                inspectLayout,
+                inspectChromeSpec,
+                ref _inspectChromeData);
         }
-
-        BlockViewRenderer.RenderFullscreen(frame, _host.Font, renderBlock, ctx, framebufferWidth, framebufferHeight);
-
-        if (_activeInspect.View is IInspectLayoutBlock layoutBlockAfter)
+        else
         {
-            layoutBlockAfter.SetInspectLayoutEnabled(false);
+            if (_activeInspect.View is IInspectLayoutBlock layoutBlock)
+            {
+                layoutBlock.SetInspectLayoutEnabled(true);
+            }
+
+            BlockViewRenderer.RenderFullscreen(frame, _host.Font, renderBlock, ctx, framebufferWidth, framebufferHeight);
+
+            if (_activeInspect.View is IInspectLayoutBlock layoutBlockAfter)
+            {
+                layoutBlockAfter.SetInspectLayoutEnabled(false);
+            }
         }
 
         return frame;
@@ -171,6 +200,17 @@ internal sealed class InspectModeController
         }
 
         var block = _activeInspect.View;
+        if (block is IInspectChromeProvider)
+        {
+            var fontMetrics = _host.Font.Metrics;
+            var textMetrics = new TextMetrics(
+                CellWidthPx: fontMetrics.CellWidthPx,
+                CellHeightPx: fontMetrics.CellHeightPx,
+                BaselinePx: fontMetrics.BaselinePx,
+                UnderlineThicknessPx: Math.Max(1, fontMetrics.UnderlineThicknessPx),
+                UnderlineTopOffsetPx: fontMetrics.UnderlineTopOffsetPx);
+            TryEnsureInspectLayout(_activeInspect, framebufferWidth, framebufferHeight, textMetrics, out _, out _);
+        }
         // InspectMode is fullscreen: blocks own their own padding.
         var viewport = new PxRect(0, 0, Math.Max(0, framebufferWidth), Math.Max(0, framebufferHeight));
 
@@ -323,12 +363,17 @@ internal sealed class InspectModeController
         return false;
     }
 
-    private static PxRect GetInputViewport(IBlock block, in PxRect viewportRectPx)
+    private PxRect GetInputViewport(IBlock block, in PxRect viewportRectPx)
     {
-        if (block is IInspectLayoutBlock layoutBlock &&
-            layoutBlock.TryGetInspectViewport(out var inspectViewport))
+        if (_activeInspect is not null &&
+            _hasInspectLayout &&
+            _inspectLayoutInspectEntryId == _activeInspect.Id &&
+            _inspectLayoutFramebufferWidth == viewportRectPx.Width &&
+            _inspectLayoutFramebufferHeight == viewportRectPx.Height &&
+            ReferenceEquals(block, _activeInspect.View))
         {
-            return new PxRect(inspectViewport.X, inspectViewport.Y, inspectViewport.Width, inspectViewport.Height);
+            var r = _inspectLayout.ContentRect;
+            return new PxRect(r.X, r.Y, r.Width, r.Height);
         }
 
         if (block is not IBlockChromeProvider chromeProvider)
@@ -377,7 +422,95 @@ internal sealed class InspectModeController
         _scene3DPointer.Reset();
         _inspectScene3DNavKeysDown = Scene3DNavKeys.None;
         _activeInspect = null;
+        _hasInspectLayout = false;
         _pendingActions.Add(new InspectRequestContentRebuild());
+    }
+
+    private bool TryEnsureInspectLayout(
+        InspectEntry entry,
+        int framebufferWidth,
+        int framebufferHeight,
+        in TextMetrics textMetrics,
+        out InspectLayoutResult layout,
+        out InspectChromeSpec chromeSpec)
+    {
+        layout = default;
+        chromeSpec = default;
+
+        if (framebufferWidth <= 0 || framebufferHeight <= 0)
+        {
+            _hasInspectLayout = false;
+            return false;
+        }
+
+        if (entry.View is not IInspectChromeProvider provider)
+        {
+            _hasInspectLayout = false;
+            return false;
+        }
+
+        chromeSpec = provider.GetInspectChromeSpec();
+        if (!chromeSpec.Enabled)
+        {
+            _hasInspectLayout = false;
+            return false;
+        }
+
+        if (_hasInspectLayout &&
+            _inspectLayoutFramebufferWidth == framebufferWidth &&
+            _inspectLayoutFramebufferHeight == framebufferHeight &&
+            _inspectLayoutInspectEntryId == entry.Id)
+        {
+            layout = _inspectLayout;
+            chromeSpec = _inspectChromeSpec;
+            return true;
+        }
+
+        var outerRect = new RectPx(0, 0, framebufferWidth, framebufferHeight);
+        var chrome = entry.View is IBlockChromeProvider chromeProvider
+            ? chromeProvider.ChromeSpec
+            : BlockChromeSpec.Disabled;
+
+        var reservation = chrome.Enabled ? Math.Max(0, chrome.PaddingPx + chrome.BorderPx) : 0;
+        var innerRect = reservation > 0 ? DeflateRect(outerRect, reservation) : outerRect;
+
+        var inspectOuterRect = outerRect;
+        if (chrome.Enabled && chrome.Style == BlockChromeStyle.Frame2Px)
+        {
+            var thickness = Math.Max(1, chrome.BorderPx);
+            var inset = Math.Max(0, (reservation - thickness) / 2);
+            inspectOuterRect = inset > 0 ? DeflateRect(outerRect, inset) : outerRect;
+        }
+
+        var autoInset = Math.Max(0, innerRect.X - inspectOuterRect.X);
+        var outerBorderPx = autoInset + Math.Max(0, chromeSpec.OuterBorderPx);
+        if (!InspectLayoutEngine.TryCompute(inspectOuterRect, textMetrics, outerBorderPx, chromeSpec.Panels, out layout))
+        {
+            _hasInspectLayout = false;
+            return false;
+        }
+
+        _inspectLayout = layout;
+        _inspectChromeSpec = chromeSpec;
+        _inspectLayoutFramebufferWidth = framebufferWidth;
+        _inspectLayoutFramebufferHeight = framebufferHeight;
+        _inspectLayoutInspectEntryId = entry.Id;
+        _hasInspectLayout = true;
+        return true;
+    }
+
+    private static RectPx DeflateRect(in RectPx rect, int inset)
+    {
+        if (inset <= 0)
+        {
+            return rect;
+        }
+
+        var x = rect.X + inset;
+        var y = rect.Y + inset;
+        var w = Math.Max(0, rect.Width - (inset * 2));
+        var h = Math.Max(0, rect.Height - (inset * 2));
+        return new RectPx(x, y, w, h);
     }
 
     private void WriteInspectReceiptIfNeeded(InspectEntry entry)

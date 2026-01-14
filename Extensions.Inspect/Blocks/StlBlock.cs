@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Numerics;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
@@ -6,7 +7,7 @@ using Cycon.Render;
 
 namespace Extensions.Inspect.Blocks;
 
-public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IMouseFocusableViewportBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner, IBlockChromeProvider, IInspectLayoutBlock
+public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IMouseFocusableViewportBlock, IRenderBlock, IMeasureBlock, IMesh3DResourceOwner, IBlockChromeProvider, IInspectChromeProvider
 {
     private const float DefaultHorizontalFovDegrees = 80f;
     private const float FitPaddingMultiplier = 0.75f;
@@ -16,9 +17,38 @@ public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IM
     private float _lastVerticalFovRadians = float.NaN;
     private int _initialHeightRows = -1;
     private int _fixedHeightPx = -1;
-    private bool _inspectLayoutEnabled;
-    private RectPx _inspectViewRectPx;
-    private bool _hasInspectViewRect;
+
+    private static readonly InspectPanelSpec[] InspectPanels =
+        new[]
+        {
+            new InspectPanelSpec(InspectEdge.Top, SizeCells: 2, DrawSeparator: true),
+            new InspectPanelSpec(InspectEdge.Bottom, SizeCells: 2, DrawSeparator: true),
+            new InspectPanelSpec(InspectEdge.Left, SizeCells: 24, DrawSeparator: true)
+        };
+
+    private static readonly InspectTextRowSpec[] InspectTextRows =
+        new[]
+        {
+            new InspectTextRowSpec(InspectEdge.Top, RowIndex: 0, LeftKey: "stl.mode", CenterKey: null, RightKey: "stl.source"),
+            new InspectTextRowSpec(InspectEdge.Bottom, RowIndex: 1, LeftKey: "stl.stats", CenterKey: "stl.selection", RightKey: "stl.quant"),
+
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 0, LeftKey: "stl.diag.0", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 1, LeftKey: "stl.diag.1", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 2, LeftKey: "stl.diag.2", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 3, LeftKey: "stl.diag.3", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 4, LeftKey: "stl.diag.4", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 5, LeftKey: "stl.diag.5", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 6, LeftKey: "stl.diag.6", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 7, LeftKey: "stl.diag.7", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 8, LeftKey: "stl.diag.8", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 9, LeftKey: "stl.diag.9", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 10, LeftKey: "stl.diag.10", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 11, LeftKey: "stl.diag.11", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 12, LeftKey: "stl.diag.12", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 13, LeftKey: "stl.diag.13", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 14, LeftKey: "stl.diag.14", CenterKey: null, RightKey: null),
+            new InspectTextRowSpec(InspectEdge.Left, RowIndex: 15, LeftKey: "stl.diag.15", CenterKey: null, RightKey: null)
+        };
 
     public Scene3DNavigationMode NavigationMode { get; set; } = Scene3DNavigationMode.Orbit;
     public Vector3 OrbitTarget { get; set; }
@@ -64,6 +94,36 @@ public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IM
     public string FilePath { get; }
 
     public BlockChromeSpec ChromeSpec => BlockChromeSpec.ViewDefault;
+
+    public InspectChromeSpec GetInspectChromeSpec() =>
+        new(Enabled: true, StyleId: InspectChromeStyleId.Frame2Px, OuterBorderPx: 0, Panels: InspectPanels, TextRows: InspectTextRows);
+
+    public void PopulateInspectChromeData(ref InspectChromeDataBuilder b)
+    {
+        var mode = NavigationMode == Scene3DNavigationMode.Orbit ? "ORB" : "FPS";
+        b.Set("stl.mode", $"STL  {mode}");
+        b.Set("stl.source", $"SRC {Path.GetFileName(FilePath)}");
+        b.Set("stl.stats", $"Tri {TriangleCount}  Vtx {VertexCount}");
+        b.Set("stl.selection", "Sel none");
+        b.Set("stl.quant", "Q 1e-05");
+
+        b.Set("stl.diag.0", "Geometry");
+        b.Set("stl.diag.1", $"  Tri  {TriangleCount}");
+        b.Set("stl.diag.2", $"  Vtx  {VertexCount}");
+        b.Set("stl.diag.3", string.Empty);
+        b.Set("stl.diag.4", "Bounds");
+        b.Set("stl.diag.5", "  Min  +000 +000 +000");
+        b.Set("stl.diag.6", "  Max  +000 +000 +000");
+        b.Set("stl.diag.7", string.Empty);
+        b.Set("stl.diag.8", "Camera");
+        b.Set("stl.diag.9", "  Mode ORB");
+        b.Set("stl.diag.10", "  FOV  45.0");
+        b.Set("stl.diag.11", "  Dist +0.000");
+        b.Set("stl.diag.12", string.Empty);
+        b.Set("stl.diag.13", "Selection");
+        b.Set("stl.diag.14", "  Kind none");
+        b.Set("stl.diag.15", "  Id   ------");
+    }
 
     /// <summary>
     /// Interleaved triangle soup: (x,y,z,nx,ny,nz) per vertex, 3 vertices per triangle.
@@ -117,21 +177,6 @@ public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IM
         }
 
         return new BlockSize(width, _fixedHeightPx);
-    }
-
-    public void SetInspectLayoutEnabled(bool enabled)
-    {
-        _inspectLayoutEnabled = enabled;
-        if (!enabled)
-        {
-            _hasInspectViewRect = false;
-        }
-    }
-
-    public bool TryGetInspectViewport(out RectPx rect)
-    {
-        rect = _inspectViewRectPx;
-        return _hasInspectViewRect;
     }
 
     private static float ComputeFitDistance(float radius, float vfovRadians)
