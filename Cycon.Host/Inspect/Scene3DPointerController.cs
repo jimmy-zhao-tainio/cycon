@@ -13,18 +13,12 @@ internal sealed class Scene3DPointerController
     private const float MouseDeltaClampPx = 200f;
 
     private Scene3DCapture? _capture;
-    private BlockId? _mouseFocus;
-    private int _lastMouseX;
-    private int _lastMouseY;
-    private bool _hasMousePos;
 
     public BlockId? CapturedBlockId => _capture?.BlockId;
 
     public void Reset()
     {
         _capture = null;
-        _mouseFocus = null;
-        _hasMousePos = false;
     }
 
     public bool Handle(IScene3DViewBlock stl, in PxRect viewportRectPx, in HostMouseEvent e, Scene3DSettings settings)
@@ -123,7 +117,6 @@ internal sealed class Scene3DPointerController
                 {
                     focusable.HasMouseFocus = false;
                 }
-                _mouseFocus = null;
             }
 
             return false;
@@ -137,49 +130,7 @@ internal sealed class Scene3DPointerController
 
         if (e.Kind == HostMouseEventKind.Move)
         {
-            if (!_hasMousePos)
-            {
-                _lastMouseX = e.X;
-                _lastMouseY = e.Y;
-                _hasMousePos = true;
-            }
-
-            if ((e.Buttons & HostMouseButtons.Left) != 0)
-            {
-                if (stl is IMouseFocusableViewportBlock focusable)
-                {
-                    focusable.HasMouseFocus = true;
-                }
-                _mouseFocus = stl.Id;
-                if (stl is not IScene3DOrbitBlock { NavigationMode: Scene3DNavigationMode.Orbit })
-                {
-                    _capture = new Scene3DCapture(stl.Id, HostMouseButtons.Left, Scene3DDragMode.Orbit, e.X, e.Y, nowTicks, e.X, e.Y, 0f, 0f);
-                }
-                else
-                {
-                    var rawDx = Math.Clamp(e.X - _lastMouseX, -MouseDeltaClampPx, MouseDeltaClampPx);
-                    var rawDy = Math.Clamp(e.Y - _lastMouseY, -MouseDeltaClampPx, MouseDeltaClampPx);
-                    ApplySceneDragDelta(stl, settings, Scene3DDragMode.Orbit, rawDx, rawDy);
-                    _capture = new Scene3DCapture(stl.Id, HostMouseButtons.Left, Scene3DDragMode.Orbit, e.X, e.Y, nowTicks, e.X, e.Y, 0f, 0f);
-                }
-                _lastMouseX = e.X;
-                _lastMouseY = e.Y;
-                return true;
-            }
-
-            if ((e.Buttons & HostMouseButtons.Right) != 0)
-            {
-                var rawDx = Math.Clamp(e.X - _lastMouseX, -MouseDeltaClampPx, MouseDeltaClampPx);
-                var rawDy = Math.Clamp(e.Y - _lastMouseY, -MouseDeltaClampPx, MouseDeltaClampPx);
-                ApplySceneDragDelta(stl, settings, Scene3DDragMode.Pan, rawDx, rawDy);
-                _capture = new Scene3DCapture(stl.Id, HostMouseButtons.Right, Scene3DDragMode.Pan, e.X, e.Y, nowTicks, e.X, e.Y, 0f, 0f);
-                _lastMouseX = e.X;
-                _lastMouseY = e.Y;
-                return true;
-            }
-
-            _lastMouseX = e.X;
-            _lastMouseY = e.Y;
+            return false;
         }
 
         if (e.Kind == HostMouseEventKind.Down)
@@ -190,7 +141,6 @@ internal sealed class Scene3DPointerController
                 {
                     focusable.HasMouseFocus = true;
                 }
-                _mouseFocus = stl.Id;
                 _capture = new Scene3DCapture(stl.Id, HostMouseButtons.Left, Scene3DDragMode.Orbit, e.X, e.Y, nowTicks, e.X, e.Y, 0f, 0f);
                 return true;
             }
