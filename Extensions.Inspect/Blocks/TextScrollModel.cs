@@ -235,6 +235,39 @@ public sealed class TextScrollModel : IScrollModel
 
     public int TopLineSubRow => _topLineSubRow;
 
+    public bool EnsureAnchorVisible(int lineIndex, int subRow, PxRect viewportRectPx)
+    {
+        if (_lines.Count == 0)
+        {
+            return false;
+        }
+
+        UpdateViewport(viewportRectPx);
+
+        lineIndex = Math.Clamp(lineIndex, 0, _lines.Count - 1);
+        var wrapped = GetOrComputeWrappedLine(lineIndex, _wrapCols);
+        subRow = Math.Clamp(subRow, 0, Math.Max(0, wrapped.RowCount - 1));
+
+        var caretRow = ComputeScrollOffsetRowsFromAnchor(lineIndex, subRow, _wrapCols);
+        var topRow = _scrollOffsetRows;
+        var bottomRowExclusive = topRow + _viewportRows;
+
+        if (caretRow < topRow)
+        {
+            SetScrollOffsetRows(caretRow, viewportRectPx);
+            return true;
+        }
+
+        if (caretRow >= bottomRowExclusive)
+        {
+            var nextTop = Math.Max(0, caretRow - Math.Max(0, _viewportRows - 1));
+            SetScrollOffsetRows(nextTop, viewportRectPx);
+            return true;
+        }
+
+        return false;
+    }
+
     private void ScrollByRows(int deltaRows, PxRect viewportRectPx)
     {
         var totalRows = GetEstimatedTotalRows(_wrapCols);

@@ -69,6 +69,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private readonly InspectModeController _inspectController;
     private readonly Scene3DPointerController _inlineScene3DPointer = new();
     private BlockId? _capturedInlineViewportBlockId;
+    private BlockId? _focusedInlineViewportBlockId;
 
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
@@ -313,7 +314,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                     caretAlphaNow,
                     timeSeconds,
                     _visibleCommandIndicators,
-                    TakePendingMeshReleases());
+                    TakePendingMeshReleases(),
+                    focusedViewportBlockId: _focusedInlineViewportBlockId);
 
                 _lastFrame = result.BackendFrame;
                 _lastLayout = result.Layout;
@@ -380,7 +382,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 caretAlpha: caretAlphaNow,
                 timeSeconds: timeSeconds,
                 _visibleCommandIndicators,
-                TakePendingMeshReleases());
+                TakePendingMeshReleases(),
+                focusedViewportBlockId: _focusedInlineViewportBlockId);
 
             _lastFrame = result.BackendFrame;
             _lastLayout = result.Layout;
@@ -607,12 +610,32 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
             if (events[i] is PendingEvent.Text textInput && !char.IsControl(textInput.Ch))
             {
-                // No embedded blocks may steal keyboard focus; text input always goes to the transcript interaction model.
+                if (_focusedInlineViewportBlockId is not null)
+                {
+                    continue;
+                }
             }
 
             if (events[i] is PendingEvent.Key key && key.KeyCode != HostKey.Unknown)
             {
-                // No embedded blocks may steal keyboard focus; keyboard events are handled by the transcript interaction model.
+                if (key.IsDown && key.KeyCode == HostKey.Escape && _focusedInlineViewportBlockId is not null)
+                {
+                    SetFocusedInlineViewport(null);
+                    _pendingContentRebuild = true;
+                }
+                else if (_focusedInlineViewportBlockId is not null)
+                {
+                    if (TryHandleFocusedInlineViewportKey(key))
+                    {
+                        _pendingContentRebuild = true;
+                    }
+
+                    if (_focusedInlineViewportBlockId is not null)
+                    {
+                        continue;
+                    }
+                }
+
                 if (key.IsDown &&
                     (key.KeyCode == HostKey.PageUp || key.KeyCode == HostKey.PageDown) &&
                     _lastLayout is not null)
@@ -645,6 +668,20 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             {
                 var mouseEvent = mouseRaw.Event;
                 var viewportRectPx = new PxRect(0, 0, framebufferWidth, framebufferHeight);
+
+                if (mouseEvent.Kind == HostMouseEventKind.Down)
+                {
+                    var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
+                    var scrollYPx = scrollOffsetRows * _font.Metrics.CellHeightPx;
+                    if (TryHitTestInlineViewport(_lastLayout, mouseEvent.X, mouseEvent.Y, scrollYPx, out var hitViewport, out _))
+                    {
+                        SetFocusedInlineViewport(hitViewport.BlockId);
+                    }
+                    else
+                    {
+                        SetFocusedInlineViewport(null);
+                    }
+                }
 
                 if (TryHandleInlineViewportPointer(mouseEvent))
                 {
@@ -714,7 +751,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             caretAlpha: caretAlphaNow,
             timeSeconds: timeSeconds,
             _visibleCommandIndicators,
-            TakePendingMeshReleases());
+            TakePendingMeshReleases(),
+            focusedViewportBlockId: _focusedInlineViewportBlockId);
 
         _lastFrame = result.BackendFrame;
         _lastLayout = result.Layout;
@@ -760,6 +798,87 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             HostMouseEventKind.Wheel => null,
             _ => null
         };
+    }
+
+    private void SetFocusedInlineViewport(BlockId? blockId)
+    {
+        if (_focusedInlineViewportBlockId == blockId)
+        {
+            return;
+        }
+
+        if (_focusedInlineViewportBlockId is { } previous && TryGetBlockById(previous, out var previousBlock))
+        {
+            if (previousBlock is IMouseFocusableViewportBlock focusable)
+            {
+                focusable.HasMouseFocus = false;
+            }
+        }
+
+        _focusedInlineViewportBlockId = blockId;
+
+        if (_focusedInlineViewportBlockId is { } next && TryGetBlockById(next, out var nextBlock))
+        {
+            if (nextBlock is IMouseFocusableViewportBlock focusable)
+            {
+                focusable.HasMouseFocus = true;
+            }
+        }
+
+        _pendingContentRebuild = true;
+    }
+
+    private bool TryHandleFocusedInlineViewportKey(in PendingEvent.Key key)
+    {
+        if (_focusedInlineViewportBlockId is not { } focusedId ||
+            !TryGetBlockById(focusedId, out var block))
+        {
+            SetFocusedInlineViewport(null);
+            return false;
+        }
+
+        if (key.IsDown &&
+            (key.Mods & HostKeyModifiers.Control) != 0 &&
+            block is IBlockTextSelection selection)
+        {
+            if (key.KeyCode == HostKey.C)
+            {
+                if (selection.TryGetSelectedText(out var selected) && selected.Length > 0)
+                {
+                    _clipboard.SetText(selected);
+                    return true;
+                }
+            }
+            else if (key.KeyCode == HostKey.A)
+            {
+                selection.SelectAll();
+                return true;
+            }
+        }
+
+        if (block is not IBlockKeyHandler keyHandler)
+        {
+            return false;
+        }
+
+        return keyHandler.HandleKey(new HostKeyEvent(key.KeyCode, key.Mods, key.IsDown));
+    }
+
+    private bool TryGetBlockById(BlockId id, out IBlock block)
+    {
+        var blocks = _document.Transcript.Blocks;
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            var candidate = blocks[i];
+            if (candidate.Id == id)
+            {
+                block = candidate;
+                return true;
+            }
+        }
+
+        block = null!;
+        return false;
     }
 
     private bool TryHandleInlineViewportPointer(in HostMouseEvent e)

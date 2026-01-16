@@ -14,6 +14,7 @@ internal static class ViewportBlockPass
 {
     private const int PanelBgRgba = unchecked((int)0xEEEEEEFF);
     private const int ViewportChromeBorderRgba = unchecked((int)0x000000FF);
+    private const int FocusedChromeColumnRgba = unchecked((int)0x222222FF);
 
     public static void RenderViewportsStartingAtRow(
         RenderCanvas canvas,
@@ -23,7 +24,8 @@ internal static class ViewportBlockPass
         int scrollYPx,
         int rowIndex,
         ref int nextSceneViewportIndex,
-        double timeSeconds)
+        double timeSeconds,
+        BlockId? focusedViewportBlockId = null)
     {
         var viewports = layout.Scene3DViewports;
         if (viewports.Count == 0)
@@ -72,13 +74,25 @@ internal static class ViewportBlockPass
                 continue;
             }
 
+            var innerRect = viewport.InnerViewportRectPx;
+            var innerViewportRect = new RectPx(innerRect.X, innerRect.Y - scrollYPx, innerRect.Width, innerRect.Height);
+
             if (viewport.Chrome.Enabled)
             {
+                if (focusedViewportBlockId is { } focusedId &&
+                    viewport.BlockId == focusedId &&
+                    innerViewportRect.X > outerViewportRect.X)
+                {
+                    var columnW = Math.Max(0, innerViewportRect.X - outerViewportRect.X);
+                    if (columnW > 0)
+                    {
+                        canvas.FillRect(new RectPx(outerViewportRect.X, outerViewportRect.Y, columnW, outerViewportRect.Height), FocusedChromeColumnRgba);
+                    }
+                }
+
                 DrawChrome(canvas, viewport.Chrome, outerViewportRect, ViewportChromeBorderRgba);
             }
 
-            var innerRect = viewport.InnerViewportRectPx;
-            var innerViewportRect = new RectPx(innerRect.X, innerRect.Y - scrollYPx, innerRect.Width, innerRect.Height);
             if (innerViewportRect.Width <= 0 || innerViewportRect.Height <= 0)
             {
                 continue;

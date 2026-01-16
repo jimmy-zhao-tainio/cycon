@@ -10,7 +10,7 @@ public sealed class InteractionState
     public BlockId? MouseCaptured { get; set; }
     public bool IsSelecting { get; set; }
     public SelectionRange? Selection { get; set; }
+    public SelectionPosition? SelectionCaret { get; set; }
     public HostKeyModifiers CurrentMods { get; set; }
     public BlockId? LastPromptId { get; set; }
 }
-

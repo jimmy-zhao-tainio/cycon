@@ -22,7 +22,8 @@ public sealed class ConsoleRenderer
         double timeSeconds,
         IReadOnlyDictionary<BlockId, BlockId>? commandIndicators = null,
         byte caretAlpha = 0xFF,
-        IReadOnlyList<int>? meshReleases = null)
+        IReadOnlyList<int>? meshReleases = null,
+        BlockId? focusedViewportBlockId = null)
     {
         var frame = new RenderFrame
         {
@@ -67,7 +68,8 @@ public sealed class ConsoleRenderer
                 scrollYPx,
                 line.RowIndex,
                 ref nextSceneViewportIndex,
-                timeSeconds);
+                timeSeconds,
+                focusedViewportBlockId);
 
             var rowOnScreen = line.RowIndex - scrollOffsetRows;
             if (rowOnScreen < 0 || rowOnScreen >= grid.Rows)

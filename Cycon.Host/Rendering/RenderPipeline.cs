@@ -41,7 +41,8 @@ internal sealed class RenderPipeline
         byte caretAlpha,
         double timeSeconds,
         IReadOnlyDictionary<BlockId, BlockId> commandIndicators,
-        IReadOnlyList<int>? meshReleases)
+        IReadOnlyList<int>? meshReleases,
+        BlockId? focusedViewportBlockId = null)
     {
         var layout = _layoutEngine.Layout(document, layoutSettings, viewport);
         if (restoreAnchor)
@@ -86,7 +87,8 @@ internal sealed class RenderPipeline
             timeSeconds: timeSeconds,
             commandIndicators: commandIndicators,
             caretAlpha: caretAlpha,
-            meshReleases: meshReleases);
+            meshReleases: meshReleases,
+            focusedViewportBlockId: focusedViewportBlockId);
 
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         return new RenderPipelineResult(backendFrame, backendFrame.BuiltGrid, layout, renderFrame);
