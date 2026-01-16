@@ -424,14 +424,16 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         _gl.Enable(EnableCap.ScissorTest);
         var clip = _clipStack.Peek();
-        var x = Math.Clamp(clip.X, 0, Math.Max(0, _viewportWidth));
-        var y = Math.Clamp(clip.Y, 0, Math.Max(0, _viewportHeight));
-        var w = Math.Clamp(clip.Width, 0, Math.Max(0, _viewportWidth - x));
-        var h = Math.Clamp(clip.Height, 0, Math.Max(0, _viewportHeight - y));
+        var x0 = Math.Max(0, clip.X);
+        var y0 = Math.Max(0, clip.Y);
+        var x1 = Math.Min(_viewportWidth, clip.X + clip.Width);
+        var y1 = Math.Min(_viewportHeight, clip.Y + clip.Height);
+        var w = Math.Max(0, x1 - x0);
+        var h = Math.Max(0, y1 - y0);
 
         // glScissor uses bottom-left origin.
-        var scissorY = Math.Max(0, _viewportHeight - (y + h));
-        _gl.Scissor(x, scissorY, (uint)w, (uint)h);
+        var scissorY = Math.Max(0, _viewportHeight - (y0 + h));
+        _gl.Scissor(x0, scissorY, (uint)w, (uint)h);
     }
 
     private void DrawVertices(DrawBatchKind kind, List<float> vertices, GlyphAtlasData atlas)

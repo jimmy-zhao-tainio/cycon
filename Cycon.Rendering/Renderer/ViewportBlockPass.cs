@@ -13,6 +13,7 @@ namespace Cycon.Rendering.Renderer;
 internal static class ViewportBlockPass
 {
     private const int PanelBgRgba = unchecked((int)0xEEEEEEFF);
+    private const int ViewportChromeBorderRgba = unchecked((int)0x000000FF);
 
     public static void RenderViewportsStartingAtRow(
         RenderCanvas canvas,
@@ -73,7 +74,7 @@ internal static class ViewportBlockPass
 
             if (viewport.Chrome.Enabled)
             {
-                DrawChrome(canvas, viewport.Chrome, outerViewportRect, document.Settings.DefaultTextStyle.ForegroundRgba);
+                DrawChrome(canvas, viewport.Chrome, outerViewportRect, ViewportChromeBorderRgba);
             }
 
             var innerRect = viewport.InnerViewportRectPx;

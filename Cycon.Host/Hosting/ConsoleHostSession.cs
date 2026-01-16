@@ -613,6 +613,32 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             if (events[i] is PendingEvent.Key key && key.KeyCode != HostKey.Unknown)
             {
                 // No embedded blocks may steal keyboard focus; keyboard events are handled by the transcript interaction model.
+                if (key.IsDown &&
+                    (key.KeyCode == HostKey.PageUp || key.KeyCode == HostKey.PageDown) &&
+                    _lastLayout is not null)
+                {
+                    var viewportRows = Math.Max(1, _lastLayout.Grid.Rows);
+                    var delta = viewportRows - 1;
+                    if (delta <= 0)
+                    {
+                        delta = 1;
+                    }
+
+                    if (key.KeyCode == HostKey.PageUp)
+                    {
+                        delta = -delta;
+                    }
+
+                    var maxScrollOffsetRows = Math.Max(0, _lastLayout.TotalRows - _lastLayout.Grid.Rows);
+                    var before = _document.Scroll.ScrollOffsetRows;
+                    _document.Scroll.ApplyUserScrollDelta(delta, maxScrollOffsetRows);
+                    if (_document.Scroll.ScrollOffsetRows != before)
+                    {
+                        _pendingContentRebuild = true;
+                    }
+
+                    continue;
+                }
             }
 
             if (events[i] is PendingEvent.Mouse mouseRaw && _lastLayout is not null)

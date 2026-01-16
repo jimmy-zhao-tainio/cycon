@@ -10,6 +10,8 @@ public enum HostKey
     Right,
     Up,
     Down,
+    PageUp,
+    PageDown,
     Escape,
     C,
     V,

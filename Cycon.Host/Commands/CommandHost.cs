@@ -136,7 +136,7 @@ internal sealed class CommandHost
             return Array.Empty<CommandHostAction>();
         }
 
-        var commandText = $"inspect {QuoteForCommandLineParser(path)}";
+        var commandText = $"view {QuoteForCommandLineParser(path)}";
         var prompt = lastPrompt.Value with { Input = commandText, CaretIndex = commandText.Length };
         return BuildSubmissionActions(prompt, lastPrompt.Value.Id, view);
     }

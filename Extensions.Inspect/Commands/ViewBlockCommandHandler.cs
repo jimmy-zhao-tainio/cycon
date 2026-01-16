@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Cycon.BlockCommands;
 using Cycon.Commands;
+using Cycon.Core.Styling;
 
 namespace Extensions.Inspect.Commands;
 
@@ -26,6 +27,12 @@ public sealed class ViewBlockCommandHandler : IBlockCommandHandler
             hasFullscreen |= args[i] is "--fullscreen";
         }
 
+        if (hasFullscreen)
+        {
+            ctx.InsertTextAfterCommandEcho("Fullscreen inspect is disabled. Use: view <path>", ConsoleTextStream.System);
+            return true;
+        }
+
         if (!hasInline && !hasFullscreen)
         {
             var next = new List<string>(args.Count + 1) { "--inline" };
@@ -34,10 +41,9 @@ public sealed class ViewBlockCommandHandler : IBlockCommandHandler
                 next.Add(args[i]);
             }
 
-            request = new CommandRequest("inspect", next, request.RawText);
+            request = new CommandRequest(request.Name, next, request.RawText);
         }
 
         return _inspect.TryExecute(request, ctx);
     }
 }
-
