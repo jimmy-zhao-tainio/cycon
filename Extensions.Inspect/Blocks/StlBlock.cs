@@ -93,7 +93,7 @@ public sealed partial class StlBlock : IScene3DViewBlock, IScene3DOrbitBlock, IM
 
     public string FilePath { get; }
 
-    public BlockChromeSpec ChromeSpec => BlockChromeSpec.ViewDefault;
+    public BlockChromeSpec ChromeSpec => new(true, BlockChromeStyle.Frame2Px, PaddingPx: 0, BorderPx: 2);
 
     public InspectChromeSpec GetInspectChromeSpec() =>
         new(Enabled: true, StyleId: InspectChromeStyleId.Frame2Px, OuterBorderPx: 0, Panels: InspectPanels, TextRows: InspectTextRows);

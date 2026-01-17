@@ -70,6 +70,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private readonly Scene3DPointerController _inlineScene3DPointer = new();
     private BlockId? _capturedInlineViewportBlockId;
     private BlockId? _focusedInlineViewportBlockId;
+    private Scene3DNavKeys _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
 
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
@@ -284,6 +285,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         {
             caretAlphaNow = 0;
         }
+        if (_focusedInlineViewportBlockId is not null)
+        {
+            caretAlphaNow = 0;
+        }
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
 
         var renderedGrid = _lastFrame?.BuiltGrid ?? default;
@@ -350,6 +355,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         DrainPendingEvents(pendingEvents, framebufferWidth, framebufferHeight);
+
+        if (TickFocusedScene3DKeys(TimeSpan.FromMilliseconds(dtMs)))
+        {
+            _pendingContentRebuild = true;
+        }
 
         if (_inspectController.IsActive)
         {
@@ -442,6 +452,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         {
             caretAlpha = 0;
         }
+        if (_focusedInlineViewportBlockId is not null)
+        {
+            caretAlpha = 0;
+        }
         if (caretAlpha == _lastCaretAlpha &&
             spinnerIndex == _lastSpinnerFrameIndex)
         {
@@ -449,7 +463,16 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
-        var renderFrame = _renderer.Render(_document, _lastLayout, _font, _selectionStyle, timeSeconds: timeSeconds, commandIndicators: _visibleCommandIndicators, caretAlpha: caretAlpha, meshReleases: TakePendingMeshReleases());
+        var renderFrame = _renderer.Render(
+            _document,
+            _lastLayout,
+            _font,
+            _selectionStyle,
+            timeSeconds: timeSeconds,
+            commandIndicators: _visibleCommandIndicators,
+            caretAlpha: caretAlpha,
+            meshReleases: TakePendingMeshReleases(),
+            focusedViewportBlockId: _focusedInlineViewportBlockId);
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         ClearPendingMeshReleases();
         _lastFrame = backendFrame;
@@ -741,6 +764,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         {
             caretAlphaNow = 0;
         }
+        if (_focusedInlineViewportBlockId is not null)
+        {
+            caretAlphaNow = 0;
+        }
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
         var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
         var result = _renderPipeline.BuildFrame(
@@ -816,6 +843,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         _focusedInlineViewportBlockId = blockId;
+        _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
 
         if (_focusedInlineViewportBlockId is { } next && TryGetBlockById(next, out var nextBlock))
         {
@@ -835,6 +863,13 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         {
             SetFocusedInlineViewport(null);
             return false;
+        }
+
+        if ((key.Mods & (HostKeyModifiers.Control | HostKeyModifiers.Alt)) == 0 &&
+            block is IScene3DViewBlock &&
+            TryHandleFocusedScene3DNavKey(key.KeyCode, key.IsDown))
+        {
+            return true;
         }
 
         if (key.IsDown &&
@@ -864,6 +899,103 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         return keyHandler.HandleKey(new HostKeyEvent(key.KeyCode, key.Mods, key.IsDown));
     }
 
+    private bool TryHandleFocusedScene3DNavKey(HostKey key, bool isDown)
+    {
+        var mask = key switch
+        {
+            HostKey.W => Scene3DNavKeys.W,
+            HostKey.A => Scene3DNavKeys.A,
+            HostKey.S => Scene3DNavKeys.S,
+            HostKey.D => Scene3DNavKeys.D,
+            _ => Scene3DNavKeys.None
+        };
+
+        if (mask == Scene3DNavKeys.None)
+        {
+            return false;
+        }
+
+        if (isDown)
+        {
+            _focusedScene3DNavKeysDown |= mask;
+        }
+        else
+        {
+            _focusedScene3DNavKeysDown &= ~mask;
+        }
+
+        return true;
+    }
+
+    private bool TickFocusedScene3DKeys(TimeSpan dt)
+    {
+        if (_focusedInlineViewportBlockId is null)
+        {
+            _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
+            return false;
+        }
+
+        if (_focusedScene3DNavKeysDown == Scene3DNavKeys.None)
+        {
+            return false;
+        }
+
+        if (!TryGetBlockById(_focusedInlineViewportBlockId.Value, out var block) ||
+            block is not IScene3DViewBlock stl)
+        {
+            _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
+            return false;
+        }
+
+        var dtSeconds = (float)dt.TotalSeconds;
+        if (dtSeconds <= 0f)
+        {
+            return false;
+        }
+
+        var settings = _document.Settings.Scene3D;
+
+        var pan = 0f;
+        if ((_focusedScene3DNavKeysDown & Scene3DNavKeys.D) != 0) pan += 1f;
+        if ((_focusedScene3DNavKeysDown & Scene3DNavKeys.A) != 0) pan -= 1f;
+
+        var dolly = 0f;
+        if ((_focusedScene3DNavKeysDown & Scene3DNavKeys.W) != 0) dolly += 1f;
+        if ((_focusedScene3DNavKeysDown & Scene3DNavKeys.S) != 0) dolly -= 1f;
+
+        var didAnything = false;
+        var (right, _, _) = Scene3DPointerController.ComputeSceneBasis(stl.CenterDir);
+
+        if (pan != 0f)
+        {
+            var scale = stl.FocusDistance * settings.KeyboardPanSpeed * dtSeconds;
+            var sign = settings.InvertPanX ? -1f : 1f;
+            var delta = (pan * scale * sign) * right;
+
+            if (stl is IScene3DOrbitBlock orbit && orbit.NavigationMode == Scene3DNavigationMode.Orbit)
+            {
+                orbit.OrbitTarget += delta;
+                stl.CameraPos += delta;
+            }
+            else
+            {
+                stl.CameraPos += delta;
+            }
+
+            didAnything = true;
+        }
+
+        if (dolly != 0f)
+        {
+            var exponent = dolly * settings.KeyboardDollySpeed * dtSeconds;
+            var factor = MathF.Exp(-exponent);
+            Scene3DPointerController.ApplySceneDollyFactor(stl, factor);
+            didAnything = true;
+        }
+
+        return didAnything;
+    }
+
     private bool TryGetBlockById(BlockId id, out IBlock block)
     {
         var blocks = _document.Transcript.Blocks;
@@ -879,6 +1011,16 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         block = null!;
         return false;
+    }
+
+    [Flags]
+    private enum Scene3DNavKeys
+    {
+        None = 0,
+        W = 1 << 0,
+        A = 1 << 1,
+        S = 1 << 2,
+        D = 1 << 3
     }
 
     private bool TryHandleInlineViewportPointer(in HostMouseEvent e)
