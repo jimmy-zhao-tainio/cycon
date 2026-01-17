@@ -60,7 +60,7 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
     public int ImageHeight { get; }
     public byte[] RgbaPixels { get; }
     public bool HasPointerCapture => _input.Dragging;
-    public BlockChromeSpec ChromeSpec => new(true, BlockChromeStyle.Frame2Px, PaddingPx: 0, BorderPx: 2);
+    public BlockChromeSpec ChromeSpec => BlockChromeSpec.ViewDefault;
 
     public BlockSize Measure(in BlockMeasureContext ctx)
     {

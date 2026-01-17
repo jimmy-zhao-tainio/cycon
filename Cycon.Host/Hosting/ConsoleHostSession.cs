@@ -1058,13 +1058,42 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             return false;
         }
 
-        if (e.Kind == HostMouseEventKind.Down &&
-            (e.Buttons & HostMouseButtons.Left) != 0)
+        var isInsideContentRect =
+            e.X >= hitViewportRectPx.X &&
+            e.Y >= hitViewportRectPx.Y &&
+            e.X < hitViewportRectPx.X + hitViewportRectPx.Width &&
+            e.Y < hitViewportRectPx.Y + hitViewportRectPx.Height;
+        if (e.Kind == HostMouseEventKind.Wheel)
         {
-            _capturedInlineViewportBlockId = hitViewport.BlockId;
+            if (!isInsideContentRect ||
+                _focusedInlineViewportBlockId != hitViewport.BlockId)
+            {
+                return false;
+            }
+
+            return DispatchInlineViewportPointer(hitBlock, hitViewportRectPx, e);
         }
 
-        var hitConsumed = DispatchInlineViewportPointer(hitBlock, hitViewportRectPx, e);
+        var hitConsumed = isInsideContentRect && DispatchInlineViewportPointer(hitBlock, hitViewportRectPx, e);
+
+        if (e.Kind == HostMouseEventKind.Down)
+        {
+            if (isInsideContentRect)
+            {
+                if (hitBlock is IScene3DViewBlock)
+                {
+                    _capturedInlineViewportBlockId = _inlineScene3DPointer.CapturedBlockId;
+                }
+                else if (hitBlock is IBlockPointerCaptureState captureState && captureState.HasPointerCapture)
+                {
+                    _capturedInlineViewportBlockId = hitViewport.BlockId;
+                }
+            }
+
+            UpdateInlineViewportCapture(hitBlock, hitViewport.BlockId, e);
+            return true;
+        }
+
         UpdateInlineViewportCapture(hitBlock, hitViewport.BlockId, e);
         return hitConsumed;
     }

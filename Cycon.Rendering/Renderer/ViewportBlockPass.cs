@@ -14,7 +14,7 @@ internal static class ViewportBlockPass
 {
     private const int PanelBgRgba = unchecked((int)0xEEEEEEFF);
     private const int ViewportChromeBorderRgba = unchecked((int)0x000000FF);
-    private const int FocusedChromeCrossRgba = unchecked((int)0x222222FF);
+    private const int FocusedChromeBgRgba = unchecked((int)0x222222FF);
 
     public static void RenderViewportsStartingAtRow(
         RenderCanvas canvas,
@@ -79,7 +79,23 @@ internal static class ViewportBlockPass
 
             if (viewport.Chrome.Enabled)
             {
-                DrawChrome(canvas, viewport.Chrome, outerViewportRect, ViewportChromeBorderRgba);
+                var isFocused = focusedViewportBlockId is { } focusedId && viewport.BlockId == focusedId;
+                if (isFocused)
+                {
+                    if (viewport.Chrome.Style == BlockChromeStyle.PanelBg)
+                    {
+                        canvas.FillRect(outerViewportRect, FocusedChromeBgRgba);
+                    }
+                    else
+                    {
+                        FillChromeArea(canvas, outerViewportRect, innerViewportRect, FocusedChromeBgRgba);
+                    }
+                }
+
+                if (!(isFocused && viewport.Chrome.Style == BlockChromeStyle.PanelBg))
+                {
+                    DrawChrome(canvas, viewport.Chrome, outerViewportRect, ViewportChromeBorderRgba);
+                }
             }
 
             if (innerViewportRect.Width <= 0 || innerViewportRect.Height <= 0)
@@ -93,11 +109,6 @@ internal static class ViewportBlockPass
             renderBlock.Render(canvas, blockContext);
 
             canvas.PopClipRect();
-
-            if (focusedViewportBlockId is { } focusedId && viewport.BlockId == focusedId)
-            {
-                DrawFocusCornerCrosses(canvas, innerViewportRect, textMetrics, FocusedChromeCrossRgba);
-            }
 
             if (renderBlock is IBlockOverlayRenderer overlayRenderer)
             {
@@ -166,112 +177,39 @@ internal static class ViewportBlockPass
         return new RectPx(x, y, w, h);
     }
 
-    private static void DrawFocusCornerCrosses(RenderCanvas canvas, RectPx viewportRect, TextMetrics textMetrics, int rgba)
+    private static void FillChromeArea(RenderCanvas canvas, RectPx outerRect, RectPx innerRect, int rgba)
     {
-        var cellW = Math.Max(1, textMetrics.CellWidthPx);
-        var cellH = Math.Max(1, textMetrics.CellHeightPx);
-
-        var crossW = cellW * 2;
-        var crossH = cellH * 2;
-        if (viewportRect.Width < crossW || viewportRect.Height < crossH)
+        if (outerRect.Width <= 0 || outerRect.Height <= 0)
         {
             return;
         }
 
-        var thickness = Math.Max(1, Math.Min(2, Math.Min(cellW, cellH)));
-
-        var x0 = viewportRect.X;
-        var y0 = viewportRect.Y;
-        var x1 = viewportRect.X + viewportRect.Width;
-        var y1 = viewportRect.Y + viewportRect.Height;
-
-        // Top-left: corner at (x0 + cellW, y0 + cellH), drawn on the interior cell walls.
-        DrawCorner(canvas,
-            xStart: x0,
-            yStart: y0,
-            xBoundary: x0 + cellW,
-            yBoundary: y0 + cellH,
-            horizontalInsideTop: true,
-            verticalInsideLeft: true,
-            cellW: cellW,
-            cellH: cellH,
-            thickness: thickness,
-            rgba: rgba);
-
-        // Top-right.
-        DrawCorner(canvas,
-            xStart: x1 - crossW,
-            yStart: y0,
-            xBoundary: x1 - cellW,
-            yBoundary: y0 + cellH,
-            horizontalInsideTop: true,
-            verticalInsideLeft: false,
-            cellW: cellW,
-            cellH: cellH,
-            thickness: thickness,
-            rgba: rgba);
-
-        // Bottom-left.
-        DrawCorner(canvas,
-            xStart: x0,
-            yStart: y1 - crossH,
-            xBoundary: x0 + cellW,
-            yBoundary: y1 - cellH,
-            horizontalInsideTop: false,
-            verticalInsideLeft: true,
-            cellW: cellW,
-            cellH: cellH,
-            thickness: thickness,
-            rgba: rgba);
-
-        // Bottom-right.
-        DrawCorner(canvas,
-            xStart: x1 - crossW,
-            yStart: y1 - crossH,
-            xBoundary: x1 - cellW,
-            yBoundary: y1 - cellH,
-            horizontalInsideTop: false,
-            verticalInsideLeft: false,
-            cellW: cellW,
-            cellH: cellH,
-            thickness: thickness,
-            rgba: rgba);
-    }
-
-    private static void DrawCorner(
-        RenderCanvas canvas,
-        int xStart,
-        int yStart,
-        int xBoundary,
-        int yBoundary,
-        bool horizontalInsideTop,
-        bool verticalInsideLeft,
-        int cellW,
-        int cellH,
-        int thickness,
-        int rgba)
-    {
-        var crossW = cellW * 2;
-        var crossH = cellH * 2;
-
-        var hX = xStart;
-        var hY = horizontalInsideTop ? (yBoundary - thickness) : yBoundary;
-        var hW = crossW;
-        var hH = thickness;
-
-        var vX = verticalInsideLeft ? (xBoundary - thickness) : xBoundary;
-        var vY = yStart;
-        var vW = thickness;
-        var vH = crossH;
-
-        if (hW > 0 && hH > 0)
+        var topH = Math.Max(0, innerRect.Y - outerRect.Y);
+        if (topH > 0)
         {
-            canvas.FillRect(new RectPx(hX, hY, hW, hH), rgba);
+            canvas.FillRect(new RectPx(outerRect.X, outerRect.Y, outerRect.Width, topH), rgba);
         }
 
-        if (vW > 0 && vH > 0)
+        var outerBottom = outerRect.Y + outerRect.Height;
+        var innerBottom = innerRect.Y + innerRect.Height;
+        var bottomH = Math.Max(0, outerBottom - innerBottom);
+        if (bottomH > 0)
         {
-            canvas.FillRect(new RectPx(vX, vY, vW, vH), rgba);
+            canvas.FillRect(new RectPx(outerRect.X, innerBottom, outerRect.Width, bottomH), rgba);
+        }
+
+        var leftW = Math.Max(0, innerRect.X - outerRect.X);
+        if (leftW > 0 && innerRect.Height > 0)
+        {
+            canvas.FillRect(new RectPx(outerRect.X, innerRect.Y, leftW, innerRect.Height), rgba);
+        }
+
+        var outerRight = outerRect.X + outerRect.Width;
+        var innerRight = innerRect.X + innerRect.Width;
+        var rightW = Math.Max(0, outerRight - innerRight);
+        if (rightW > 0 && innerRect.Height > 0)
+        {
+            canvas.FillRect(new RectPx(innerRight, innerRect.Y, rightW, innerRect.Height), rgba);
         }
     }
 
