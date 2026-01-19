@@ -71,6 +71,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private BlockId? _capturedInlineViewportBlockId;
     private BlockId? _focusedInlineViewportBlockId;
     private Scene3DNavKeys _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
+    private int _suppressNextTextInputTickIndex;
 
     private LayoutFrame? _lastLayout;
     private RenderFrame? _lastFrame;
@@ -417,6 +418,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         var overlayFrame = _scrollbarController.BuildOverlayFrame(
             new PxRect(0, 0, framebufferWidth, framebufferHeight),
             _document.Settings.DefaultTextStyle.ForegroundRgba);
+        AppendFocusDimOverlayIfNeeded(ref overlayFrame, framebufferWidth, framebufferHeight);
 
         var setVSync = _resizeCoordinator.ConsumeVSyncRequest();
         var requestExit = _pendingExit;
@@ -633,6 +635,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
             if (events[i] is PendingEvent.Text textInput && !char.IsControl(textInput.Ch))
             {
+                if (_suppressNextTextInputTickIndex == _tickIndex)
+                {
+                    _suppressNextTextInputTickIndex = 0;
+                    continue;
+                }
+
                 if (_focusedInlineViewportBlockId is not null)
                 {
                     continue;
@@ -641,8 +649,15 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
             if (events[i] is PendingEvent.Key key && key.KeyCode != HostKey.Unknown)
             {
-                if (key.IsDown && key.KeyCode == HostKey.Escape && _focusedInlineViewportBlockId is not null)
+                if (key.IsDown &&
+                    (key.KeyCode == HostKey.Escape || key.KeyCode == HostKey.Q) &&
+                    _focusedInlineViewportBlockId is not null)
                 {
+                    if (key.KeyCode == HostKey.Q)
+                    {
+                        _suppressNextTextInputTickIndex = _tickIndex;
+                    }
+
                     SetFocusedInlineViewport(null);
                     _pendingContentRebuild = true;
                 }
@@ -709,6 +724,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 if (TryHandleInlineViewportPointer(mouseEvent))
                 {
                     _pendingContentRebuild = true;
+                    continue;
+                }
+
+                if (_focusedInlineViewportBlockId is not null && mouseEvent.Kind == HostMouseEventKind.Wheel)
+                {
                     continue;
                 }
 
@@ -1063,10 +1083,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             e.Y >= hitViewportRectPx.Y &&
             e.X < hitViewportRectPx.X + hitViewportRectPx.Width &&
             e.Y < hitViewportRectPx.Y + hitViewportRectPx.Height;
+
         if (e.Kind == HostMouseEventKind.Wheel)
         {
-            if (!isInsideContentRect ||
-                _focusedInlineViewportBlockId != hitViewport.BlockId)
+            if (_focusedInlineViewportBlockId != hitViewport.BlockId)
             {
                 return false;
             }
@@ -1074,20 +1094,22 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             return DispatchInlineViewportPointer(hitBlock, hitViewportRectPx, e);
         }
 
-        var hitConsumed = isInsideContentRect && DispatchInlineViewportPointer(hitBlock, hitViewportRectPx, e);
+        var allowOutsideContentRect = hitBlock is not IScene3DViewBlock;
+        var shouldDispatch = isInsideContentRect || allowOutsideContentRect;
+        var hitConsumed = shouldDispatch && DispatchInlineViewportPointer(hitBlock, hitViewportRectPx, e);
 
         if (e.Kind == HostMouseEventKind.Down)
         {
-            if (isInsideContentRect)
+            if (hitBlock is IScene3DViewBlock)
             {
-                if (hitBlock is IScene3DViewBlock)
+                if (isInsideContentRect)
                 {
                     _capturedInlineViewportBlockId = _inlineScene3DPointer.CapturedBlockId;
                 }
-                else if (hitBlock is IBlockPointerCaptureState captureState && captureState.HasPointerCapture)
-                {
-                    _capturedInlineViewportBlockId = hitViewport.BlockId;
-                }
+            }
+            else if (hitBlock is IBlockPointerCaptureState captureState && captureState.HasPointerCapture)
+            {
+                _capturedInlineViewportBlockId = hitViewport.BlockId;
             }
 
             UpdateInlineViewportCapture(hitBlock, hitViewport.BlockId, e);
@@ -1980,6 +2002,103 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
 
         return Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
+    }
+
+    private void AppendFocusDimOverlayIfNeeded(ref RenderFrame? overlayFrame, int framebufferWidth, int framebufferHeight)
+    {
+        const int focusDimOverlayRgba = unchecked((int)0x000000CC); // 80% opacity black
+
+        if (_focusedInlineViewportBlockId is not { } focusedViewportBlockId ||
+            _lastLayout is null)
+        {
+            return;
+        }
+
+        var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
+        var scrollYPx = scrollOffsetRows * _font.Metrics.CellHeightPx;
+        if (!TryGetFocusedViewportOuterRectPx(_lastLayout, focusedViewportBlockId, scrollYPx, out var focusRectPx))
+        {
+            return;
+        }
+
+        overlayFrame ??= new RenderFrame();
+        AppendDimOverlay(overlayFrame, new PxRect(0, 0, framebufferWidth, framebufferHeight), focusRectPx, focusDimOverlayRgba);
+    }
+
+    private static bool TryGetFocusedViewportOuterRectPx(
+        LayoutFrame layout,
+        BlockId focusedViewportBlockId,
+        int scrollYPx,
+        out PxRect focusRectPx)
+    {
+        var viewports = layout.Scene3DViewports;
+        for (var i = 0; i < viewports.Count; i++)
+        {
+            var viewport = viewports[i];
+            if (viewport.BlockId != focusedViewportBlockId)
+            {
+                continue;
+            }
+
+            var rect = viewport.ViewportRectPx;
+            focusRectPx = new PxRect(rect.X, rect.Y - scrollYPx, rect.Width, rect.Height);
+            return true;
+        }
+
+        focusRectPx = default;
+        return false;
+    }
+
+    private static void AppendDimOverlay(RenderFrame frame, PxRect screenRectPx, PxRect focusRectPx, int rgba)
+    {
+        var screenW = Math.Max(0, screenRectPx.Width);
+        var screenH = Math.Max(0, screenRectPx.Height);
+        if (screenW <= 0 || screenH <= 0)
+        {
+            return;
+        }
+
+        var screenX0 = screenRectPx.X;
+        var screenY0 = screenRectPx.Y;
+        var screenX1 = screenX0 + screenW;
+        var screenY1 = screenY0 + screenH;
+
+        var focusX0 = Math.Clamp(focusRectPx.X, screenX0, screenX1);
+        var focusY0 = Math.Clamp(focusRectPx.Y, screenY0, screenY1);
+        var focusX1 = Math.Clamp(focusRectPx.X + focusRectPx.Width, screenX0, screenX1);
+        var focusY1 = Math.Clamp(focusRectPx.Y + focusRectPx.Height, screenY0, screenY1);
+
+        if (focusX1 <= focusX0 || focusY1 <= focusY0)
+        {
+            frame.Add(new DrawQuad(screenX0, screenY0, screenW, screenH, rgba));
+            return;
+        }
+
+        // Top band.
+        if (focusY0 > screenY0)
+        {
+            frame.Add(new DrawQuad(screenX0, screenY0, screenW, focusY0 - screenY0, rgba));
+        }
+
+        // Bottom band.
+        if (focusY1 < screenY1)
+        {
+            frame.Add(new DrawQuad(screenX0, focusY1, screenW, screenY1 - focusY1, rgba));
+        }
+
+        var focusH = focusY1 - focusY0;
+
+        // Left band.
+        if (focusX0 > screenX0)
+        {
+            frame.Add(new DrawQuad(screenX0, focusY0, focusX0 - screenX0, focusH, rgba));
+        }
+
+        // Right band.
+        if (focusX1 < screenX1)
+        {
+            frame.Add(new DrawQuad(focusX1, focusY0, screenX1 - focusX1, focusH, rgba));
+        }
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

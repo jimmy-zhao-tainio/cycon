@@ -37,6 +37,9 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
     private int _cellH = 16;
     private int _reservedScrollbarPx;
     private PxRect _lastViewportRectPx;
+    private int _lastPointerX;
+    private int _lastPointerY;
+    private bool _hasLastPointer;
 
     public InspectTextBlock(BlockId id, string path)
     {
@@ -81,6 +84,10 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
 
     public bool HandlePointer(in HostMouseEvent e, in PxRect viewportRectPx)
     {
+        _lastPointerX = e.X;
+        _lastPointerY = e.Y;
+        _hasLastPointer = true;
+
         _lastViewportRectPx = viewportRectPx;
         _reservedScrollbarPx = UpdateViewportForText(viewportRectPx);
 
@@ -160,9 +167,30 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
                 return true;
             }
 
+            var dragScrollChanged = false;
+            if (_cellH > 0)
+            {
+                if (e.Y < viewportRectPx.Y)
+                {
+                    var deltaRows = -Math.Max(1, (viewportRectPx.Y - e.Y) / _cellH);
+                    dragScrollChanged = _scrollModel.ScrollByRows(deltaRows, viewportRectPx);
+                }
+                else if (e.Y >= viewportRectPx.Y + viewportRectPx.Height)
+                {
+                    var bottomY = viewportRectPx.Y + viewportRectPx.Height - 1;
+                    var deltaRows = Math.Max(1, (e.Y - bottomY) / _cellH);
+                    dragScrollChanged = _scrollModel.ScrollByRows(deltaRows, viewportRectPx);
+                }
+            }
+
+            if (dragScrollChanged)
+            {
+                _scrollbarUi.MsSinceInteraction = 0;
+            }
+
             if (!TryHitTestTextPos(e.X, e.Y, viewportRectPx, out var caret))
             {
-                return false;
+                return dragScrollChanged;
             }
 
             if (_selection is { } range)
@@ -170,7 +198,7 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
                 var updated = new TextRange(range.Anchor, caret);
                 if (updated == range)
                 {
-                    return false;
+                    return dragScrollChanged;
                 }
 
                 _selection = updated;
@@ -205,6 +233,10 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
 
     public bool HandleWheel(in HostMouseEvent e, in PxRect viewportRectPx)
     {
+        _lastPointerX = e.X;
+        _lastPointerY = e.Y;
+        _hasLastPointer = true;
+
         _lastViewportRectPx = viewportRectPx;
         _reservedScrollbarPx = UpdateViewportForText(viewportRectPx);
 
@@ -212,6 +244,21 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
         if (consumed || scrollChanged)
         {
             _scrollbarUi.MsSinceInteraction = 0;
+        }
+
+        if ((consumed || scrollChanged) &&
+            _isSelectingText &&
+            _selection is { } range &&
+            TryHitTestTextPos(e.X, e.Y, viewportRectPx, out var caret))
+        {
+            var updated = new TextRange(range.Anchor, caret);
+            if (updated != range)
+            {
+                _selection = updated;
+                _selectionCaret = caret;
+            }
+
+            return true;
         }
 
         return consumed || scrollChanged;
@@ -283,6 +330,10 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
 
         var fg = ctx.Theme.ForegroundRgba;
         var hasSelection = TryGetNormalizedSelection(out var selStart, out var selEnd);
+        var caretPos = default(TextPos);
+        var shouldDrawCaret = _hasMouseFocus && !hasSelection && TryGetCaretForNavigation(out caretPos);
+        var caretRect = default(RectPx);
+        var hasCaretRect = false;
         var lineIndex = _scrollModel.TopLineIndex;
         var subRow = _scrollModel.TopLineSubRow;
         var screenRow = 0;
@@ -345,6 +396,46 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
                             canvas.DrawText(line, spanStart + beforeLen + selectedLen, afterLen, xPx + ((beforeLen + selectedLen) * cellW), yPx, fg);
                         }
                     }
+
+                    if (shouldDrawCaret && !hasCaretRect && lineIndex == caretPos.LineIndex)
+                    {
+                        if (caretPos.CharIndex >= spanStart && caretPos.CharIndex <= spanEnd)
+                        {
+                            var caretW = Math.Max(1, Math.Min(2, cellW / 4));
+                            var col = Math.Clamp(caretPos.CharIndex - spanStart, 0, drawLen);
+                            var caretX = xPx + (col * cellW);
+                            var maxCaretX = xPx + (cols * cellW) - caretW;
+                            if (caretX > maxCaretX)
+                            {
+                                caretX = maxCaretX;
+                            }
+
+                            if (caretX >= viewport.X && caretX < viewport.X + viewport.Width)
+                            {
+                                caretRect = new RectPx(caretX, yPx, caretW, cellH);
+                                hasCaretRect = caretRect.Width > 0 && caretRect.Height > 0;
+                            }
+                        }
+                    }
+                }
+                else if (shouldDrawCaret && !hasCaretRect && lineIndex == caretPos.LineIndex)
+                {
+                    if (caretPos.CharIndex == span.Start)
+                    {
+                        var caretW = Math.Max(1, Math.Min(2, cellW / 4));
+                        var caretX = xPx;
+                        var maxCaretX = xPx + (cols * cellW) - caretW;
+                        if (caretX > maxCaretX)
+                        {
+                            caretX = maxCaretX;
+                        }
+
+                        if (caretX >= viewport.X && caretX < viewport.X + viewport.Width)
+                        {
+                            caretRect = new RectPx(caretX, yPx, caretW, cellH);
+                            hasCaretRect = caretRect.Width > 0 && caretRect.Height > 0;
+                        }
+                    }
                 }
 
                 screenRow++;
@@ -354,6 +445,10 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
             subRow = 0;
         }
 
+        if (hasCaretRect)
+        {
+            canvas.FillRect(caretRect, fg);
+        }
     }
 
     public void RenderOverlay(IRenderCanvas canvas, RectPx outerViewportRectPx, in BlockRenderContext ctx)
@@ -382,12 +477,98 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
             return false;
         }
 
-        if (e.Key is not (HostKey.Left or HostKey.Right or HostKey.Up or HostKey.Down))
+        if (e.Key is not (HostKey.Left or HostKey.Right or HostKey.Up or HostKey.Down or HostKey.PageUp or HostKey.PageDown))
         {
             return false;
         }
 
         var shift = (e.Mods & HostKeyModifiers.Shift) != 0;
+
+        if (e.Key is HostKey.PageUp or HostKey.PageDown)
+        {
+            if (_lastViewportRectPx.Width <= 0 || _lastViewportRectPx.Height <= 0)
+            {
+                return false;
+            }
+
+            var pageRows = Math.Max(1, _scrollModel.GetViewportRowsForRender());
+            var delta = Math.Max(1, pageRows - 1);
+            if (e.Key == HostKey.PageUp)
+            {
+                delta = -delta;
+            }
+
+            if (_isSelectingText)
+            {
+                var pageScrollChanged = _scrollModel.ScrollByRows(delta, _lastViewportRectPx);
+                if (pageScrollChanged)
+                {
+                    _scrollbarUi.MsSinceInteraction = 0;
+
+                    if (_selection is { } range && _hasLastPointer &&
+                        TryHitTestTextPos(_lastPointerX, _lastPointerY, _lastViewportRectPx, out var pointerCaret))
+                    {
+                        var updated = new TextRange(range.Anchor, pointerCaret);
+                        if (updated != range)
+                        {
+                            _selection = updated;
+                            _selectionCaret = pointerCaret;
+                        }
+                    }
+                }
+
+                return pageScrollChanged;
+            }
+
+            if (!TryGetCaretForNavigation(out var pageCaret))
+            {
+                return false;
+            }
+
+            var didAnything = false;
+            var directionKey = delta < 0 ? HostKey.Up : HostKey.Down;
+
+            if (!shift && _selection is { } pageSelection && pageSelection.Anchor != pageSelection.Caret)
+            {
+                var (start, end) = NormalizeRange(pageSelection);
+                var collapsed = directionKey == HostKey.Up ? start : end;
+                _selection = null;
+                _selectionCaret = collapsed;
+                pageCaret = collapsed;
+                didAnything = true;
+            }
+
+            var steps = Math.Abs(delta);
+            var pageMovedCaret = pageCaret;
+            for (var i = 0; i < steps; i++)
+            {
+                if (!TryMoveCaret(pageMovedCaret, directionKey, out var next))
+                {
+                    break;
+                }
+
+                pageMovedCaret = next;
+            }
+
+            if (pageMovedCaret == pageCaret)
+            {
+                return didAnything;
+            }
+
+            if (shift)
+            {
+                var anchor = _selection?.Anchor ?? _selectionCaret ?? pageCaret;
+                _selection = new TextRange(anchor, pageMovedCaret);
+            }
+            else
+            {
+                _selection = null;
+            }
+
+            _selectionCaret = pageMovedCaret;
+            EnsureCaretVisible(pageMovedCaret);
+            return true;
+        }
 
         if (!TryGetCaretForNavigation(out var caret))
         {

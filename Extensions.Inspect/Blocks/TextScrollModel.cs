@@ -158,7 +158,20 @@ public sealed class TextScrollModel : IScrollModel
 
         UpdateViewport(viewportRectPx);
         var before = _scrollOffsetRows;
-        ScrollByRows(-wheelDelta * 3, viewportRectPx);
+        ScrollByRowsInternal(-wheelDelta * 3, viewportRectPx);
+        return _scrollOffsetRows != before;
+    }
+
+    public bool ScrollByRows(int deltaRows, PxRect viewportRectPx)
+    {
+        if (deltaRows == 0 || _lines.Count == 0)
+        {
+            return false;
+        }
+
+        UpdateViewport(viewportRectPx);
+        var before = _scrollOffsetRows;
+        ScrollByRowsInternal(deltaRows, viewportRectPx);
         return _scrollOffsetRows != before;
     }
 
@@ -268,7 +281,7 @@ public sealed class TextScrollModel : IScrollModel
         return false;
     }
 
-    private void ScrollByRows(int deltaRows, PxRect viewportRectPx)
+    private void ScrollByRowsInternal(int deltaRows, PxRect viewportRectPx)
     {
         var totalRows = GetEstimatedTotalRows(_wrapCols);
         var maxScrollOffsetRows = Math.Max(0, totalRows - _viewportRows);

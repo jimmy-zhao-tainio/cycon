@@ -14,7 +14,6 @@ internal static class ViewportBlockPass
 {
     private const int PanelBgRgba = unchecked((int)0xEEEEEEFF);
     private const int ViewportChromeBorderRgba = unchecked((int)0x000000FF);
-    private const int FocusedChromeBgRgba = unchecked((int)0x222222FF);
 
     public static void RenderViewportsStartingAtRow(
         RenderCanvas canvas,
@@ -79,23 +78,7 @@ internal static class ViewportBlockPass
 
             if (viewport.Chrome.Enabled)
             {
-                var isFocused = focusedViewportBlockId is { } focusedId && viewport.BlockId == focusedId;
-                if (isFocused)
-                {
-                    if (viewport.Chrome.Style == BlockChromeStyle.PanelBg)
-                    {
-                        canvas.FillRect(outerViewportRect, FocusedChromeBgRgba);
-                    }
-                    else
-                    {
-                        FillChromeArea(canvas, outerViewportRect, innerViewportRect, FocusedChromeBgRgba);
-                    }
-                }
-
-                if (!(isFocused && viewport.Chrome.Style == BlockChromeStyle.PanelBg))
-                {
-                    DrawChrome(canvas, viewport.Chrome, outerViewportRect, ViewportChromeBorderRgba);
-                }
+                DrawChrome(canvas, viewport.Chrome, outerViewportRect, ViewportChromeBorderRgba);
             }
 
             if (innerViewportRect.Width <= 0 || innerViewportRect.Height <= 0)
@@ -175,42 +158,6 @@ internal static class ViewportBlockPass
         var w = Math.Max(0, rect.Width - (inset * 2));
         var h = Math.Max(0, rect.Height - (inset * 2));
         return new RectPx(x, y, w, h);
-    }
-
-    private static void FillChromeArea(RenderCanvas canvas, RectPx outerRect, RectPx innerRect, int rgba)
-    {
-        if (outerRect.Width <= 0 || outerRect.Height <= 0)
-        {
-            return;
-        }
-
-        var topH = Math.Max(0, innerRect.Y - outerRect.Y);
-        if (topH > 0)
-        {
-            canvas.FillRect(new RectPx(outerRect.X, outerRect.Y, outerRect.Width, topH), rgba);
-        }
-
-        var outerBottom = outerRect.Y + outerRect.Height;
-        var innerBottom = innerRect.Y + innerRect.Height;
-        var bottomH = Math.Max(0, outerBottom - innerBottom);
-        if (bottomH > 0)
-        {
-            canvas.FillRect(new RectPx(outerRect.X, innerBottom, outerRect.Width, bottomH), rgba);
-        }
-
-        var leftW = Math.Max(0, innerRect.X - outerRect.X);
-        if (leftW > 0 && innerRect.Height > 0)
-        {
-            canvas.FillRect(new RectPx(outerRect.X, innerRect.Y, leftW, innerRect.Height), rgba);
-        }
-
-        var outerRight = outerRect.X + outerRect.Width;
-        var innerRight = innerRect.X + innerRect.Width;
-        var rightW = Math.Max(0, outerRight - innerRight);
-        if (rightW > 0 && innerRect.Height > 0)
-        {
-            canvas.FillRect(new RectPx(innerRight, innerRect.Y, rightW, innerRect.Height), rgba);
-        }
     }
 
     private static Scene3DRenderSettings MapScene3D(Scene3DSettings s)
