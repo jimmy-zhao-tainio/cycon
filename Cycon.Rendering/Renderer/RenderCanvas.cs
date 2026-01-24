@@ -44,6 +44,9 @@ internal sealed class RenderCanvas : IRenderCanvas
     public void ReleaseMesh3D(int meshId) =>
         _frame.Add(new ReleaseMesh3D(meshId));
 
+    public void ReleaseImage2D(int imageId) =>
+        _frame.Add(new ReleaseImage2D(imageId));
+
     public void DrawMesh3D(
         int meshId,
         float[] vertexData,

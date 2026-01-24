@@ -36,6 +36,8 @@ public sealed record DrawImage2D(
     RectF DestRectPx,
     bool UseNearest) : DrawCommand;
 
+public sealed record ReleaseImage2D(int ImageId) : DrawCommand;
+
 // Debug/profiling metadata for renderers/executors. Not intended for UI logic.
 public sealed record SetDebugTag(int Tag) : DrawCommand;
 

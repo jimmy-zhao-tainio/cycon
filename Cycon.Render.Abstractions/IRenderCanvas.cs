@@ -20,6 +20,8 @@ public interface IRenderCanvas
 
     void ReleaseMesh3D(int meshId);
 
+    void ReleaseImage2D(int imageId);
+
     /// <summary>
      /// Draw a previously uploaded mesh into the current clip/scissor using the given viewport rect and transforms.
      /// </summary>

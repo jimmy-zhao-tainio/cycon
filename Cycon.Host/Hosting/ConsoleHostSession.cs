@@ -25,6 +25,7 @@ using Cycon.Host.Input;
 using Cycon.Host.Scrolling;
 using Cycon.Host.Rendering;
 using Cycon.Host.Services;
+using Cycon.Host.Thumbnails;
 using Cycon.Layout;
 using Cycon.Layout.Metrics;
 using Cycon.Layout.Scrolling;
@@ -822,6 +823,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private void EnsureLayoutExists(int framebufferWidth, int framebufferHeight)
     {
+        if (ShellThumbnailService.Instance.ConsumeHasUpdates())
+        {
+            _pendingContentRebuild = true;
+        }
+
         if (_lastLayout is not null && _lastFrame is not null && !_pendingContentRebuild)
         {
             return;
@@ -1174,6 +1180,21 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             !TryGetInlineViewportBlock(hitViewport, out var hitBlock))
         {
             return false;
+        }
+
+        if (e.Kind == HostMouseEventKind.Down &&
+            (e.Buttons & HostMouseButtons.Left) != 0 &&
+            hitBlock is IBlockCommandInsertionProvider insertionProvider &&
+            insertionProvider.TryGetInsertionCommand(e.X, e.Y, hitViewportRectPx, out var commandText) &&
+            TryGetLastEditablePromptId(out var promptId))
+        {
+            SetFocusedInlineViewport(null);
+            ApplyActions(new HostAction[]
+            {
+                new HostAction.SetPromptInput(promptId, commandText, commandText.Length),
+                new HostAction.RequestRebuild()
+            });
+            return true;
         }
 
         var isInsideContentRect =
@@ -2182,6 +2203,19 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         prompt = null!;
         return false;
+    }
+
+    private bool TryGetLastEditablePromptId(out BlockId promptId)
+    {
+        var prompt = FindLastPrompt(_document.Transcript);
+        if (prompt is null || prompt.Owner is not null)
+        {
+            promptId = default;
+            return false;
+        }
+
+        promptId = prompt.Id;
+        return true;
     }
 
     private PromptBlock? TryGetPromptNullable(BlockId id)

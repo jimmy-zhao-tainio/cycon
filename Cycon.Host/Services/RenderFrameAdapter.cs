@@ -66,6 +66,9 @@ public static class RenderFrameAdapter
                         image.DestRectPx,
                         image.UseNearest));
                     break;
+                case RenderingCommands.ReleaseImage2D releaseImage:
+                    adapted.Add(new BackendRender.ReleaseImage2D(releaseImage.ImageId));
+                    break;
                 case RenderingCommands.SetDebugTag tag:
                     adapted.Add(new BackendRender.SetDebugTag(tag.Tag));
                     break;

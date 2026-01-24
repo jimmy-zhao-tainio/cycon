@@ -362,6 +362,11 @@ public sealed class RenderFrameExecutorGl : IDisposable
                     DrawImage2D(image);
                     currentKind = null;
                     break;
+                case ReleaseImage2D releaseImage:
+                    Flush();
+                    ReleaseImage2D(releaseImage.ImageId);
+                    currentKind = null;
+                    break;
             }
         }
 
