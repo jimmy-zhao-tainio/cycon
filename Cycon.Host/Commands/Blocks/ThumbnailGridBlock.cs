@@ -12,16 +12,11 @@ namespace Cycon.Host.Commands.Blocks;
 
 internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockChromeProvider, IMouseFocusableViewportBlock, IBlockCommandInsertionProvider
 {
-    private const int PromptReservedRows = 2;
-    private const int DefaultMaxInitialRows = 24;
-
     private readonly IReadOnlyList<FileSystemEntry> _entries;
     private readonly int _sizePx;
     private readonly int _ownerId;
     private int _generation = 1;
-    private int _scrollRow;
     private int _maxScrollRow;
-    private int _initialHeightRows = -1;
     private bool _hasMouseFocus;
     private int _lastCellW = 8;
     private int _lastCellH = 16;
@@ -29,6 +24,10 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
     private int _lastTileH;
     private int _lastCols = 1;
     private int _lastVisibleRows = 1;
+    private int _lastBandStartRow = -1;
+    private int _lastBandEndRow = -1;
+    private int _lastBandStartCol = -1;
+    private int _lastBandEndCol = -1;
 
     public ThumbnailGridBlock(BlockId id, string directoryPath, IReadOnlyList<FileSystemEntry> entries, int sizePx)
     {
@@ -37,7 +36,10 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         _entries = entries ?? Array.Empty<FileSystemEntry>();
         _sizePx = Math.Clamp(sizePx, 16, 512);
         _ownerId = id.Value;
-        ShellThumbnailService.Instance.SetOwnerGeneration(_ownerId, _generation);
+        if (OperatingSystem.IsWindows())
+        {
+            ShellThumbnailService.Instance.SetOwnerGeneration(_ownerId, _generation);
+        }
     }
 
     public BlockId Id { get; }
@@ -55,16 +57,17 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
     {
         var width = Math.Max(0, ctx.ContentWidthPx);
         var cellH = Math.Max(1, ctx.CellHeightPx);
-        var viewportRows = Math.Max(1, ctx.ViewportRows);
-        var availableRows = Math.Max(1, viewportRows - PromptReservedRows);
+        var cellW = Math.Max(1, ctx.CellWidthPx);
 
-        if (_initialHeightRows < 0)
-        {
-            _initialHeightRows = Math.Min(availableRows, DefaultMaxInitialRows);
-        }
-
-        var heightRows = Math.Min(availableRows, Math.Max(1, _initialHeightRows));
-        return new BlockSize(width, checked(heightRows * cellH));
+        var gap = Math.Max(4, cellW);
+        var tileW = _sizePx + (gap * 2);
+        var baseTileH = _sizePx + cellH + (gap * 2);
+        var tileH = SnapToStep(baseTileH, cellH);
+        var cols = Math.Max(1, width / Math.Max(1, tileW));
+        var totalRows = Math.Max(1, (int)Math.Ceiling(_entries.Count / (double)cols));
+        var heightPxLong = (long)totalRows * tileH;
+        var heightPx = heightPxLong >= int.MaxValue ? int.MaxValue : (int)heightPxLong;
+        return new BlockSize(width, heightPx);
     }
 
     public void Render(IRenderCanvas canvas, in BlockRenderContext ctx)
@@ -82,19 +85,21 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var gap = Math.Max(4, cellW);
 
         var tileW = _sizePx + (gap * 2);
-        var textH = cellH;
-        var tileH = _sizePx + textH + (gap * 2);
+        var baseTileH = _sizePx + cellH + (gap * 2);
+        var tileH = SnapToStep(baseTileH, cellH);
 
         var cols = Math.Max(1, viewport.Width / Math.Max(1, tileW));
         var totalRows = (int)Math.Ceiling(_entries.Count / (double)cols);
         var visibleRows = Math.Max(1, viewport.Height / Math.Max(1, tileH));
         _maxScrollRow = Math.Max(0, totalRows - visibleRows);
-        _scrollRow = Math.Clamp(_scrollRow, 0, _maxScrollRow);
 
         if (_lastCols != 0 && (_lastCols != cols || _lastVisibleRows != visibleRows))
         {
             _generation++;
-            ShellThumbnailService.Instance.SetOwnerGeneration(_ownerId, _generation);
+            if (OperatingSystem.IsWindows())
+            {
+                ShellThumbnailService.Instance.SetOwnerGeneration(_ownerId, _generation);
+            }
         }
 
         _lastCellW = cellW;
@@ -107,13 +112,56 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var bg = ctx.Theme.BackgroundRgba;
         canvas.FillRect(viewport, bg);
 
-        var startRow = _scrollRow;
-        var endRow = Math.Min(totalRows, startRow + visibleRows + 1);
+        var fbW = Math.Max(0, ctx.FramebufferWidthPx);
+        var fbH = Math.Max(0, ctx.FramebufferHeightPx);
+
+        var screenY0 = Math.Max(0, viewport.Y);
+        var screenY1 = fbH > 0 ? Math.Min(fbH, viewport.Y + viewport.Height) : (viewport.Y + viewport.Height);
+        var visibleLocalY0 = Math.Max(0, screenY0 - viewport.Y);
+        var visibleLocalY1 = Math.Max(0, screenY1 - viewport.Y);
+
+        var startRow = Math.Max(0, visibleLocalY0 / Math.Max(1, tileH));
+        var endRow = Math.Min(totalRows, (visibleLocalY1 + tileH - 1) / Math.Max(1, tileH));
+        if (endRow <= startRow)
+        {
+            endRow = Math.Min(totalRows, startRow + 1);
+        }
+
+        var screenX0 = Math.Max(0, viewport.X);
+        var screenX1 = fbW > 0 ? Math.Min(fbW, viewport.X + viewport.Width) : (viewport.X + viewport.Width);
+        var visibleLocalX0 = Math.Max(0, screenX0 - viewport.X);
+        var visibleLocalX1 = Math.Max(0, screenX1 - viewport.X);
+        var startCol = Math.Max(0, visibleLocalX0 / Math.Max(1, tileW));
+        var endCol = Math.Min(cols, (visibleLocalX1 + tileW - 1) / Math.Max(1, tileW));
+        if (endCol <= startCol)
+        {
+            endCol = Math.Min(cols, startCol + 1);
+        }
+
+        // Cancel pending thumbnail work when the visible band changes (e.g. transcript scroll).
+        if (_lastBandStartRow >= 0 &&
+            (_lastBandStartRow != startRow ||
+             _lastBandEndRow != endRow ||
+             _lastBandStartCol != startCol ||
+             _lastBandEndCol != endCol))
+        {
+            _generation++;
+            if (OperatingSystem.IsWindows())
+            {
+                ShellThumbnailService.Instance.SetOwnerGeneration(_ownerId, _generation);
+            }
+        }
+
+        _lastBandStartRow = startRow;
+        _lastBandEndRow = endRow;
+        _lastBandStartCol = startCol;
+        _lastBandEndCol = endCol;
 
         for (var row = startRow; row < endRow; row++)
         {
-            var y = viewport.Y + ((row - startRow) * tileH);
-            for (var col = 0; col < cols; col++)
+            var y = viewport.Y + (row * tileH);
+
+            for (var col = startCol; col < endCol; col++)
             {
                 var index = (row * cols) + col;
                 if ((uint)index >= (uint)_entries.Count)
@@ -130,38 +178,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
 
     public bool HandleWheel(in HostMouseEvent e, in PxRect viewportRectPx)
     {
-        if (e.Kind != HostMouseEventKind.Wheel || e.WheelDelta == 0)
-        {
-            return false;
-        }
-
-        if (!viewportRectPx.Contains(e.X, e.Y))
-        {
-            return false;
-        }
-
-        var delta = e.WheelDelta;
-        if (Math.Abs(delta) >= 10)
-        {
-            delta /= 120;
-        }
-
-        delta = Math.Clamp(delta, -3, 3);
-        if (delta == 0)
-        {
-            delta = e.WheelDelta > 0 ? 1 : -1;
-        }
-
-        var next = _scrollRow - delta;
-        if (next == _scrollRow)
-        {
-            return true;
-        }
-
-        _scrollRow = Math.Clamp(next, 0, _maxScrollRow);
-        _generation++;
-        ShellThumbnailService.Instance.SetOwnerGeneration(_ownerId, _generation);
-        return true;
+        return false;
     }
 
     public bool HandlePointer(in HostMouseEvent e, in PxRect viewportRectPx)
@@ -183,7 +200,6 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var tileW = _lastTileW > 0 ? _lastTileW : (_sizePx + (Math.Max(4, cellW) * 2));
         var tileH = _lastTileH > 0 ? _lastTileH : (_sizePx + cellH + (Math.Max(4, cellW) * 2));
         var cols = _lastCols > 0 ? _lastCols : Math.Max(1, viewportRectPx.Width / Math.Max(1, tileW));
-        var scrollRow = Math.Clamp(_scrollRow, 0, _maxScrollRow);
 
         var localX = x - viewportRectPx.X;
         var localY = y - viewportRectPx.Y;
@@ -194,7 +210,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
             return false;
         }
 
-        var index = ((scrollRow + row) * cols) + col;
+        var index = (row * cols) + col;
         if ((uint)index >= (uint)_entries.Count)
         {
             return false;
@@ -234,6 +250,12 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
             _sizePx,
             _sizePx);
 
+        if (!OperatingSystem.IsWindows())
+        {
+            DrawFallbackIcon(canvas, thumbRectF, entry.IsDirectory);
+            goto DrawText;
+        }
+
         var svc = ShellThumbnailService.Instance;
         if (!svc.TryGetCached(entry.FullPath, _sizePx, out var image))
         {
@@ -243,11 +265,19 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
 
         canvas.DrawImage2D(image.ImageId, image.RgbaPixels, image.Width, image.Height, thumbRectF, image.UseNearest);
 
+    DrawText:
         var maxChars = Math.Max(1, (tileW - (gap * 2)) / Math.Max(1, cellW));
         var name = entry.Name ?? string.Empty;
         if (name.Length > maxChars)
         {
-            name = name.Substring(0, Math.Max(1, maxChars - 1)) + "…";
+            if (maxChars <= 3)
+            {
+                name = name.Substring(0, maxChars);
+            }
+            else
+            {
+                name = name.Substring(0, maxChars - 3) + "...";
+            }
         }
 
         var textX = x + gap;
@@ -257,6 +287,11 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
 
     private static void DrainThumbnailReleases(IRenderCanvas canvas)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         var svc = ShellThumbnailService.Instance;
         var drained = 0;
         while (drained < 8 && svc.TryDequeueRelease(out var imageId))
@@ -264,5 +299,26 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
             canvas.ReleaseImage2D(imageId);
             drained++;
         }
+    }
+
+    private static void DrawFallbackIcon(IRenderCanvas canvas, in RectF rect, bool isDirectory)
+    {
+        var x = (int)Math.Round(rect.X);
+        var y = (int)Math.Round(rect.Y);
+        var w = Math.Max(1, (int)Math.Round(rect.Width));
+        var h = Math.Max(1, (int)Math.Round(rect.Height));
+
+        var bg = isDirectory ? unchecked((int)0xFF3C2D00) : unchecked((int)0xFF303030);
+        var fg = isDirectory ? unchecked((int)0xFFB48C3C) : unchecked((int)0xFFAAAAAA);
+
+        canvas.FillRect(new RectPx(x, y, w, h), bg);
+        var inset = Math.Max(1, Math.Min(w, h) / 8);
+        canvas.FillRect(new RectPx(x + inset, y + inset, Math.Max(1, w - (inset * 2)), Math.Max(1, h - (inset * 2))), fg);
+    }
+
+    private static int SnapToStep(int value, int step)
+    {
+        step = Math.Max(1, step);
+        return Math.Max(step, (int)Math.Ceiling(value / (double)step) * step);
     }
 }

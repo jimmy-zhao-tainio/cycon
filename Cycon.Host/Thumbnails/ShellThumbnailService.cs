@@ -3,10 +3,12 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Threading;
 
 namespace Cycon.Host.Thumbnails;
 
+[SupportedOSPlatform("windows")]
 internal sealed class ShellThumbnailService : IThumbnailService
 {
     public static ShellThumbnailService Instance { get; } = new();

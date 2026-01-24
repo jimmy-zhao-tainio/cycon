@@ -823,7 +823,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private void EnsureLayoutExists(int framebufferWidth, int framebufferHeight)
     {
-        if (ShellThumbnailService.Instance.ConsumeHasUpdates())
+        if (OperatingSystem.IsWindows() && ShellThumbnailService.Instance.ConsumeHasUpdates())
         {
             _pendingContentRebuild = true;
         }

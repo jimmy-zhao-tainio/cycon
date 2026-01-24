@@ -5,5 +5,6 @@ public readonly record struct BlockRenderContext(
     double TimeSeconds,
     RenderTheme Theme,
     TextMetrics TextMetrics,
-    Scene3DRenderSettings Scene3D);
-
+    Scene3DRenderSettings Scene3D,
+    int FramebufferWidthPx,
+    int FramebufferHeightPx);

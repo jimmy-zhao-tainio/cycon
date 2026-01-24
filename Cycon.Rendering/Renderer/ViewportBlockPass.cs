@@ -87,7 +87,14 @@ internal static class ViewportBlockPass
             }
 
             canvas.SetDebugTag(viewport.BlockId.Value);
-            var blockContext = new BlockRenderContext(innerViewportRect, timeSeconds, theme, textMetrics, scene3D);
+            var blockContext = new BlockRenderContext(
+                innerViewportRect,
+                timeSeconds,
+                theme,
+                textMetrics,
+                scene3D,
+                layout.Grid.FramebufferWidthPx,
+                layout.Grid.FramebufferHeightPx);
             canvas.PushClipRect(innerViewportRect);
             renderBlock.Render(canvas, blockContext);
 

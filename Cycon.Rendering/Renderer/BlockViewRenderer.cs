@@ -50,7 +50,14 @@ public static class BlockViewRenderer
 
         innerRect = SnapToCellGrid(innerRect, ctx.TextMetrics.CellWidthPx, ctx.TextMetrics.CellHeightPx);
 
-        var innerCtx = new BlockRenderContext(innerRect, ctx.TimeSeconds, ctx.Theme, ctx.TextMetrics, ctx.Scene3D);
+        var innerCtx = new BlockRenderContext(
+            innerRect,
+            ctx.TimeSeconds,
+            ctx.Theme,
+            ctx.TextMetrics,
+            ctx.Scene3D,
+            framebufferWidth,
+            framebufferHeight);
         canvas.PushClipRect(innerRect);
         block.Render(canvas, innerCtx);
         canvas.PopClipRect();
@@ -113,7 +120,14 @@ public static class BlockViewRenderer
 
         InspectChromeRenderer.Draw(canvas, layout, inspectChromeSpec, ref inspectChromeData, ctx.Theme, ctx.TextMetrics);
 
-        var contentCtx = new BlockRenderContext(layout.ContentRect, ctx.TimeSeconds, ctx.Theme, ctx.TextMetrics, ctx.Scene3D);
+        var contentCtx = new BlockRenderContext(
+            layout.ContentRect,
+            ctx.TimeSeconds,
+            ctx.Theme,
+            ctx.TextMetrics,
+            ctx.Scene3D,
+            framebufferWidth,
+            framebufferHeight);
         canvas.PushClipRect(layout.ContentRect);
         block.Render(canvas, contentCtx);
         canvas.PopClipRect();

@@ -140,7 +140,14 @@ internal sealed class InspectModeController
         // InspectMode is fullscreen: blocks own their own padding.
         var contentRect = new RectPx(0, 0, Math.Max(0, framebufferWidth), Math.Max(0, framebufferHeight));
 
-        var ctx = new BlockRenderContext(contentRect, timeSeconds, theme, textMetrics, scene3D);
+        var ctx = new BlockRenderContext(
+            contentRect,
+            timeSeconds,
+            theme,
+            textMetrics,
+            scene3D,
+            framebufferWidth,
+            framebufferHeight);
         if (_activeInspect.View is not IRenderBlock renderBlock)
         {
             throw new InvalidOperationException("Active inspect view does not implement IRenderBlock.");
