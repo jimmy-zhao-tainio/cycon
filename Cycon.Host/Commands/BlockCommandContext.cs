@@ -15,9 +15,13 @@ internal interface IBlockCommandSession
     void OpenInspect(InspectKind kind, string path, string title, IBlock viewBlock, string receiptLine, BlockId commandEchoId);
     void ClearTranscript();
     void RequestExit();
+    string CurrentDirectory { get; }
+    string ResolvePath(string path);
+    bool TrySetCurrentDirectory(string directory, out string error);
+    IFileSystem FileSystem { get; }
 }
 
-internal sealed class BlockCommandContext : IBlockCommandContext
+internal sealed class BlockCommandContext : IBlockCommandContext, IFileCommandContext
 {
     private readonly IBlockCommandSession _session;
     private readonly BlockId _commandEchoId;
@@ -90,4 +94,12 @@ internal sealed class BlockCommandContext : IBlockCommandContext
     {
         _session.RequestExit();
     }
+
+    public string CurrentDirectory => _session.CurrentDirectory;
+
+    public string ResolvePath(string path) => _session.ResolvePath(path);
+
+    public bool TrySetCurrentDirectory(string directory, out string error) => _session.TrySetCurrentDirectory(directory, out error);
+
+    public IFileSystem FileSystem => _session.FileSystem;
 }

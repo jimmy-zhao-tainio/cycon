@@ -13,6 +13,8 @@ public abstract record HostAction
 
     public sealed record InsertText(BlockId PromptId, string Text) : HostAction;
 
+    public sealed record SetPromptInput(BlockId PromptId, string Input, int CaretIndex) : HostAction;
+
     public sealed record Backspace(BlockId PromptId) : HostAction;
 
     public sealed record MoveCaret(BlockId PromptId, int Delta) : HostAction;

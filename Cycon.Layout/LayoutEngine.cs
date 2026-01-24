@@ -19,6 +19,7 @@ public sealed class LayoutEngine
         var grid = FixedCellGrid.FromViewport(viewport, settings);
         var lines = new List<LayoutLine>();
         var hitLines = new List<HitTestLine>();
+        var actionSpans = new List<HitTestActionSpan>();
         var sceneViewports = new List<Scene3DViewportLayout>();
 
         var rowIndex = 0;
@@ -66,16 +67,59 @@ public sealed class LayoutEngine
 
             var text = GetBlockText(block);
             var wrapped = LineWrapper.Wrap(text, grid.Cols);
+            var richActions = block is RichTextBlock rich && rich.Actions.Count > 0 ? rich.Actions : null;
 
             foreach (var line in wrapped)
             {
                 lines.Add(new LayoutLine(block.Id, blockIndex, line.Start, line.Length, rowIndex));
                 hitLines.Add(new HitTestLine(block.Id, blockIndex, line.Start, line.Length, rowIndex));
+
+                if (richActions is not null && line.Length > 0)
+                {
+                    var lineStart = line.Start;
+                    var lineEnd = line.Start + line.Length;
+                    for (var a = 0; a < richActions.Count; a++)
+                    {
+                        var action = richActions[a];
+                        if (action.Length <= 0)
+                        {
+                            continue;
+                        }
+
+                        var actionStart = action.Start;
+                        var actionEnd = action.Start + action.Length;
+                        if (actionEnd <= lineStart || actionStart >= lineEnd)
+                        {
+                            continue;
+                        }
+
+                        var segStart = actionStart < lineStart ? lineStart : actionStart;
+                        var segEnd = actionEnd > lineEnd ? lineEnd : actionEnd;
+                        if (segEnd <= segStart)
+                        {
+                            continue;
+                        }
+
+                        var colStart = segStart - lineStart;
+                        var colLen = segEnd - segStart;
+                        if (colLen <= 0)
+                        {
+                            continue;
+                        }
+
+                        var x = grid.PaddingLeftPx + (colStart * grid.CellWidthPx);
+                        var y = grid.PaddingTopPx + (rowIndex * grid.CellHeightPx);
+                        var w = colLen * grid.CellWidthPx;
+                        var h = grid.CellHeightPx;
+                        actionSpans.Add(new HitTestActionSpan(block.Id, new PxRect(x, y, w, h), action.CommandText));
+                    }
+                }
+
                 rowIndex++;
             }
         }
 
-        var hitMap = new HitTestMap(grid, hitLines);
+        var hitMap = new HitTestMap(grid, hitLines, actionSpans);
         var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, rowIndex - grid.Rows);
         var clampedScrollOffsetRows = Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
         var scrollbar = ScrollbarLayouter.Layout(grid, rowIndex, clampedScrollOffsetRows, document.Settings.Scrollbar);
@@ -87,6 +131,7 @@ public sealed class LayoutEngine
         return block switch
         {
             TextBlock textBlock => textBlock.Text,
+            RichTextBlock richTextBlock => richTextBlock.Text,
             ActivityBlock activityBlock => activityBlock.ExportText(0, activityBlock.TextLength),
             PromptBlock promptBlock => promptBlock.Prompt + promptBlock.Input,
             ImageBlock => throw new NotSupportedException("ImageBlock layout not implemented in Blocks v0."),

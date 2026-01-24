@@ -23,6 +23,7 @@ internal static class TextPass
         return block switch
         {
             TextBlock textBlock => textBlock.Text,
+            RichTextBlock richTextBlock => richTextBlock.Text,
             ActivityBlock activityBlock => activityBlock.ExportText(0, activityBlock.TextLength),
             PromptBlock promptBlock => promptBlock.Prompt + promptBlock.Input,
             ImageBlock => throw new NotSupportedException("ImageBlock rendering not implemented in Blocks v0."),
@@ -36,6 +37,17 @@ internal static class TextPass
         if (block is TextBlock textBlock)
         {
             return textBlock.Stream switch
+            {
+                ConsoleTextStream.Stdout => settings.StdoutTextStyle.ForegroundRgba,
+                ConsoleTextStream.Stderr => settings.StderrTextStyle.ForegroundRgba,
+                ConsoleTextStream.System => settings.SystemTextStyle.ForegroundRgba,
+                _ => settings.DefaultTextStyle.ForegroundRgba
+            };
+        }
+
+        if (block is RichTextBlock richTextBlock)
+        {
+            return richTextBlock.Stream switch
             {
                 ConsoleTextStream.Stdout => settings.StdoutTextStyle.ForegroundRgba,
                 ConsoleTextStream.Stderr => settings.StderrTextStyle.ForegroundRgba,

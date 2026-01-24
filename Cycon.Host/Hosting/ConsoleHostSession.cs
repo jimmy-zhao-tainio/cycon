@@ -18,6 +18,7 @@ using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Host.Commands;
 using Cycon.Host.Commands.Handlers;
+using Cycon.Host.FileSystem;
 using Cycon.Host.Inspect;
 using Cycon.Host.Interaction;
 using Cycon.Host.Input;
@@ -68,6 +69,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private readonly ScrollbarController _scrollbarController;
     private readonly InspectModeController _inspectController;
     private readonly Scene3DPointerController _inlineScene3DPointer = new();
+    private readonly SystemFileSystem _fileSystem = new();
+    private readonly Dictionary<char, string> _lastDirectoryPerDrive = new();
+    private string _currentDirectory = string.Empty;
     private BlockId? _capturedInlineViewportBlockId;
     private BlockId? _focusedInlineViewportBlockId;
     private Scene3DNavKeys _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
@@ -94,6 +98,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _document = CreateDocument(text);
         _interaction.Initialize(_document.Transcript);
         SetCaretToEndOfLastPrompt(_document.Transcript);
+        InitializeWorkingDirectory();
         _defaultPromptText = FindLastPrompt(_document.Transcript)?.Prompt ?? "> ";
         _promptLifecycle = new PromptLifecycle(_document, _defaultPromptText);
         _layoutSettings = new LayoutSettings();
@@ -117,7 +122,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             registry,
             _jobScheduler,
             EmptyServiceProvider.Instance,
-            cwdProvider: () => Directory.GetCurrentDirectory(),
+            cwdProvider: () => _currentDirectory,
             envProvider: static () => new Dictionary<string, string>());
 
         _commandHost = new CommandHost(configureBlockCommands);
@@ -139,6 +144,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _inspectController = new InspectModeController(new InspectHostAdapter(this));
         _renderPipeline = new RenderPipeline(_layoutEngine, _renderer, _font, _selectionStyle);
         _resizeCoordinator = new ResizeCoordinator(resizeSettleMs, rebuildThrottleMs, _layoutSettings);
+
+        UpdateShellPromptTextIfPresent();
     }
 
     public static ConsoleHostSession CreateVga(
@@ -152,6 +159,14 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     }
 
     public GlyphAtlasData Atlas => _atlasData;
+
+    string IBlockCommandSession.CurrentDirectory => _currentDirectory;
+
+    string IBlockCommandSession.ResolvePath(string path) => ConsolePathResolver.ResolvePath(_currentDirectory, _lastDirectoryPerDrive, path);
+
+    bool IBlockCommandSession.TrySetCurrentDirectory(string directory, out string error) => TrySetCurrentDirectory(directory, out error);
+
+    Cycon.BlockCommands.IFileSystem IBlockCommandSession.FileSystem => _fileSystem;
 
     public void OnTextInput(HostTextInputEvent e)
     {
@@ -311,6 +326,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             {
                 var passNowTicks = Stopwatch.GetTimestamp();
 
+                FreezeTranscriptFollowTailWhileViewportFocused();
                 var viewport = new ConsoleViewport(snapW, snapH);
                 var result = _renderPipeline.BuildFrame(
                     _document,
@@ -384,6 +400,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         if (_pendingContentRebuild)
         {
+            FreezeTranscriptFollowTailWhileViewportFocused();
             var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
             var result = _renderPipeline.BuildFrame(
                 _document,
@@ -418,7 +435,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         var overlayFrame = _scrollbarController.BuildOverlayFrame(
             new PxRect(0, 0, framebufferWidth, framebufferHeight),
             _document.Settings.DefaultTextStyle.ForegroundRgba);
-        AppendFocusDimOverlayIfNeeded(ref overlayFrame, framebufferWidth, framebufferHeight);
 
         var setVSync = _resizeCoordinator.ConsumeVSyncRequest();
         var requestExit = _pendingExit;
@@ -789,6 +805,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             caretAlphaNow = 0;
         }
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
+        FreezeTranscriptFollowTailWhileViewportFocused();
         var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
         var result = _renderPipeline.BuildFrame(
             _document,
@@ -864,6 +881,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         _focusedInlineViewportBlockId = blockId;
         _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
+
+        FreezeTranscriptFollowTailWhileViewportFocused();
 
         if (_focusedInlineViewportBlockId is { } next && TryGetBlockById(next, out var nextBlock))
         {
@@ -1300,6 +1319,15 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                         _document.Scroll.IsFollowingTail = true;
                     }
                     break;
+                case HostAction.SetPromptInput setPromptInput:
+                    if (TryGetPrompt(setPromptInput.PromptId, out var updatePrompt))
+                    {
+                        updatePrompt.Input = setPromptInput.Input ?? string.Empty;
+                        updatePrompt.SetCaret(setPromptInput.CaretIndex);
+                        _document.Scroll.IsFollowingTail = true;
+                        _pendingContentRebuild = true;
+                    }
+                    break;
                 case HostAction.Backspace backspace:
                     if (TryGetPrompt(backspace.PromptId, out var backspacePrompt))
                     {
@@ -1726,6 +1754,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         var blocks = _document.Transcript.Blocks;
         if (blocks.Count > 0 && blocks[^1] is PromptBlock prompt && prompt.Owner is null)
         {
+            UpdateShellPromptTextIfPresent();
             _promptLifecycle.PendingShellPrompt = false;
             return;
         }
@@ -1736,7 +1765,114 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         _promptLifecycle.EnsureShellPromptAtEndIfNeeded(AllocateNewBlockId);
+        UpdateShellPromptTextIfPresent();
         _pendingContentRebuild = true;
+    }
+
+    private void InitializeWorkingDirectory()
+    {
+        var dir = Directory.GetCurrentDirectory();
+        TrySetCurrentDirectory(dir, out _);
+    }
+
+    private bool TrySetCurrentDirectory(string directory, out string error)
+    {
+        error = string.Empty;
+        directory ??= string.Empty;
+
+        string full;
+        try
+        {
+            full = ConsolePathResolver.ResolvePath(_currentDirectory, _lastDirectoryPerDrive, directory);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+
+        if (!_fileSystem.DirectoryExists(full))
+        {
+            error = $"Directory not found: {full}";
+            return false;
+        }
+
+        try
+        {
+            Directory.SetCurrentDirectory(full);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+
+        _currentDirectory = full;
+        if (TryGetDriveLetter(full, out var drive))
+        {
+            _lastDirectoryPerDrive[char.ToUpperInvariant(drive)] = full;
+        }
+
+        UpdateShellPromptTextIfPresent();
+        _pendingContentRebuild = true;
+        return true;
+    }
+
+    private void UpdateShellPromptTextIfPresent()
+    {
+        var blocks = _document.Transcript.Blocks;
+        if (blocks.Count == 0 || blocks[^1] is not PromptBlock prompt || prompt.Owner is not null)
+        {
+            return;
+        }
+
+        prompt.Prompt = BuildShellPrompt(_currentDirectory);
+    }
+
+    private static string BuildShellPrompt(string currentDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(currentDirectory))
+        {
+            return "> ";
+        }
+
+        var trimmed = currentDirectory.Trim();
+        try
+        {
+            var root = Path.GetPathRoot(trimmed);
+            if (!string.IsNullOrEmpty(root))
+            {
+                var rootFull = Path.GetFullPath(root);
+                var dirFull = Path.GetFullPath(trimmed);
+                if (StringComparer.OrdinalIgnoreCase.Equals(rootFull, dirFull))
+                {
+                    return rootFull + "> ";
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return trimmed.TrimEnd('\\', '/') + "> ";
+    }
+
+    private static bool TryGetDriveLetter(string path, out char driveLetter)
+    {
+        driveLetter = default;
+        if (string.IsNullOrEmpty(path) || path.Length < 2 || path[1] != ':')
+        {
+            return false;
+        }
+
+        var ch = path[0];
+        if (!char.IsLetter(ch))
+        {
+            return false;
+        }
+
+        driveLetter = ch;
+        return true;
     }
 
     private bool HasBlockingActiveBlock()
@@ -2004,100 +2140,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         return Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
     }
 
-    private void AppendFocusDimOverlayIfNeeded(ref RenderFrame? overlayFrame, int framebufferWidth, int framebufferHeight)
+    private void FreezeTranscriptFollowTailWhileViewportFocused()
     {
-        const int focusDimOverlayRgba = unchecked((int)0x000000CC); // 80% opacity black
-
-        if (_focusedInlineViewportBlockId is not { } focusedViewportBlockId ||
-            _lastLayout is null)
+        if (_focusedInlineViewportBlockId is not null)
         {
-            return;
-        }
-
-        var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
-        var scrollYPx = scrollOffsetRows * _font.Metrics.CellHeightPx;
-        if (!TryGetFocusedViewportOuterRectPx(_lastLayout, focusedViewportBlockId, scrollYPx, out var focusRectPx))
-        {
-            return;
-        }
-
-        overlayFrame ??= new RenderFrame();
-        AppendDimOverlay(overlayFrame, new PxRect(0, 0, framebufferWidth, framebufferHeight), focusRectPx, focusDimOverlayRgba);
-    }
-
-    private static bool TryGetFocusedViewportOuterRectPx(
-        LayoutFrame layout,
-        BlockId focusedViewportBlockId,
-        int scrollYPx,
-        out PxRect focusRectPx)
-    {
-        var viewports = layout.Scene3DViewports;
-        for (var i = 0; i < viewports.Count; i++)
-        {
-            var viewport = viewports[i];
-            if (viewport.BlockId != focusedViewportBlockId)
-            {
-                continue;
-            }
-
-            var rect = viewport.ViewportRectPx;
-            focusRectPx = new PxRect(rect.X, rect.Y - scrollYPx, rect.Width, rect.Height);
-            return true;
-        }
-
-        focusRectPx = default;
-        return false;
-    }
-
-    private static void AppendDimOverlay(RenderFrame frame, PxRect screenRectPx, PxRect focusRectPx, int rgba)
-    {
-        var screenW = Math.Max(0, screenRectPx.Width);
-        var screenH = Math.Max(0, screenRectPx.Height);
-        if (screenW <= 0 || screenH <= 0)
-        {
-            return;
-        }
-
-        var screenX0 = screenRectPx.X;
-        var screenY0 = screenRectPx.Y;
-        var screenX1 = screenX0 + screenW;
-        var screenY1 = screenY0 + screenH;
-
-        var focusX0 = Math.Clamp(focusRectPx.X, screenX0, screenX1);
-        var focusY0 = Math.Clamp(focusRectPx.Y, screenY0, screenY1);
-        var focusX1 = Math.Clamp(focusRectPx.X + focusRectPx.Width, screenX0, screenX1);
-        var focusY1 = Math.Clamp(focusRectPx.Y + focusRectPx.Height, screenY0, screenY1);
-
-        if (focusX1 <= focusX0 || focusY1 <= focusY0)
-        {
-            frame.Add(new DrawQuad(screenX0, screenY0, screenW, screenH, rgba));
-            return;
-        }
-
-        // Top band.
-        if (focusY0 > screenY0)
-        {
-            frame.Add(new DrawQuad(screenX0, screenY0, screenW, focusY0 - screenY0, rgba));
-        }
-
-        // Bottom band.
-        if (focusY1 < screenY1)
-        {
-            frame.Add(new DrawQuad(screenX0, focusY1, screenW, screenY1 - focusY1, rgba));
-        }
-
-        var focusH = focusY1 - focusY0;
-
-        // Left band.
-        if (focusX0 > screenX0)
-        {
-            frame.Add(new DrawQuad(screenX0, focusY0, focusX0 - screenX0, focusH, rgba));
-        }
-
-        // Right band.
-        if (focusX1 < screenX1)
-        {
-            frame.Add(new DrawQuad(focusX1, focusY0, screenX1 - focusX1, focusH, rgba));
+            _document.Scroll.IsFollowingTail = false;
         }
     }
 

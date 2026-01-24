@@ -35,7 +35,6 @@ public static class CommandLineParser
         var current = new StringBuilder();
         var inQuotes = false;
         var quoteChar = '\0';
-        var escaping = false;
 
         void Flush()
         {
@@ -49,34 +48,23 @@ public static class CommandLineParser
         for (var i = 0; i < input.Length; i++)
         {
             var ch = input[i];
-            if (escaping)
-            {
-                current.Append(ch switch
-                {
-                    'n' => '\n',
-                    'r' => '\r',
-                    't' => '\t',
-                    '\\' => '\\',
-                    '"' => '"',
-                    '\'' => '\'',
-                    _ => ch
-                });
-                escaping = false;
-                continue;
-            }
-
-            if (ch == '\\')
-            {
-                escaping = true;
-                continue;
-            }
-
             if (inQuotes)
             {
                 if (ch == quoteChar)
                 {
                     inQuotes = false;
                     continue;
+                }
+
+                if (ch == '\\' && i + 1 < input.Length)
+                {
+                    var next = input[i + 1];
+                    if (next == quoteChar || next == '\\')
+                    {
+                        current.Append(next);
+                        i++;
+                        continue;
+                    }
                 }
 
                 current.Append(ch);
@@ -99,13 +87,7 @@ public static class CommandLineParser
             current.Append(ch);
         }
 
-        if (escaping)
-        {
-            current.Append('\\');
-        }
-
         Flush();
         return tokens;
     }
 }
-

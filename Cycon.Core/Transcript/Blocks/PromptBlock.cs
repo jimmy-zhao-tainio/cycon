@@ -20,7 +20,7 @@ public sealed class PromptBlock : IBlock, ITextSelectable, ITextEditable, IRunna
     public BlockId Id { get; }
     public BlockKind Kind => BlockKind.Prompt;
 
-    public string Prompt { get; }
+    public string Prompt { get; set; }
     public PromptOwner? Owner { get; }
     public int PromptPrefixLength => Prompt.Length;
     public string Input { get; set; } = string.Empty;

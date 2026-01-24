@@ -47,7 +47,7 @@ public sealed class TabCompletionRoutingTests
             paddingTopPx: 0,
             paddingRightPx: 0,
             paddingBottomPx: 0);
-        var hit = new HitTestMap(grid, Array.Empty<HitTestLine>());
+        var hit = new HitTestMap(grid, Array.Empty<HitTestLine>(), Array.Empty<HitTestActionSpan>());
         var scrollbar = new ScrollbarLayout(false, default, default, default, default);
         return new LayoutFrame(grid, Array.Empty<LayoutLine>(), hit, totalRows: 0, scrollbar, Array.Empty<Scene3DViewportLayout>());
     }

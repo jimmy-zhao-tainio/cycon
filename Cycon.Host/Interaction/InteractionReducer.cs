@@ -314,6 +314,25 @@ public sealed class InteractionReducer
         }
 
         var normalizedCharIndex = NormalizePromptPrefix(transcript, pos.Value.BlockId, pos.Value.CharIndex);
+
+        if ((e.Mods & HostKeyModifiers.Shift) == 0 &&
+            frame.HitTestMap.TryGetActionAt(e.X, e.Y, out var commandText) &&
+            FindLastPromptId(transcript) is { } lastPromptId &&
+            TryGetPrompt(transcript, lastPromptId, out var promptForInsert) &&
+            promptForInsert.Owner is null)
+        {
+            _state.Focused = lastPromptId;
+            _state.Selection = null;
+            _state.SelectionCaret = null;
+            _state.IsSelecting = false;
+            _state.MouseCaptured = null;
+
+            actions.Add(new HostAction.Focus(lastPromptId));
+            actions.Add(new HostAction.SetPromptInput(lastPromptId, commandText, commandText.Length));
+            actions.Add(new HostAction.RequestRebuild());
+            return actions;
+        }
+
         _state.Focused = pos.Value.BlockId;
         actions.Add(new HostAction.Focus(pos.Value.BlockId));
 
@@ -452,6 +471,21 @@ public sealed class InteractionReducer
         }
 
         prompt = null!;
+        return false;
+    }
+
+    private static bool TryGetBlock(Transcript transcript, BlockId id, out IBlock block)
+    {
+        foreach (var candidate in transcript.Blocks)
+        {
+            if (candidate.Id == id)
+            {
+                block = candidate;
+                return true;
+            }
+        }
+
+        block = null!;
         return false;
     }
 

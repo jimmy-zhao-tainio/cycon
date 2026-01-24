@@ -250,24 +250,9 @@ public sealed class InputCompletionController
                 i++;
             }
 
-            var escaping = false;
             while (i < input.Length)
             {
                 var ch = input[i];
-                if (escaping)
-                {
-                    escaping = false;
-                    i++;
-                    continue;
-                }
-
-                if (ch == '\\')
-                {
-                    escaping = true;
-                    i++;
-                    continue;
-                }
-
                 if (isQuoted)
                 {
                     if (ch == quote)

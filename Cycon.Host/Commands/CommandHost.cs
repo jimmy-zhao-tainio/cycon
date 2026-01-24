@@ -31,6 +31,11 @@ internal sealed class CommandHost
         _blockCommands.RegisterCore(new ExitBlockCommandHandler());
         _blockCommands.RegisterCore(new WaitBlockCommandHandler());
         _blockCommands.RegisterCore(new ProgressBlockCommandHandler());
+        _blockCommands.RegisterCore(new PwdBlockCommandHandler());
+        _blockCommands.RegisterCore(new CdBlockCommandHandler());
+        _blockCommands.RegisterCore(new LsBlockCommandHandler());
+        _blockCommands.RegisterCore(new CatBlockCommandHandler());
+        _blockCommands.RegisterCore(new ViewFallbackBlockCommandHandler());
         configureBlockCommands?.Invoke(_blockCommands);
 
         _completion = new InputCompletionController(new CommandCompletionProvider(_blockCommands));
@@ -165,7 +170,9 @@ internal sealed class CommandHost
             headerText,
             ConsoleTextStream.Default));
 
-        var request = CommandLineParser.Parse(commandForParse);
+        var request = TryRewriteDriveSwitch(commandForParse, out var driveSwitchRequest)
+            ? driveSwitchRequest
+            : CommandLineParser.Parse(commandForParse);
         if (request is null)
         {
             actions.Add(new CommandHostAction.UpdatePrompt(promptId, string.Empty, 0));
@@ -190,6 +197,7 @@ internal sealed class CommandHost
 
     private static bool ShouldResetCompletion(HostAction action) =>
         action is HostAction.InsertText or
+        HostAction.SetPromptInput or
         HostAction.Backspace or
         HostAction.MoveCaret or
         HostAction.SetCaret or
@@ -199,7 +207,25 @@ internal sealed class CommandHost
     private static string QuoteForCommandLineParser(string value)
     {
         value ??= string.Empty;
-        return "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+        return "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+    }
+
+    private static bool TryRewriteDriveSwitch(string command, out CommandRequest? request)
+    {
+        request = null;
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return false;
+        }
+
+        var trimmed = command.Trim();
+        if (trimmed.Length != 2 || trimmed[1] != ':' || !char.IsLetter(trimmed[0]))
+        {
+            return false;
+        }
+
+        request = new CommandRequest("cd", new[] { trimmed }, command);
+        return true;
     }
 
 }
