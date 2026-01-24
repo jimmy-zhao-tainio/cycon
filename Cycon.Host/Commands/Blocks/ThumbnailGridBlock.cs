@@ -13,6 +13,8 @@ namespace Cycon.Host.Commands.Blocks;
 internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockChromeProvider, IMouseFocusableViewportBlock, IBlockCommandInsertionProvider
 {
     private const int MaxLabelRows = 3;
+    private const int TileGutterCols = 1;
+    private const int TileExtraCols = 6;
     private readonly IReadOnlyList<FileSystemEntry> _entries;
     private readonly int _sizePx;
     private readonly int _ownerId;
@@ -23,12 +25,16 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
     private int _lastCellH = 16;
     private int _lastTileW;
     private int _lastTileH;
+    private int _lastStrideW;
     private int _lastCols = 1;
-    private int _lastVisibleRows = 1;
+    private int _lastTotalRows = 0;
     private int _lastBandStartRow = -1;
     private int _lastBandEndRow = -1;
     private int _lastBandStartCol = -1;
     private int _lastBandEndCol = -1;
+    private int[] _rowStartsPx = Array.Empty<int>();
+    private int[] _rowHeightsPx = Array.Empty<int>();
+    private int[] _rowLabelLines = Array.Empty<int>();
 
     public ThumbnailGridBlock(BlockId id, string directoryPath, IReadOnlyList<FileSystemEntry> entries, int sizePx)
     {
@@ -63,13 +69,41 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var innerWidth = Math.Max(0, width - (chromeInset * 2));
 
         var gap = Math.Max(4, cellW);
-        var tileW = _sizePx + (gap * 2);
-        var baseTileH = _sizePx + (MaxLabelRows * cellH) + (gap * 2);
-        var tileH = SnapToStep(baseTileH, cellH);
-        var cols = Math.Max(1, innerWidth / Math.Max(1, tileW));
+        var tileW = ComputeTileWidth(cellW, gap);
+        var strideW = tileW + (TileGutterCols * cellW);
+        var cols = Math.Max(1, innerWidth / Math.Max(1, strideW));
         var totalRows = Math.Max(1, (int)Math.Ceiling(_entries.Count / (double)cols));
-        var heightPxLong = (long)totalRows * tileH;
-        var heightPx = heightPxLong >= int.MaxValue ? int.MaxValue : (int)heightPxLong;
+        var maxChars = Math.Max(1, tileW / Math.Max(1, cellW));
+
+        var heightPxLong = 0L;
+        for (var row = 0; row < totalRows; row++)
+        {
+            var maxLines = 1;
+            var start = row * cols;
+            var end = Math.Min(_entries.Count, start + cols);
+            for (var i = start; i < end; i++)
+            {
+                var lines = ComputeRequiredLabelLines(_entries[i].Name, maxChars);
+                if (lines > maxLines)
+                {
+                    maxLines = lines;
+                    if (maxLines >= MaxLabelRows)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            var rowH = SnapToStep(_sizePx + (maxLines * cellH) + (gap * 2), cellH);
+            heightPxLong += rowH;
+            if (heightPxLong >= int.MaxValue)
+            {
+                heightPxLong = int.MaxValue;
+                break;
+            }
+        }
+
+        var heightPx = (int)heightPxLong;
         heightPx = Math.Max(0, heightPx) + (chromeInset * 2);
         return new BlockSize(width, heightPx);
     }
@@ -88,16 +122,44 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var cellH = Math.Max(1, ctx.TextMetrics.CellHeightPx);
         var gap = Math.Max(4, cellW);
 
-        var tileW = _sizePx + (gap * 2);
-        var baseTileH = _sizePx + (MaxLabelRows * cellH) + (gap * 2);
-        var tileH = SnapToStep(baseTileH, cellH);
+        var tileW = ComputeTileWidth(cellW, gap);
+        var strideW = tileW + (TileGutterCols * cellW);
+        var maxChars = Math.Max(1, tileW / Math.Max(1, cellW));
 
-        var cols = Math.Max(1, viewport.Width / Math.Max(1, tileW));
+        var cols = Math.Max(1, viewport.Width / Math.Max(1, strideW));
         var totalRows = (int)Math.Ceiling(_entries.Count / (double)cols);
-        var visibleRows = Math.Max(1, viewport.Height / Math.Max(1, tileH));
-        _maxScrollRow = Math.Max(0, totalRows - visibleRows);
+        totalRows = Math.Max(1, totalRows);
 
-        if (_lastCols != 0 && (_lastCols != cols || _lastVisibleRows != visibleRows))
+        EnsureRowBuffers(totalRows);
+        var cursorY = 0;
+        for (var row = 0; row < totalRows; row++)
+        {
+            var maxLines = 1;
+            var start = row * cols;
+            var end = Math.Min(_entries.Count, start + cols);
+            for (var i = start; i < end; i++)
+            {
+                var lines = ComputeRequiredLabelLines(_entries[i].Name, maxChars);
+                if (lines > maxLines)
+                {
+                    maxLines = lines;
+                    if (maxLines >= MaxLabelRows)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            var rowH = SnapToStep(_sizePx + (maxLines * cellH) + (gap * 2), cellH);
+            _rowStartsPx[row] = cursorY;
+            _rowHeightsPx[row] = rowH;
+            _rowLabelLines[row] = maxLines;
+            cursorY = checked(cursorY + rowH);
+        }
+
+        _maxScrollRow = Math.Max(0, totalRows - 1);
+
+        if (_lastCols != 0 && (_lastCols != cols || _lastStrideW != strideW))
         {
             _generation++;
             if (OperatingSystem.IsWindows())
@@ -109,9 +171,10 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         _lastCellW = cellW;
         _lastCellH = cellH;
         _lastTileW = tileW;
-        _lastTileH = tileH;
+        _lastTileH = cursorY;
+        _lastStrideW = strideW;
         _lastCols = cols;
-        _lastVisibleRows = visibleRows;
+        _lastTotalRows = totalRows;
 
         canvas.FillRect(viewport, unchecked((int)0x000000FF));
 
@@ -123,8 +186,9 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var visibleLocalY0 = Math.Max(0, screenY0 - viewport.Y);
         var visibleLocalY1 = Math.Max(0, screenY1 - viewport.Y);
 
-        var startRow = Math.Max(0, visibleLocalY0 / Math.Max(1, tileH));
-        var endRow = Math.Min(totalRows, (visibleLocalY1 + tileH - 1) / Math.Max(1, tileH));
+        var startRow = FindRowAtOrBeforeY(visibleLocalY0, totalRows);
+        var endRow = FindRowAtOrBeforeY(Math.Max(0, visibleLocalY1 - 1), totalRows) + 1;
+        endRow = Math.Min(totalRows, Math.Max(startRow + 1, endRow));
         if (endRow <= startRow)
         {
             endRow = Math.Min(totalRows, startRow + 1);
@@ -134,8 +198,8 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var screenX1 = fbW > 0 ? Math.Min(fbW, viewport.X + viewport.Width) : (viewport.X + viewport.Width);
         var visibleLocalX0 = Math.Max(0, screenX0 - viewport.X);
         var visibleLocalX1 = Math.Max(0, screenX1 - viewport.X);
-        var startCol = Math.Max(0, visibleLocalX0 / Math.Max(1, tileW));
-        var endCol = Math.Min(cols, (visibleLocalX1 + tileW - 1) / Math.Max(1, tileW));
+        var startCol = Math.Max(0, visibleLocalX0 / Math.Max(1, strideW));
+        var endCol = Math.Min(cols, (visibleLocalX1 + strideW - 1) / Math.Max(1, strideW));
         if (endCol <= startCol)
         {
             endCol = Math.Min(cols, startCol + 1);
@@ -162,7 +226,9 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
 
         for (var row = startRow; row < endRow; row++)
         {
-            var y = viewport.Y + (row * tileH);
+            var y = viewport.Y + _rowStartsPx[row];
+            var rowH = _rowHeightsPx[row];
+            var rowMaxLines = _rowLabelLines[row];
 
             for (var col = startCol; col < endCol; col++)
             {
@@ -173,8 +239,8 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
                 }
 
                 var entry = _entries[index];
-                var x = viewport.X + (col * tileW);
-                DrawTile(canvas, ctx, entry, x, y, tileW, tileH, gap, cellW, cellH);
+                var x = viewport.X + (col * strideW);
+                DrawTile(canvas, ctx, entry, x, y, tileW, rowH, rowMaxLines, gap, cellW, cellH);
             }
         }
     }
@@ -200,15 +266,39 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
 
         var cellW = _lastCellW;
         var cellH = _lastCellH;
-        var tileW = _lastTileW > 0 ? _lastTileW : (_sizePx + (Math.Max(4, cellW) * 2));
-        var tileH = _lastTileH > 0 ? _lastTileH : (_sizePx + cellH + (Math.Max(4, cellW) * 2));
-        var cols = _lastCols > 0 ? _lastCols : Math.Max(1, viewportRectPx.Width / Math.Max(1, tileW));
+        var tileW = _lastTileW > 0 ? _lastTileW : ComputeTileWidth(cellW, Math.Max(4, cellW));
+        var strideW = _lastStrideW > 0 ? _lastStrideW : tileW + (TileGutterCols * cellW);
+        var cols = _lastCols > 0 ? _lastCols : Math.Max(1, viewportRectPx.Width / Math.Max(1, strideW));
+        var totalRows = _rowStartsPx.Length;
 
         var localX = x - viewportRectPx.X;
         var localY = y - viewportRectPx.Y;
-        var col = localX / Math.Max(1, tileW);
-        var row = localY / Math.Max(1, tileH);
-        if (col < 0 || row < 0)
+        var col = localX / Math.Max(1, strideW);
+        if (col < 0)
+        {
+            return false;
+        }
+
+        var inTileX = localX - (col * strideW);
+        if (inTileX < 0 || inTileX >= tileW)
+        {
+            return false;
+        }
+
+        totalRows = _lastTotalRows;
+        if (totalRows <= 0)
+        {
+            return false;
+        }
+
+        var row = FindRowAtOrBeforeY(localY, totalRows);
+        if (row < 0 || row >= totalRows)
+        {
+            return false;
+        }
+
+        var inRowY = localY - _rowStartsPx[row];
+        if (inRowY < 0 || inRowY >= _rowHeightsPx[row])
         {
             return false;
         }
@@ -233,6 +323,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         int y,
         int tileW,
         int tileH,
+        int rowMaxLabelLines,
         int gap,
         int cellW,
         int cellH)
@@ -269,19 +360,19 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var name = entry.Name ?? string.Empty;
         var nameLen = name.Length;
 
-        var usedLines = (int)Math.Ceiling(nameLen / (double)maxChars);
-        usedLines = Math.Clamp(usedLines, 1, MaxLabelRows);
+        var neededLines = ComputeRequiredLabelLines(name, maxChars);
+        var labelAreaLines = Math.Max(1, Math.Min(MaxLabelRows, rowMaxLabelLines));
+        var labelAreaHeight = labelAreaLines * cellH;
+        var textAreaHeight = neededLines * cellH;
 
-        var labelAreaHeight = MaxLabelRows * cellH;
-        var textAreaHeight = usedLines * cellH;
-        var textYBase = y + gap + _sizePx + Math.Max(0, (labelAreaHeight - textAreaHeight) / 2);
+        var labelTopY = y + gap + _sizePx;
+        var textYBase = neededLines == 1
+            ? labelTopY
+            : labelTopY + Math.Max(0, (labelAreaHeight - textAreaHeight) / 2);
 
-        var totalCapacity = maxChars * MaxLabelRows;
+        var totalCapacity = maxChars * labelAreaLines;
         var needsEllipsis = nameLen > totalCapacity;
-        if (needsEllipsis)
-        {
-            usedLines = MaxLabelRows;
-        }
+        var usedLines = needsEllipsis ? labelAreaLines : neededLines;
 
         for (var line = 0; line < usedLines; line++)
         {
@@ -350,6 +441,77 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         canvas.FillRect(new RectPx(x, y, w, h), bg);
         var inset = Math.Max(1, Math.Min(w, h) / 8);
         canvas.FillRect(new RectPx(x + inset, y + inset, Math.Max(1, w - (inset * 2)), Math.Max(1, h - (inset * 2))), fg);
+    }
+
+    private int ComputeTileWidth(int cellW, int gap)
+    {
+        cellW = Math.Max(1, cellW);
+        gap = Math.Max(0, gap);
+        var baseW = _sizePx + (gap * 2) + (TileExtraCols * cellW);
+        return Math.Max(cellW, SnapToStep(baseW, cellW));
+    }
+
+    private static int ComputeRequiredLabelLines(string? name, int maxChars)
+    {
+        if (maxChars <= 0)
+        {
+            return 1;
+        }
+
+        var len = string.IsNullOrEmpty(name) ? 0 : name.Length;
+        if (len <= 0)
+        {
+            return 1;
+        }
+
+        var lines = (int)Math.Ceiling(len / (double)maxChars);
+        return Math.Clamp(lines, 1, MaxLabelRows);
+    }
+
+    private void EnsureRowBuffers(int totalRows)
+    {
+        if (totalRows <= 0)
+        {
+            return;
+        }
+
+        if (_rowStartsPx.Length < totalRows)
+        {
+            _rowStartsPx = new int[totalRows];
+            _rowHeightsPx = new int[totalRows];
+            _rowLabelLines = new int[totalRows];
+        }
+    }
+
+    private int FindRowAtOrBeforeY(int y, int totalRows)
+    {
+        if (totalRows <= 0)
+        {
+            return 0;
+        }
+
+        y = Math.Max(0, y);
+        var lo = 0;
+        var hi = totalRows - 1;
+        while (lo <= hi)
+        {
+            var mid = lo + ((hi - lo) >> 1);
+            var start = _rowStartsPx[mid];
+            if (start == y)
+            {
+                return mid;
+            }
+            if (start < y)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+
+        return Math.Clamp(hi, 0, totalRows - 1);
     }
 
     private static int SnapToStep(int value, int step)
