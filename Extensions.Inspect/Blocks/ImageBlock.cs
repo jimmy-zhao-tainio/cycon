@@ -70,12 +70,13 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
         var promptReservedRows = 2;
         var availableRows = Math.Max(1, viewportRows - promptReservedRows);
 
-        var imageRows = Math.Max(1, (ImageHeight + cellH - 1) / cellH);
-
         var chromeInsetPx = ChromeSpec.Enabled ? Math.Max(0, ChromeSpec.PaddingPx + ChromeSpec.BorderPx) : 0;
-        var chromeRows = (chromeInsetPx * 2 + (cellH - 1)) / cellH;
-
-        var desiredRows = imageRows + chromeRows;
+        var innerWidth = Math.Max(0, width - (chromeInsetPx * 2));
+        var desiredInnerHeightPx = ImageWidth <= 0
+            ? Math.Max(cellH, ImageHeight)
+            : Math.Max(cellH, (int)Math.Round(innerWidth * (double)ImageHeight / ImageWidth));
+        var desiredOuterHeightPx = desiredInnerHeightPx + (chromeInsetPx * 2);
+        var desiredRows = Math.Max(1, (desiredOuterHeightPx + cellH - 1) / cellH);
         var desiredInitialRows = Math.Min(availableRows, desiredRows);
         if (_initialHeightRows < 0)
         {
