@@ -10,7 +10,7 @@ using Cycon.Render;
 
 namespace Cycon.Host.Commands.Blocks;
 
-internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockChromeProvider, IMouseFocusableViewportBlock, IBlockCommandInsertionProvider
+internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockChromeProvider, IMouseFocusableViewportBlock, IBlockCommandInsertionProvider, IBlockKeyHandler, IBlockCommandActivationProvider
 {
     private const int MaxLabelRows = 3;
     private const int TileGutterCols = 1;
@@ -36,6 +36,9 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
     private int[] _rowStartsPx = Array.Empty<int>();
     private int[] _rowHeightsPx = Array.Empty<int>();
     private int[] _rowLabelLines = Array.Empty<int>();
+    private int _hoverIndex = -1;
+    private int _selectedIndex = -1;
+    private BlockCommandActivation? _pendingActivation;
 
     public ThumbnailGridBlock(BlockId id, string directoryPath, IReadOnlyList<FileSystemEntry> entries, int sizePx)
     {
@@ -53,6 +56,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
     public BlockId Id { get; }
     public BlockKind Kind => BlockKind.Scene3D;
     public string DirectoryPath { get; }
+    public int SizePx => _sizePx;
     public BlockChromeSpec ChromeSpec => BlockChromeSpec.ViewDefault;
 
     public bool HasMouseFocus
@@ -241,7 +245,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
 
                 var entry = _entries[index];
                 var x = viewport.X + (col * strideW);
-                DrawTile(canvas, ctx, entry, x, y, tileW, rowH, rowMaxLines, gap, cellW, cellH);
+                DrawTile(canvas, ctx, entry, index, x, y, tileW, rowH, rowMaxLines, gap, cellW, cellH);
             }
         }
     }
@@ -253,7 +257,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
 
     public bool HandlePointer(in HostMouseEvent e, in PxRect viewportRectPx)
     {
-        // Click is handled by the host via IBlockCommandInsertionProvider.
+        // Click selection is handled by the host. Pointer is still consumed to prevent upstream selection.
         return e.Kind is HostMouseEventKind.Down or HostMouseEventKind.Up or HostMouseEventKind.Move;
     }
 
@@ -316,10 +320,148 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         return true;
     }
 
+    public bool TryGetEntryIndexAt(int x, int y, in PxRect viewportRectPx, out int index)
+    {
+        index = -1;
+        if (x < viewportRectPx.X || y < viewportRectPx.Y || x >= viewportRectPx.X + viewportRectPx.Width || y >= viewportRectPx.Y + viewportRectPx.Height)
+        {
+            return false;
+        }
+
+        var cellW = _lastCellW;
+        var tileW = _lastTileW > 0 ? _lastTileW : ComputeTileWidth(cellW, Math.Max(4, cellW));
+        var strideW = _lastStrideW > 0 ? _lastStrideW : tileW + (TileGutterCols * cellW);
+        var cols = _lastCols > 0 ? _lastCols : Math.Max(1, viewportRectPx.Width / Math.Max(1, strideW));
+
+        var localX = x - viewportRectPx.X;
+        var localY = y - viewportRectPx.Y;
+        var col = localX / Math.Max(1, strideW);
+        if (col < 0)
+        {
+            return false;
+        }
+
+        var inTileX = localX - (col * strideW);
+        if (inTileX < 0 || inTileX >= tileW)
+        {
+            return false;
+        }
+
+        var totalRows = _lastTotalRows;
+        if (totalRows <= 0)
+        {
+            return false;
+        }
+
+        var row = FindRowAtOrBeforeY(localY, totalRows);
+        if (row < 0 || row >= totalRows)
+        {
+            return false;
+        }
+
+        var inRowY = localY - _rowStartsPx[row];
+        if (inRowY < 0 || inRowY >= _rowHeightsPx[row])
+        {
+            return false;
+        }
+
+        index = (row * cols) + col;
+        return (uint)index < (uint)_entries.Count;
+    }
+
+    public bool SetHoveredIndex(int index)
+    {
+        index = (uint)index < (uint)_entries.Count ? index : -1;
+        if (_hoverIndex == index)
+        {
+            return false;
+        }
+
+        _hoverIndex = index;
+        return true;
+    }
+
+    public bool SetSelectedIndex(int index)
+    {
+        index = (uint)index < (uint)_entries.Count ? index : -1;
+        if (_selectedIndex == index)
+        {
+            return false;
+        }
+
+        _selectedIndex = index;
+        return true;
+    }
+
+    public bool HandleKey(in HostKeyEvent e)
+    {
+        if (!e.IsDown)
+        {
+            return false;
+        }
+
+        var cols = Math.Max(1, _lastCols);
+        var count = _entries.Count;
+
+        switch (e.Key)
+        {
+            case HostKey.Left:
+                if (count <= 0) return true;
+                if (_selectedIndex < 0) _selectedIndex = 0;
+                else _selectedIndex = Math.Max(0, _selectedIndex - 1);
+                return true;
+            case HostKey.Right:
+                if (count <= 0) return true;
+                if (_selectedIndex < 0) _selectedIndex = 0;
+                else _selectedIndex = Math.Min(count - 1, _selectedIndex + 1);
+                return true;
+            case HostKey.Up:
+                if (count <= 0) return true;
+                if (_selectedIndex < 0) _selectedIndex = 0;
+                else _selectedIndex = Math.Max(0, _selectedIndex - cols);
+                return true;
+            case HostKey.Down:
+                if (count <= 0) return true;
+                if (_selectedIndex < 0) _selectedIndex = 0;
+                else _selectedIndex = Math.Min(count - 1, _selectedIndex + cols);
+                return true;
+            case HostKey.Escape:
+                return SetSelectedIndex(-1);
+            case HostKey.Enter:
+                if ((uint)_selectedIndex >= (uint)_entries.Count)
+                {
+                    return true;
+                }
+
+                var entry = _entries[_selectedIndex];
+                var quoted = CommandLineQuote.Quote(entry.FullPath);
+                var commandText = entry.IsDirectory ? $"cd {quoted}" : $"view {quoted}";
+                var refresh = entry.IsDirectory ? $"grid -s {_sizePx}" : null;
+                _pendingActivation = new BlockCommandActivation(commandText, refresh);
+                return true;
+        }
+
+        return false;
+    }
+
+    public bool TryDequeueActivation(out BlockCommandActivation activation)
+    {
+        if (_pendingActivation is { } pending)
+        {
+            _pendingActivation = null;
+            activation = pending;
+            return true;
+        }
+
+        activation = default;
+        return false;
+    }
+
     private void DrawTile(
         IRenderCanvas canvas,
         in BlockRenderContext ctx,
         in FileSystemEntry entry,
+        int entryIndex,
         int x,
         int y,
         int tileW,
@@ -330,7 +472,17 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         int cellH)
     {
         var tileRect = new RectPx(x, y, tileW, tileH);
-        canvas.FillRect(tileRect, unchecked((int)0x000000FF));
+        var bg = unchecked((int)0x000000FF);
+        if (entryIndex == _selectedIndex)
+        {
+            bg = unchecked((int)0x2A2A2AFF);
+        }
+        else if (entryIndex == _hoverIndex)
+        {
+            bg = unchecked((int)0x1C1C1CFF);
+        }
+
+        canvas.FillRect(tileRect, bg);
 
         var iconSquareX = x + Math.Max(0, (tileW - _sizePx) / 2);
         var iconSize = Math.Max(16, _sizePx - (cellW * 5));
