@@ -12,6 +12,7 @@ namespace Cycon.Host.Commands.Blocks;
 
 internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPointerHandler, IBlockWheelHandler, IBlockChromeProvider, IMouseFocusableViewportBlock, IBlockCommandInsertionProvider
 {
+    private const int MaxLabelRows = 3;
     private readonly IReadOnlyList<FileSystemEntry> _entries;
     private readonly int _sizePx;
     private readonly int _ownerId;
@@ -63,7 +64,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
 
         var gap = Math.Max(4, cellW);
         var tileW = _sizePx + (gap * 2);
-        var baseTileH = _sizePx + cellH + (gap * 2);
+        var baseTileH = _sizePx + (MaxLabelRows * cellH) + (gap * 2);
         var tileH = SnapToStep(baseTileH, cellH);
         var cols = Math.Max(1, innerWidth / Math.Max(1, tileW));
         var totalRows = Math.Max(1, (int)Math.Ceiling(_entries.Count / (double)cols));
@@ -88,7 +89,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var gap = Math.Max(4, cellW);
 
         var tileW = _sizePx + (gap * 2);
-        var baseTileH = _sizePx + cellH + (gap * 2);
+        var baseTileH = _sizePx + (MaxLabelRows * cellH) + (gap * 2);
         var tileH = SnapToStep(baseTileH, cellH);
 
         var cols = Math.Max(1, viewport.Width / Math.Max(1, tileW));
@@ -239,11 +240,12 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var tileRect = new RectPx(x, y, tileW, tileH);
         canvas.FillRect(tileRect, unchecked((int)0x000000FF));
 
-        var iconSize = Math.Max(8, _sizePx - (cellW * 4));
-        var iconInset = Math.Max(0, (_sizePx - iconSize) / 2);
+        var iconSize = Math.Max(16, _sizePx - (cellW * 5));
+        var iconInsetX = Math.Max(0, (_sizePx - iconSize) / 2);
+        var iconInsetY = Math.Max(0, _sizePx - iconSize); // bottom-aligned
         var thumbRectF = new RectF(
-            x + gap + iconInset,
-            y + gap + iconInset,
+            x + gap + iconInsetX,
+            y + gap + iconInsetY,
             iconSize,
             iconSize);
 
@@ -265,22 +267,57 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
     DrawText:
         var maxChars = Math.Max(1, tileW / Math.Max(1, cellW));
         var name = entry.Name ?? string.Empty;
-        if (name.Length > maxChars)
+        var nameLen = name.Length;
+
+        var usedLines = (int)Math.Ceiling(nameLen / (double)maxChars);
+        usedLines = Math.Clamp(usedLines, 1, MaxLabelRows);
+
+        var labelAreaHeight = MaxLabelRows * cellH;
+        var textAreaHeight = usedLines * cellH;
+        var textYBase = y + gap + _sizePx + Math.Max(0, (labelAreaHeight - textAreaHeight) / 2);
+
+        var totalCapacity = maxChars * MaxLabelRows;
+        var needsEllipsis = nameLen > totalCapacity;
+        if (needsEllipsis)
         {
-            if (maxChars <= 3)
-            {
-                name = name.Substring(0, maxChars);
-            }
-            else
-            {
-                name = name.Substring(0, maxChars - 3) + "...";
-            }
+            usedLines = MaxLabelRows;
         }
 
-        var textW = Math.Min(tileW, name.Length * cellW);
-        var textX = x + Math.Max(0, (tileW - textW) / 2);
-        var textY = y + gap + _sizePx + (gap / 2);
-        canvas.DrawText(name, 0, name.Length, textX, textY, ctx.Theme.ForegroundRgba);
+        for (var line = 0; line < usedLines; line++)
+        {
+            var lineY = textYBase + (line * cellH);
+            var start = line * maxChars;
+            if ((uint)start >= (uint)nameLen)
+            {
+                break;
+            }
+
+            if (!needsEllipsis || line < MaxLabelRows - 1)
+            {
+                var len = Math.Min(maxChars, nameLen - start);
+                var lineW = len * cellW;
+                var lineX = x + Math.Max(0, (tileW - lineW) / 2);
+                canvas.DrawText(name, start, len, lineX, lineY, ctx.Theme.ForegroundRgba);
+                continue;
+            }
+
+            // Last line with ellipsis if we had to truncate.
+            if (maxChars <= 3)
+            {
+                var len = Math.Min(maxChars, nameLen - start);
+                var lineW = len * cellW;
+                var lineX = x + Math.Max(0, (tileW - lineW) / 2);
+                canvas.DrawText(name, start, len, lineX, lineY, ctx.Theme.ForegroundRgba);
+                continue;
+            }
+
+            var prefixLen = maxChars - 3;
+            var visibleLen = prefixLen + 3;
+            var visibleW = visibleLen * cellW;
+            var x0 = x + Math.Max(0, (tileW - visibleW) / 2);
+            canvas.DrawText(name, start, Math.Min(prefixLen, nameLen - start), x0, lineY, ctx.Theme.ForegroundRgba);
+            canvas.DrawText("...", 0, 3, x0 + (prefixLen * cellW), lineY, ctx.Theme.ForegroundRgba);
+        }
     }
 
     private static void DrainThumbnailReleases(IRenderCanvas canvas)
