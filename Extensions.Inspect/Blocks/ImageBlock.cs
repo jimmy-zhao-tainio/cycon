@@ -349,6 +349,7 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
 
         var offsetX = (viewport.Width - (ImageWidth * scale)) * 0.5f;
         var offsetY = (viewport.Height - (ImageHeight * scale)) * 0.5f;
+        SnapOffsets(ref offsetX, ref offsetY);
         return ViewTransform.Custom(scale, offsetX, offsetY);
     }
 
@@ -378,6 +379,8 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
         // Solve offsets so (u,v) ends up under the cursor again.
         var offsetX = localX - (u * scale);
         var offsetY = localY - (v * scale);
+        ClampOffset(viewport, scale, ref offsetX, ref offsetY);
+        SnapOffsets(ref offsetX, ref offsetY);
 
         _fitToView = false;
         _zoom.Scale = ClampScale(scale, MinScale);
@@ -394,8 +397,7 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
 
     private void SetZoomOne(in PxRect viewport, double timeSeconds)
     {
-        var fitScale = GetFitScale(viewport);
-        var scale = MathF.Max(1.0f, fitScale);
+        var scale = 1f;
 
         var offsetX = (viewport.Width - (ImageWidth * scale)) * 0.5f;
         var offsetY = (viewport.Height - (ImageHeight * scale)) * 0.5f;
