@@ -285,15 +285,8 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
     {
         if (IsApproximatelyFit(viewport))
         {
-            if (IsInsideImageAt(viewport, timeSeconds, screenX, screenY))
-            {
-                SetZoomOneAnchored(viewport, timeSeconds, screenX, screenY);
-            }
-            else
-            {
-                // Clicked on bars: go to a deterministic 1:1 instead of "void".
-                SetZoomOne(viewport, timeSeconds);
-            }
+            // Deterministic 1:1 centered. (Panning stays available via left-drag.)
+            SetZoomOne(viewport, timeSeconds);
         }
         else
         {
