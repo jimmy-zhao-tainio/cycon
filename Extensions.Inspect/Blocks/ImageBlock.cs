@@ -41,7 +41,6 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
     private bool _fitToView = true;
     private readonly ZoomState _zoom = new();
     private readonly InputState _input = new();
-    private int _initialHeightRows = -1;
 
     private ImageBlock(BlockId id, string path, int width, int height, byte[] rgbaPixels)
     {
@@ -71,20 +70,10 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
         var availableRows = Math.Max(1, viewportRows - promptReservedRows);
 
         var chromeInsetPx = ChromeSpec.Enabled ? Math.Max(0, ChromeSpec.PaddingPx + ChromeSpec.BorderPx) : 0;
-        var innerWidth = Math.Max(0, width - (chromeInsetPx * 2));
-        var desiredInnerHeightPx = ImageWidth <= 0
-            ? Math.Max(cellH, ImageHeight)
-            : Math.Max(cellH, (int)Math.Round(innerWidth * (double)ImageHeight / ImageWidth));
-        var desiredOuterHeightPx = desiredInnerHeightPx + (chromeInsetPx * 2);
-        var desiredRows = Math.Max(1, (desiredOuterHeightPx + cellH - 1) / cellH);
-        var desiredInitialRows = Math.Min(availableRows, desiredRows);
-        if (_initialHeightRows < 0)
-        {
-            _initialHeightRows = desiredInitialRows;
-        }
-
-        var heightRows = Math.Min(availableRows, Math.Min(desiredRows, _initialHeightRows));
-        return new BlockSize(width, checked(heightRows * cellH));
+        var desiredOuterHeightPx = Math.Max(cellH, ImageHeight) + (chromeInsetPx * 2);
+        var maxOuterHeightPx = checked(availableRows * cellH);
+        var heightPx = Math.Min(desiredOuterHeightPx, maxOuterHeightPx);
+        return new BlockSize(width, heightPx);
     }
 
     public static ImageBlock Load(BlockId id, string path)
