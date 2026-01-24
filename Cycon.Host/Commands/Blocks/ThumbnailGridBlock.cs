@@ -58,12 +58,13 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var width = Math.Max(0, ctx.ContentWidthPx);
         var cellH = Math.Max(1, ctx.CellHeightPx);
         var cellW = Math.Max(1, ctx.CellWidthPx);
+        var snappedWidth = width - (width % cellW);
 
         var gap = Math.Max(4, cellW);
         var tileW = _sizePx + (gap * 2);
         var baseTileH = _sizePx + cellH + (gap * 2);
         var tileH = SnapToStep(baseTileH, cellH);
-        var cols = Math.Max(1, width / Math.Max(1, tileW));
+        var cols = Math.Max(1, snappedWidth / Math.Max(1, tileW));
         var totalRows = Math.Max(1, (int)Math.Ceiling(_entries.Count / (double)cols));
         var heightPxLong = (long)totalRows * tileH;
         var heightPx = heightPxLong >= int.MaxValue ? int.MaxValue : (int)heightPxLong;
@@ -109,8 +110,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         _lastCols = cols;
         _lastVisibleRows = visibleRows;
 
-        var bg = ctx.Theme.BackgroundRgba;
-        canvas.FillRect(viewport, bg);
+        canvas.FillRect(viewport, unchecked((int)0xFF000000));
 
         var fbW = Math.Max(0, ctx.FramebufferWidthPx);
         var fbH = Math.Max(0, ctx.FramebufferHeightPx);
@@ -235,20 +235,15 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         int cellH)
     {
         var tileRect = new RectPx(x, y, tileW, tileH);
-        var border = unchecked((int)0xFF303030);
-        canvas.FillRect(tileRect, unchecked((int)0xFF101010));
+        canvas.FillRect(tileRect, unchecked((int)0xFF000000));
 
-        // Border
-        canvas.FillRect(new RectPx(tileRect.X, tileRect.Y, tileRect.Width, 1), border);
-        canvas.FillRect(new RectPx(tileRect.X, tileRect.Y + tileRect.Height - 1, tileRect.Width, 1), border);
-        canvas.FillRect(new RectPx(tileRect.X, tileRect.Y, 1, tileRect.Height), border);
-        canvas.FillRect(new RectPx(tileRect.X + tileRect.Width - 1, tileRect.Y, 1, tileRect.Height), border);
-
+        var iconSize = Math.Max(8, _sizePx - (cellW * 3));
+        var iconInset = Math.Max(0, (_sizePx - iconSize) / 2);
         var thumbRectF = new RectF(
-            x + gap,
-            y + gap,
-            _sizePx,
-            _sizePx);
+            x + gap + iconInset,
+            y + gap + iconInset,
+            iconSize,
+            iconSize);
 
         if (!OperatingSystem.IsWindows())
         {
@@ -266,7 +261,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         canvas.DrawImage2D(image.ImageId, image.RgbaPixels, image.Width, image.Height, thumbRectF, image.UseNearest);
 
     DrawText:
-        var maxChars = Math.Max(1, (tileW - (gap * 2)) / Math.Max(1, cellW));
+        var maxChars = Math.Max(1, tileW / Math.Max(1, cellW));
         var name = entry.Name ?? string.Empty;
         if (name.Length > maxChars)
         {
@@ -280,7 +275,8 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
             }
         }
 
-        var textX = x + gap;
+        var textW = Math.Min(tileW, name.Length * cellW);
+        var textX = x + Math.Max(0, (tileW - textW) / 2);
         var textY = y + gap + _sizePx + (gap / 2);
         canvas.DrawText(name, 0, name.Length, textX, textY, ctx.Theme.ForegroundRgba);
     }
@@ -308,8 +304,9 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var w = Math.Max(1, (int)Math.Round(rect.Width));
         var h = Math.Max(1, (int)Math.Round(rect.Height));
 
-        var bg = isDirectory ? unchecked((int)0xFF3C2D00) : unchecked((int)0xFF303030);
-        var fg = isDirectory ? unchecked((int)0xFFB48C3C) : unchecked((int)0xFFAAAAAA);
+        _ = isDirectory;
+        var bg = unchecked((int)0xFF000000);
+        var fg = unchecked((int)0xFFB0B0B0);
 
         canvas.FillRect(new RectPx(x, y, w, h), bg);
         var inset = Math.Max(1, Math.Min(w, h) / 8);
