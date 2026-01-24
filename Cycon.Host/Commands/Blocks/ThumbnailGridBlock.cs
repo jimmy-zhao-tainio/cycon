@@ -58,16 +58,18 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var width = Math.Max(0, ctx.ContentWidthPx);
         var cellH = Math.Max(1, ctx.CellHeightPx);
         var cellW = Math.Max(1, ctx.CellWidthPx);
-        var snappedWidth = width - (width % cellW);
+        var chromeInset = ChromeSpec.Enabled ? Math.Max(0, ChromeSpec.BorderPx + ChromeSpec.PaddingPx) : 0;
+        var innerWidth = Math.Max(0, width - (chromeInset * 2));
 
         var gap = Math.Max(4, cellW);
         var tileW = _sizePx + (gap * 2);
         var baseTileH = _sizePx + cellH + (gap * 2);
         var tileH = SnapToStep(baseTileH, cellH);
-        var cols = Math.Max(1, snappedWidth / Math.Max(1, tileW));
+        var cols = Math.Max(1, innerWidth / Math.Max(1, tileW));
         var totalRows = Math.Max(1, (int)Math.Ceiling(_entries.Count / (double)cols));
         var heightPxLong = (long)totalRows * tileH;
         var heightPx = heightPxLong >= int.MaxValue ? int.MaxValue : (int)heightPxLong;
+        heightPx = Math.Max(0, heightPx) + (chromeInset * 2);
         return new BlockSize(width, heightPx);
     }
 
@@ -110,7 +112,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         _lastCols = cols;
         _lastVisibleRows = visibleRows;
 
-        canvas.FillRect(viewport, unchecked((int)0xFF000000));
+        canvas.FillRect(viewport, unchecked((int)0x000000FF));
 
         var fbW = Math.Max(0, ctx.FramebufferWidthPx);
         var fbH = Math.Max(0, ctx.FramebufferHeightPx);
@@ -235,9 +237,9 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         int cellH)
     {
         var tileRect = new RectPx(x, y, tileW, tileH);
-        canvas.FillRect(tileRect, unchecked((int)0xFF000000));
+        canvas.FillRect(tileRect, unchecked((int)0x000000FF));
 
-        var iconSize = Math.Max(8, _sizePx - (cellW * 3));
+        var iconSize = Math.Max(8, _sizePx - (cellW * 4));
         var iconInset = Math.Max(0, (_sizePx - iconSize) / 2);
         var thumbRectF = new RectF(
             x + gap + iconInset,
@@ -305,8 +307,8 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var h = Math.Max(1, (int)Math.Round(rect.Height));
 
         _ = isDirectory;
-        var bg = unchecked((int)0xFF000000);
-        var fg = unchecked((int)0xFFB0B0B0);
+        var bg = unchecked((int)0x000000FF);
+        var fg = unchecked((int)0xB0B0B0FF);
 
         canvas.FillRect(new RectPx(x, y, w, h), bg);
         var inset = Math.Max(1, Math.Min(w, h) / 8);
