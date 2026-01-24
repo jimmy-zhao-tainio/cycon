@@ -1754,7 +1754,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         _document.Selection.ActiveRange = null;
         _interaction.Initialize(_document.Transcript);
+        _capturedInlineViewportBlockId = null;
+        _focusedInlineViewportBlockId = null;
+        _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
+        _hoveredActionSpanIndex = -1;
         SetCaretToEndOfLastPrompt(_document.Transcript);
+        UpdateShellPromptTextIfPresent();
 
         _jobProjectionService.Clear();
         _promptLifecycle.Clear();

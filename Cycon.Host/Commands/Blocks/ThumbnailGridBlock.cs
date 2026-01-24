@@ -15,6 +15,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
     private const int MaxLabelRows = 3;
     private const int TileGutterCols = 1;
     private const int TileExtraCols = 6;
+    private const int IconTextGapPx = 4;
     private readonly IReadOnlyList<FileSystemEntry> _entries;
     private readonly int _sizePx;
     private readonly int _ownerId;
@@ -94,7 +95,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
                 }
             }
 
-            var rowH = SnapToStep(_sizePx + (maxLines * cellH) + (gap * 2), cellH);
+            var rowH = SnapToStep(_sizePx + IconTextGapPx + (maxLines * cellH) + (gap * 2), cellH);
             heightPxLong += rowH;
             if (heightPxLong >= int.MaxValue)
             {
@@ -150,7 +151,7 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
                 }
             }
 
-            var rowH = SnapToStep(_sizePx + (maxLines * cellH) + (gap * 2), cellH);
+            var rowH = SnapToStep(_sizePx + IconTextGapPx + (maxLines * cellH) + (gap * 2), cellH);
             _rowStartsPx[row] = cursorY;
             _rowHeightsPx[row] = rowH;
             _rowLabelLines[row] = maxLines;
@@ -331,11 +332,12 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var tileRect = new RectPx(x, y, tileW, tileH);
         canvas.FillRect(tileRect, unchecked((int)0x000000FF));
 
+        var iconSquareX = x + Math.Max(0, (tileW - _sizePx) / 2);
         var iconSize = Math.Max(16, _sizePx - (cellW * 5));
         var iconInsetX = Math.Max(0, (_sizePx - iconSize) / 2);
         var iconInsetY = Math.Max(0, _sizePx - iconSize); // bottom-aligned
         var thumbRectF = new RectF(
-            x + gap + iconInsetX,
+            iconSquareX + iconInsetX,
             y + gap + iconInsetY,
             iconSize,
             iconSize);
@@ -365,10 +367,8 @@ internal sealed class ThumbnailGridBlock : IBlock, IRenderBlock, IMeasureBlock, 
         var labelAreaHeight = labelAreaLines * cellH;
         var textAreaHeight = neededLines * cellH;
 
-        var labelTopY = y + gap + _sizePx;
-        var textYBase = neededLines == 1
-            ? labelTopY
-            : labelTopY + Math.Max(0, (labelAreaHeight - textAreaHeight) / 2);
+        var labelTopY = y + gap + _sizePx + IconTextGapPx;
+        var textYBase = labelTopY;
 
         var totalCapacity = maxChars * labelAreaLines;
         var needsEllipsis = nameLen > totalCapacity;
