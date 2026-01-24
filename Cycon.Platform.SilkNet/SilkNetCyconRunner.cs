@@ -26,6 +26,8 @@ public static class SilkNetCyconRunner
         var shiftDown = false;
         var altDown = false;
         var buttonsDown = HostMouseButtons.None;
+        var lastMouseX = 0;
+        var lastMouseY = 0;
 
         var pressedKeys = new HashSet<Key>();
         var repeatKeys = new Dictionary<HostKey, long>();
@@ -87,6 +89,9 @@ public static class SilkNetCyconRunner
 
         window.MouseDown += (x, y, button) =>
         {
+            lastMouseX = x;
+            lastMouseY = y;
+
             if (button == MouseButton.Left)
             {
                 if ((buttonsDown & HostMouseButtons.Left) != 0)
@@ -124,6 +129,9 @@ public static class SilkNetCyconRunner
 
         window.MouseMoved += (x, y) =>
         {
+            lastMouseX = x;
+            lastMouseY = y;
+
             session.OnMouseEvent(new HostMouseEvent(
                 HostMouseEventKind.Move,
                 x,
@@ -135,6 +143,9 @@ public static class SilkNetCyconRunner
 
         window.MouseUp += (x, y, button) =>
         {
+            lastMouseX = x;
+            lastMouseY = y;
+
             if (button == MouseButton.Left)
             {
                 if ((buttonsDown & HostMouseButtons.Left) == 0)
@@ -172,6 +183,9 @@ public static class SilkNetCyconRunner
 
         window.MouseWheel += (x, y, delta) =>
         {
+            lastMouseX = x;
+            lastMouseY = y;
+
             session.OnMouseEvent(new HostMouseEvent(
                 HostMouseEventKind.Wheel,
                 x,
@@ -182,7 +196,51 @@ public static class SilkNetCyconRunner
         };
 
         window.FileDropped += path => session.OnFileDrop(new HostFileDropEvent(path));
-        window.FocusChanged += isFocused => session.OnWindowFocusChanged(isFocused);
+        window.FocusChanged += isFocused =>
+        {
+            session.OnWindowFocusChanged(isFocused);
+
+            if (isFocused)
+            {
+                return;
+            }
+
+            var mods = GetModifiers(ctrlDown, shiftDown, altDown);
+            foreach (var key in pressedKeys)
+            {
+                var mapped = MapKey(key);
+                session.OnKeyEvent(new HostKeyEvent(mapped, mods, IsDown: false));
+            }
+
+            if ((buttonsDown & HostMouseButtons.Left) != 0)
+            {
+                session.OnMouseEvent(new HostMouseEvent(
+                    HostMouseEventKind.Up,
+                    lastMouseX,
+                    lastMouseY,
+                    HostMouseButtons.Left,
+                    mods,
+                    0));
+            }
+
+            if ((buttonsDown & HostMouseButtons.Right) != 0)
+            {
+                session.OnMouseEvent(new HostMouseEvent(
+                    HostMouseEventKind.Up,
+                    lastMouseX,
+                    lastMouseY,
+                    HostMouseButtons.Right,
+                    mods,
+                    0));
+            }
+
+            ctrlDown = false;
+            shiftDown = false;
+            altDown = false;
+            buttonsDown = HostMouseButtons.None;
+            pressedKeys.Clear();
+            repeatKeys.Clear();
+        };
         window.PointerInWindowChanged += isInWindow => session.OnPointerInWindowChanged(isInWindow);
 
         window.Render += _ =>
@@ -220,6 +278,8 @@ public static class SilkNetCyconRunner
             {
                 window.VSync = tick.SetVSync.Value;
             }
+
+            window.SetStandardCursor(MapCursor(session.CursorKind));
 
             executor.Resize(tick.FramebufferWidth, tick.FramebufferHeight);
             executor.Execute(tick.Frame, session.Atlas);
@@ -300,6 +360,16 @@ public static class SilkNetCyconRunner
             Key.D => HostKey.D,
             Key.Q => HostKey.Q,
             _ => HostKey.Unknown
+        };
+    }
+
+    private static StandardCursor MapCursor(HostCursorKind kind)
+    {
+        return kind switch
+        {
+            HostCursorKind.Hand => StandardCursor.Hand,
+            HostCursorKind.IBeam => StandardCursor.IBeam,
+            _ => StandardCursor.Arrow
         };
     }
 }

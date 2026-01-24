@@ -6,6 +6,7 @@ using Cycon.Core.Metrics;
 using Cycon.Core.Settings;
 using Cycon.Core.Transcript;
 using Cycon.Layout;
+using Cycon.Layout.HitTesting;
 using Cycon.Layout.Metrics;
 using Cycon.Layout.Scrolling;
 using Cycon.Rendering.Renderer;
@@ -42,7 +43,8 @@ internal sealed class RenderPipeline
         double timeSeconds,
         IReadOnlyDictionary<BlockId, BlockId> commandIndicators,
         IReadOnlyList<int>? meshReleases,
-        BlockId? focusedViewportBlockId = null)
+        BlockId? focusedViewportBlockId = null,
+        HitTestActionSpan? hoveredActionSpan = null)
     {
         var layout = _layoutEngine.Layout(document, layoutSettings, viewport);
         if (restoreAnchor)
@@ -88,7 +90,8 @@ internal sealed class RenderPipeline
             commandIndicators: commandIndicators,
             caretAlpha: caretAlpha,
             meshReleases: meshReleases,
-            focusedViewportBlockId: focusedViewportBlockId);
+            focusedViewportBlockId: focusedViewportBlockId,
+            hoveredActionSpan: hoveredActionSpan);
 
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         return new RenderPipelineResult(backendFrame, backendFrame.BuiltGrid, layout, renderFrame);

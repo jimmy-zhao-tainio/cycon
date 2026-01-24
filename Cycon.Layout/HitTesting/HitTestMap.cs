@@ -42,6 +42,21 @@ public sealed class HitTestMap
 
         return false;
     }
+
+    public bool TryGetActionAt(int pixelX, int pixelY, out int spanIndex)
+    {
+        spanIndex = -1;
+        for (var i = 0; i < ActionSpans.Count; i++)
+        {
+            if (ActionSpans[i].RectPx.Contains(pixelX, pixelY))
+            {
+                spanIndex = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
 
 public readonly record struct HitTestLine(BlockId BlockId, int BlockIndex, int Start, int Length, int RowIndex);

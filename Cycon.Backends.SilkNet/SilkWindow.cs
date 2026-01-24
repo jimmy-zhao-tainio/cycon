@@ -71,6 +71,8 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
     internal Silk.NET.Windowing.IWindow Native => _window;
 
+    private StandardCursor? _lastStandardCursor;
+
     public static SilkWindow Create(int width, int height, string title)
     {
         var options = WindowOptions.Default;
@@ -131,6 +133,31 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     public void Run() => _window.Run();
 
     internal void SwapBuffers() => _window.SwapBuffers();
+
+    public void SetStandardCursor(StandardCursor cursor)
+    {
+        if (_lastStandardCursor == cursor)
+        {
+            return;
+        }
+
+        var mouse = _primaryMouse;
+        if (mouse?.Cursor is null)
+        {
+            return;
+        }
+
+        try
+        {
+            mouse.Cursor.Type = CursorType.Standard;
+            mouse.Cursor.StandardCursor = cursor;
+            _lastStandardCursor = cursor;
+        }
+        catch
+        {
+            // ignore
+        }
+    }
 
     public void Dispose()
     {

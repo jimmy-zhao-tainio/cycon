@@ -6,6 +6,7 @@ using Cycon.Core.Metrics;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Layout;
+using Cycon.Layout.HitTesting;
 using Cycon.Layout.Metrics;
 using Cycon.Rendering.Commands;
 using Cycon.Rendering.Styling;
@@ -23,7 +24,8 @@ public sealed class ConsoleRenderer
         IReadOnlyDictionary<BlockId, BlockId>? commandIndicators = null,
         byte caretAlpha = 0xFF,
         IReadOnlyList<int>? meshReleases = null,
-        BlockId? focusedViewportBlockId = null)
+        BlockId? focusedViewportBlockId = null,
+        HitTestActionSpan? hoveredActionSpan = null)
     {
         var frame = new RenderFrame
         {
@@ -54,6 +56,7 @@ public sealed class ConsoleRenderer
         var nextSceneViewportIndex = 0;
 
         CaretPass.CaretQuad? pendingCaret = null;
+        var hoveredColorRgba = default(int?);
 
         var lines = layout.Lines;
         for (var lineIndex = 0; lineIndex < lines.Count; lineIndex++)
@@ -90,6 +93,12 @@ public sealed class ConsoleRenderer
             }
 
             var lineForeground = TextPass.GetBlockForeground(document.Settings, block);
+            if (hoveredActionSpan is { } hovered &&
+                hoveredColorRgba is null &&
+                block.Id == hovered.BlockId)
+            {
+                hoveredColorRgba = lineForeground;
+            }
 
             if (commandIndicators is not null && block is TextBlock)
             {
@@ -144,6 +153,23 @@ public sealed class ConsoleRenderer
                 lineForeground,
                 selection,
                 selectionStyle.SelectedForegroundRgba);
+        }
+
+        if (hoveredActionSpan is { } hoveredSpan)
+        {
+            var rect = hoveredSpan.RectPx;
+            var x = rect.X;
+            var y = rect.Y - scrollYPx;
+            var w = rect.Width;
+            var h = rect.Height;
+
+            if (w > 0 && h > 0 && y < grid.FramebufferHeightPx && y + h > 0)
+            {
+                var underlineH = Math.Max(1, Math.Min(2, h / 8));
+                var underlineY = y + h - underlineH;
+                var rgba = hoveredColorRgba ?? document.Settings.DefaultTextStyle.ForegroundRgba;
+                frame.Add(new DrawQuad(x, underlineY, w, underlineH, rgba));
+            }
         }
 
         if (pendingCaret is { } caretQuad)

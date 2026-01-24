@@ -38,7 +38,9 @@ internal sealed class CommandHost
         _blockCommands.RegisterCore(new ViewFallbackBlockCommandHandler());
         configureBlockCommands?.Invoke(_blockCommands);
 
-        _completion = new InputCompletionController(new CommandCompletionProvider(_blockCommands));
+        _completion = new InputCompletionController(
+            new CommandCompletionProvider(_blockCommands),
+            new FilePathCompletionProvider());
     }
 
     public BlockCommandRegistry BlockCommands => _blockCommands;
@@ -77,13 +79,6 @@ internal sealed class CommandHost
         }
 
         var actions = new List<CommandHostAction>(3);
-        if (matchesLine is not null)
-        {
-            var id = view.AllocateBlockId();
-            actions.Add(new CommandHostAction.InsertTextBlockBefore(promptId, id, matchesLine, ConsoleTextStream.System));
-            actions.Add(new CommandHostAction.SetFollowingTail(true));
-        }
-
         actions.Add(new CommandHostAction.UpdatePrompt(promptId, newInput, Math.Clamp(newCaret, 0, newInput.Length)));
         actions.Add(new CommandHostAction.RequestContentRebuild());
         return actions;

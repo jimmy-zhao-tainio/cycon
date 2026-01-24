@@ -23,11 +23,20 @@ public sealed class CdBlockCommandHandler : IBlockCommandHandler
 
         if (request.Args.Count == 0)
         {
-            ctx.InsertTextAfterCommandEcho(fs.CurrentDirectory, ConsoleTextStream.Stdout);
+            if (!fs.TrySetCurrentDirectory(fs.HomeDirectory, out var homeError))
+            {
+                ctx.InsertTextAfterCommandEcho(homeError, ConsoleTextStream.System);
+            }
+
             return true;
         }
 
         var rawPath = request.Args.Count == 1 ? request.Args[0] : string.Join(" ", request.Args);
+        if (string.Equals(rawPath, "~", StringComparison.Ordinal))
+        {
+            rawPath = fs.HomeDirectory;
+        }
+
         if (!fs.TrySetCurrentDirectory(rawPath, out var error))
         {
             ctx.InsertTextAfterCommandEcho(error, ConsoleTextStream.System);
@@ -36,4 +45,3 @@ public sealed class CdBlockCommandHandler : IBlockCommandHandler
         return true;
     }
 }
-

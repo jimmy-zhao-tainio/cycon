@@ -316,7 +316,7 @@ public sealed class InteractionReducer
         var normalizedCharIndex = NormalizePromptPrefix(transcript, pos.Value.BlockId, pos.Value.CharIndex);
 
         if ((e.Mods & HostKeyModifiers.Shift) == 0 &&
-            frame.HitTestMap.TryGetActionAt(e.X, e.Y, out var commandText) &&
+            frame.HitTestMap.TryGetActionAt(e.X, e.Y, out string commandText) &&
             FindLastPromptId(transcript) is { } lastPromptId &&
             TryGetPrompt(transcript, lastPromptId, out var promptForInsert) &&
             promptForInsert.Owner is null)

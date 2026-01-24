@@ -81,13 +81,6 @@ public sealed class InputCompletionController
             return true;
         }
 
-        if (_state.TabCount == 1)
-        {
-            matchesLine = "Matches: " + string.Join(" ", candidatesList);
-            _state.TabCount = 2;
-            return true;
-        }
-
         var delta = reverseCycle ? -1 : 1;
         if (_state.CycleIndex < 0 && reverseCycle)
         {
@@ -168,11 +161,6 @@ public sealed class InputCompletionController
         target = default;
 
         var tokens = TokenizeWithRanges(input);
-        if (tokens.Count == 0)
-        {
-            target = new Target(CompletionMode.CommandName, Prefix: string.Empty, ReplaceStart: 0, ReplaceLength: 0);
-            return true;
-        }
 
         var tokenIndex = -1;
         for (var i = 0; i < tokens.Count; i++)
@@ -186,38 +174,87 @@ public sealed class InputCompletionController
 
         if (tokenIndex == -1)
         {
-            return false;
+            // Allow completion in whitespace at the end by treating it as an empty token.
+            if (caret == input.Length && (input.Length == 0 || char.IsWhiteSpace(input[^1])))
+            {
+                tokens.Add(new TokenRange(caret, caret, IsQuoted: false));
+                tokenIndex = tokens.Count - 1;
+            }
+            else
+            {
+                return false;
+            }
         }
 
         var token = tokens[tokenIndex];
-        if (token.IsQuoted)
-        {
-            return false;
-        }
 
         if (tokenIndex == 0)
         {
-            var prefixLen = Math.Clamp(caret - token.Start, 0, token.End - token.Start);
-            var prefix = input.Substring(token.Start, prefixLen);
-            target = new Target(CompletionMode.CommandName, prefix, token.Start, token.End - token.Start);
+            var (replaceStart, replaceLength, prefix) = GetTokenReplaceAndPrefix(input, token, caret);
+            target = new Target(CompletionMode.CommandName, prefix, replaceStart, replaceLength);
             return true;
         }
 
         var firstTokenText = input.Substring(tokens[0].Start, tokens[0].End - tokens[0].Start);
         if (IsHelpToken(firstTokenText) && tokenIndex == 1)
         {
-            var prefixLen = Math.Clamp(caret - token.Start, 0, token.End - token.Start);
-            var prefix = input.Substring(token.Start, prefixLen);
-            target = new Target(CompletionMode.HelpTarget, prefix, token.Start, token.End - token.Start);
+            var (replaceStart, replaceLength, prefix) = GetTokenReplaceAndPrefix(input, token, caret);
+            target = new Target(CompletionMode.HelpTarget, prefix, replaceStart, replaceLength);
             return true;
         }
 
-        return false;
+        var tokenText = token.Start >= 0 && token.End >= token.Start && token.End <= input.Length
+            ? input.Substring(token.Start, token.End - token.Start)
+            : string.Empty;
+
+        if (tokenText.StartsWith("-", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        {
+            var (replaceStart, replaceLength, prefix) = GetTokenReplaceAndPrefix(input, token, caret);
+            target = new Target(CompletionMode.FilePath, prefix, replaceStart, replaceLength);
+            return true;
+        }
     }
 
     private static bool IsHelpToken(string token) =>
         string.Equals(token, "help", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(token, "?", StringComparison.OrdinalIgnoreCase);
+
+    private static (int ReplaceStart, int ReplaceLength, string Prefix) GetTokenReplaceAndPrefix(string input, TokenRange token, int caret)
+    {
+        var start = token.Start;
+        var end = token.End;
+        start = Math.Clamp(start, 0, input.Length);
+        end = Math.Clamp(end, start, input.Length);
+
+        if (token.IsQuoted)
+        {
+            // TokenStart is at the opening quote, End is after closing quote (if present).
+            var contentStart = Math.Min(input.Length, start + 1);
+            var contentEnd = end;
+            if (contentEnd > contentStart && (input[contentEnd - 1] == '"' || input[contentEnd - 1] == '\''))
+            {
+                contentEnd--;
+            }
+
+            var replaceStart = contentStart;
+            var replaceLength = Math.Max(0, contentEnd - contentStart);
+            var prefixLen = Math.Clamp(caret - contentStart, 0, replaceLength);
+            var prefix = input.Substring(contentStart, prefixLen);
+            return (replaceStart, replaceLength, prefix);
+        }
+
+        {
+            var replaceStart = start;
+            var replaceLength = end - start;
+            var prefixLen = Math.Clamp(caret - start, 0, replaceLength);
+            var prefix = input.Substring(start, prefixLen);
+            return (replaceStart, replaceLength, prefix);
+        }
+    }
 
     private static List<TokenRange> TokenizeWithRanges(string input)
     {

@@ -28,6 +28,7 @@ using Cycon.Host.Services;
 using Cycon.Layout;
 using Cycon.Layout.Metrics;
 using Cycon.Layout.Scrolling;
+using Cycon.Layout.HitTesting;
 using Cycon.Rendering.Renderer;
 using Cycon.Rendering.Styling;
 using Cycon.Runtime.Events;
@@ -72,6 +73,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private readonly SystemFileSystem _fileSystem = new();
     private readonly Dictionary<char, string> _lastDirectoryPerDrive = new();
     private string _currentDirectory = string.Empty;
+    private string _homeDirectory = string.Empty;
+    private HostCursorKind _cursorKind;
+    private HitTestActionSpan? _hoveredActionSpan;
+    private int _hoveredActionSpanIndex = -1;
+    private int _lastMouseX;
+    private int _lastMouseY;
     private BlockId? _capturedInlineViewportBlockId;
     private BlockId? _focusedInlineViewportBlockId;
     private Scene3DNavKeys _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
@@ -98,6 +105,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _document = CreateDocument(text);
         _interaction.Initialize(_document.Transcript);
         SetCaretToEndOfLastPrompt(_document.Transcript);
+        InitializeHomeDirectory();
         InitializeWorkingDirectory();
         _defaultPromptText = FindLastPrompt(_document.Transcript)?.Prompt ?? "> ";
         _promptLifecycle = new PromptLifecycle(_document, _defaultPromptText);
@@ -160,7 +168,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     public GlyphAtlasData Atlas => _atlasData;
 
+    public HostCursorKind CursorKind => _cursorKind;
+
     string IBlockCommandSession.CurrentDirectory => _currentDirectory;
+
+    string IBlockCommandSession.HomeDirectory => _homeDirectory;
 
     string IBlockCommandSession.ResolvePath(string path) => ConsolePathResolver.ResolvePath(_currentDirectory, _lastDirectoryPerDrive, path);
 
@@ -191,6 +203,17 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     public void OnPointerInWindowChanged(bool isInWindow)
     {
         _scrollbarController.OnPointerInWindowChanged(isInWindow);
+        if (!isInWindow)
+        {
+            if (_hoveredActionSpan is not null)
+            {
+                _hoveredActionSpan = null;
+                _hoveredActionSpanIndex = -1;
+                _pendingContentRebuild = true;
+            }
+
+            _cursorKind = HostCursorKind.Default;
+        }
     }
 
     public void OnFileDrop(HostFileDropEvent e)
@@ -723,6 +746,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 var mouseEvent = mouseRaw.Event;
                 var viewportRectPx = new PxRect(0, 0, framebufferWidth, framebufferHeight);
 
+                _lastMouseX = mouseEvent.X;
+                _lastMouseY = mouseEvent.Y;
+
                 if (mouseEvent.Kind == HostMouseEventKind.Down)
                 {
                     var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
@@ -734,6 +760,14 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                     else
                     {
                         SetFocusedInlineViewport(null);
+                    }
+                }
+
+                if (mouseEvent.Kind == HostMouseEventKind.Move)
+                {
+                    if (UpdateHoverAndCursor(mouseEvent.X, mouseEvent.Y, _lastLayout))
+                    {
+                        _pendingContentRebuild = true;
                     }
                 }
 
@@ -816,7 +850,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             timeSeconds: timeSeconds,
             _visibleCommandIndicators,
             TakePendingMeshReleases(),
-            focusedViewportBlockId: _focusedInlineViewportBlockId);
+            focusedViewportBlockId: _focusedInlineViewportBlockId,
+            hoveredActionSpan: _hoveredActionSpan);
 
         _lastFrame = result.BackendFrame;
         _lastLayout = result.Layout;
@@ -825,6 +860,50 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(nowTicks);
         _lastCaretRenderTicks = nowTicks;
         ClearPendingMeshReleases();
+    }
+
+    private bool UpdateHoverAndCursor(int mouseX, int mouseY, LayoutFrame layout)
+    {
+        var scrollOffsetRows = GetScrollOffsetRows(_document, layout);
+        var adjustedY = mouseY + (scrollOffsetRows * layout.Grid.CellHeightPx);
+
+        HostCursorKind cursor;
+
+        var hoveredIndex = -1;
+        if (layout.HitTestMap.TryGetActionAt(mouseX, adjustedY, out hoveredIndex) &&
+            hoveredIndex >= 0 &&
+            hoveredIndex < layout.HitTestMap.ActionSpans.Count)
+        {
+            var span = layout.HitTestMap.ActionSpans[hoveredIndex];
+            cursor = HostCursorKind.Hand;
+
+            var hoverChanged = _hoveredActionSpanIndex != hoveredIndex || _hoveredActionSpan != span;
+            _hoveredActionSpan = span;
+            _hoveredActionSpanIndex = hoveredIndex;
+            _cursorKind = cursor;
+            return hoverChanged;
+        }
+
+        var clearedHover = _hoveredActionSpan is not null;
+        _hoveredActionSpan = null;
+        _hoveredActionSpanIndex = -1;
+
+        cursor = HostCursorKind.Default;
+        if (layout.HitTestMap.Lines.Count > 0)
+        {
+            var hit = new HitTester().HitTest(layout.HitTestMap, mouseX, adjustedY);
+            if (hit is { } pos && TryGetBlockById(pos.BlockId, out var block))
+            {
+                if (block is PromptBlock ||
+                    (block is ITextSelectable selectable && selectable.CanSelect))
+                {
+                    cursor = HostCursorKind.IBeam;
+                }
+            }
+        }
+
+        _cursorKind = cursor;
+        return clearedHover;
     }
 
     private InputEvent? Translate(PendingEvent e)
@@ -1773,6 +1852,31 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     {
         var dir = Directory.GetCurrentDirectory();
         TrySetCurrentDirectory(dir, out _);
+    }
+
+    private void InitializeHomeDirectory()
+    {
+        try
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(home))
+            {
+                _homeDirectory = Path.GetFullPath(home);
+                return;
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            _homeDirectory = Path.GetFullPath(Directory.GetCurrentDirectory());
+        }
+        catch
+        {
+            _homeDirectory = string.Empty;
+        }
     }
 
     private bool TrySetCurrentDirectory(string directory, out string error)

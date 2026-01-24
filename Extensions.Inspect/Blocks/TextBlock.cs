@@ -334,6 +334,8 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
         var shouldDrawCaret = _hasMouseFocus && !hasSelection && TryGetCaretForNavigation(out caretPos);
         var caretRect = default(RectPx);
         var hasCaretRect = false;
+        var caretDrawLineIndex = -1;
+        var caretDrawCharIndex = -1;
         var lineIndex = _scrollModel.TopLineIndex;
         var subRow = _scrollModel.TopLineSubRow;
         var screenRow = 0;
@@ -355,6 +357,7 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
                 {
                     var spanStart = span.Start;
                     var spanEnd = checked(spanStart + drawLen);
+                    var spanEndFull = checked(spanStart + span.Length);
 
                     if (!hasSelection || lineIndex < selStart.LineIndex || lineIndex > selEnd.LineIndex)
                     {
@@ -399,22 +402,53 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
 
                     if (shouldDrawCaret && !hasCaretRect && lineIndex == caretPos.LineIndex)
                     {
-                        if (caretPos.CharIndex >= spanStart && caretPos.CharIndex <= spanEnd)
+                        if (caretPos.CharIndex >= spanStart && caretPos.CharIndex <= spanEndFull)
                         {
-                            var caretW = Math.Max(1, Math.Min(2, cellW / 4));
-                            var col = Math.Clamp(caretPos.CharIndex - spanStart, 0, drawLen);
-                            var caretX = xPx + (col * cellW);
-                            var maxCaretX = xPx + (cols * cellW) - caretW;
-                            if (caretX > maxCaretX)
+                            var logicalCol = caretPos.CharIndex - spanStart;
+                            var caretCol = logicalCol;
+                            var drawIndex = -1;
+
+                            if (caretPos.CharIndex < spanEndFull)
                             {
-                                caretX = maxCaretX;
+                                if (logicalCol >= cols)
+                                {
+                                    caretCol = Math.Max(0, cols - 1);
+                                    drawIndex = spanStart + caretCol;
+                                }
+                                else
+                                {
+                                    caretCol = logicalCol;
+                                    drawIndex = caretPos.CharIndex;
+                                }
+                            }
+                            else
+                            {
+                                if (logicalCol >= cols)
+                                {
+                                    caretCol = Math.Max(0, cols - 1);
+                                    drawIndex = drawLen > 0 ? spanStart + Math.Min(caretCol, drawLen - 1) : -1;
+                                }
+                                else
+                                {
+                                    caretCol = logicalCol;
+                                }
                             }
 
-                            if (caretX >= viewport.X && caretX < viewport.X + viewport.Width)
+                            if (caretCol < 0)
                             {
-                                caretRect = new RectPx(caretX, yPx, caretW, cellH);
-                                hasCaretRect = caretRect.Width > 0 && caretRect.Height > 0;
+                                caretCol = 0;
                             }
+
+                            if (cols > 0 && caretCol >= cols)
+                            {
+                                caretCol = cols - 1;
+                            }
+
+                            var caretX = xPx + (caretCol * cellW);
+                            caretRect = new RectPx(caretX, yPx, cellW, cellH);
+                            hasCaretRect = caretRect.Width > 0 && caretRect.Height > 0;
+                            caretDrawLineIndex = lineIndex;
+                            caretDrawCharIndex = drawIndex;
                         }
                     }
                 }
@@ -422,19 +456,10 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
                 {
                     if (caretPos.CharIndex == span.Start)
                     {
-                        var caretW = Math.Max(1, Math.Min(2, cellW / 4));
-                        var caretX = xPx;
-                        var maxCaretX = xPx + (cols * cellW) - caretW;
-                        if (caretX > maxCaretX)
-                        {
-                            caretX = maxCaretX;
-                        }
-
-                        if (caretX >= viewport.X && caretX < viewport.X + viewport.Width)
-                        {
-                            caretRect = new RectPx(caretX, yPx, caretW, cellH);
-                            hasCaretRect = caretRect.Width > 0 && caretRect.Height > 0;
-                        }
+                        caretRect = new RectPx(xPx, yPx, cellW, cellH);
+                        hasCaretRect = caretRect.Width > 0 && caretRect.Height > 0;
+                        caretDrawLineIndex = lineIndex;
+                        caretDrawCharIndex = -1;
                     }
                 }
 
@@ -448,6 +473,17 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
         if (hasCaretRect)
         {
             canvas.FillRect(caretRect, fg);
+
+            if (caretDrawLineIndex >= 0 &&
+                caretDrawLineIndex < _lines.Count &&
+                caretDrawCharIndex >= 0)
+            {
+                var caretLine = _lines[caretDrawLineIndex];
+                if (caretDrawCharIndex < caretLine.Length)
+                {
+                    canvas.DrawText(caretLine, caretDrawCharIndex, 1, caretRect.X, caretRect.Y, ctx.Theme.BackgroundRgba);
+                }
+            }
         }
     }
 
@@ -583,6 +619,11 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
                 return false;
             }
 
+            if (next == caret)
+            {
+                return false;
+            }
+
             _selection = new TextRange(anchor, next);
             _selectionCaret = next;
             EnsureCaretVisible(next);
@@ -600,6 +641,11 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
         }
 
         if (!TryMoveCaret(caret, e.Key, out var moved))
+        {
+            return false;
+        }
+
+        if (moved == caret)
         {
             return false;
         }
@@ -802,16 +848,15 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
                 if (spanRow > 0)
                 {
                     var prev = spans[spanRow - 1];
-                    moved = new TextPos(caret.LineIndex, prev.Start + prev.Length);
-                    return true;
-                }
-                if (caret.LineIndex > 0)
-                {
-                    var prevLine = caret.LineIndex - 1;
-                    var prevWrapped = _scrollModel.GetWrappedLine(prevLine);
-                    var prevSpan = prevWrapped.Spans[^1];
-                    moved = new TextPos(prevLine, prevSpan.Start + prevSpan.Length);
-                    return true;
+                    var prevEnd = prev.Start + prev.Length;
+                    if (prevEnd > prev.Start)
+                    {
+                        moved = new TextPos(caret.LineIndex, prevEnd - 1);
+                        return true;
+                    }
+
+                    moved = new TextPos(caret.LineIndex, prev.Start);
+                    return moved != caret;
                 }
                 return false;
 
@@ -825,11 +870,6 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
                 {
                     var nextSpan = spans[spanRow + 1];
                     moved = new TextPos(caret.LineIndex, nextSpan.Start);
-                    return true;
-                }
-                if (caret.LineIndex + 1 < _lines.Count)
-                {
-                    moved = new TextPos(caret.LineIndex + 1, 0);
                     return true;
                 }
                 return false;
@@ -926,12 +966,24 @@ public sealed class InspectTextBlock : IBlock, IMouseFocusableViewportBlock, IBl
         for (var i = 0; i < spans.Length; i++)
         {
             var span = spans[i];
-            var endInclusive = span.Start + span.Length;
-            if (caret.CharIndex <= endInclusive)
+            var endExclusive = span.Start + span.Length;
+            if (caret.CharIndex < endExclusive)
             {
                 spanRow = i;
                 col = Math.Clamp(caret.CharIndex - span.Start, 0, span.Length);
                 return true;
+            }
+
+            if (caret.CharIndex == endExclusive)
+            {
+                if (i == spans.Length - 1)
+                {
+                    spanRow = i;
+                    col = span.Length;
+                    return true;
+                }
+
+                continue;
             }
         }
 
