@@ -115,7 +115,6 @@ internal sealed class ShellThumbnailService : IThumbnailService
             var rgba = isDirectory
                 ? BuildFolderIconRgba(sizePx, sizePx)
                 : BuildFileIconRgba(sizePx, sizePx);
-            ToGrayscaleInPlace(rgba);
 
             var image = new ThumbnailImage(AllocateImageId(), rgba, sizePx, sizePx, UseNearest: false);
             _fallbackIcons[(isDirectory, sizePx)] = image;
@@ -200,7 +199,6 @@ internal sealed class ShellThumbnailService : IThumbnailService
 
             if (TryGetShellThumbnail(item.Path, item.SizePx, out var rgba, out var width, out var height))
             {
-                ToGrayscaleInPlace(rgba);
                 var image = new ThumbnailImage(AllocateImageId(), rgba, width, height, UseNearest: false);
                 InsertIntoCache(key, image);
                 return;
@@ -376,23 +374,6 @@ internal sealed class ShellThumbnailService : IThumbnailService
         }
 
         return true;
-    }
-
-    private static void ToGrayscaleInPlace(byte[] rgba)
-    {
-        // RGBA bytes.
-        for (var i = 0; i + 3 < rgba.Length; i += 4)
-        {
-            var r = rgba[i];
-            var g = rgba[i + 1];
-            var b = rgba[i + 2];
-
-            // Approx. Rec.601 luma, integer math.
-            var y = (byte)((r * 77 + g * 150 + b * 29) >> 8);
-            rgba[i] = y;
-            rgba[i + 1] = y;
-            rgba[i + 2] = y;
-        }
     }
 
     private static byte[] BuildFolderIconRgba(int width, int height)
