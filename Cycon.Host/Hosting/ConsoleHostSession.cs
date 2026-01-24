@@ -91,6 +91,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private BlockId? _hoveredGridBlockId;
     private int _lastMouseX;
     private int _lastMouseY;
+    private bool _hasMousePosition;
     private BlockId? _capturedInlineViewportBlockId;
     private BlockId? _focusedInlineViewportBlockId;
     private Scene3DNavKeys _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
@@ -362,6 +363,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 var passNowTicks = Stopwatch.GetTimestamp();
 
                 FreezeTranscriptFollowTailWhileViewportFocused();
+
+                if (_hasMousePosition && _lastLayout is not null)
+                {
+                    _ = UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout);
+                }
+
                 var viewport = new ConsoleViewport(snapW, snapH);
                 var result = _renderPipeline.BuildFrame(
                     _document,
@@ -439,6 +446,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         if (_pendingContentRebuild)
         {
             FreezeTranscriptFollowTailWhileViewportFocused();
+
+            if (_hasMousePosition && _lastLayout is not null)
+            {
+                _ = UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout);
+            }
+
             var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
             var result = _renderPipeline.BuildFrame(
                 _document,
@@ -782,6 +795,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
                 _lastMouseX = mouseEvent.X;
                 _lastMouseY = mouseEvent.Y;
+                _hasMousePosition = true;
 
                 if (mouseEvent.Kind == HostMouseEventKind.Down)
                 {
@@ -887,6 +901,13 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
         FreezeTranscriptFollowTailWhileViewportFocused();
+
+        // Keep hover visuals in sync when the transcript scrolls without mouse movement.
+        if (_hasMousePosition && _lastLayout is not null)
+        {
+            _ = UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout);
+        }
+
         var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
         var result = _renderPipeline.BuildFrame(
             _document,
@@ -1882,6 +1903,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _focusedInlineViewportBlockId = null;
         _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
         _hoveredActionSpanIndex = -1;
+        _hoveredActionSpan = null;
         ClearSelectedActionSpan();
         _lastGridClickTicks = 0;
         _lastGridClickEntryIndex = -1;
