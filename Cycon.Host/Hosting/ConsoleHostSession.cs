@@ -363,12 +363,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 var passNowTicks = Stopwatch.GetTimestamp();
 
                 FreezeTranscriptFollowTailWhileViewportFocused();
-
-                if (_hasMousePosition && _lastLayout is not null)
-                {
-                    _ = UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout);
-                }
-
                 var viewport = new ConsoleViewport(snapW, snapH);
                 var result = _renderPipeline.BuildFrame(
                     _document,
@@ -391,6 +385,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(passNowTicks);
                 _lastCaretRenderTicks = passNowTicks;
                 ClearPendingMeshReleases();
+
+                if (_hasMousePosition && _lastLayout is not null && UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout))
+                {
+                    _pendingContentRebuild = true;
+                }
 
                 var verifySnapshot = _resizeCoordinator.GetLatestSnapshot();
                 var verifyGrid = verifySnapshot.Grid;
@@ -446,12 +445,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         if (_pendingContentRebuild)
         {
             FreezeTranscriptFollowTailWhileViewportFocused();
-
-            if (_hasMousePosition && _lastLayout is not null)
-            {
-                _ = UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout);
-            }
-
             var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
             var result = _renderPipeline.BuildFrame(
                 _document,
@@ -476,6 +469,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             _lastCaretRenderTicks = rebuiltTicks;
             _pendingContentRebuild = false;
             ClearPendingMeshReleases();
+
+            if (_hasMousePosition && _lastLayout is not null && UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout))
+            {
+                _pendingContentRebuild = true;
+            }
         }
 
         MaybeUpdateOverlays(framebufferWidth, framebufferHeight, nowTicks, resizePlan.FramebufferSettled);
@@ -903,13 +901,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
         FreezeTranscriptFollowTailWhileViewportFocused();
-
-        // Keep hover visuals in sync when the transcript scrolls without mouse movement.
-        if (_hasMousePosition && _lastLayout is not null)
-        {
-            _ = UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout);
-        }
-
         var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
         var result = _renderPipeline.BuildFrame(
             _document,
@@ -932,6 +923,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(nowTicks);
         _lastCaretRenderTicks = nowTicks;
         ClearPendingMeshReleases();
+
+        if (_hasMousePosition && _lastLayout is not null && UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout))
+        {
+            _pendingContentRebuild = true;
+        }
     }
 
     private bool UpdateHoverAndCursor(int mouseX, int mouseY, LayoutFrame layout)
