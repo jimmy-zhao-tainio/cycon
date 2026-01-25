@@ -739,9 +739,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 }
                 else if (_focusedInlineViewportBlockId is not null)
                 {
-                    if (TryHandleFocusedInlineViewportKey(key))
+                    var handledFocusedKey = TryHandleFocusedInlineViewportKey(key);
+                    if (handledFocusedKey)
                     {
                         _pendingContentRebuild = true;
+                        continue;
                     }
 
                     if (_focusedInlineViewportBlockId is not null)
