@@ -933,7 +933,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         HostCursorKind cursor;
 
         var hoveredIndex = -1;
-        if (layout.HitTestMap.TryGetActionAt(mouseX, adjustedY, out hoveredIndex) &&
+        if (TryGetActionSpanIndexOnRow(layout, mouseX, adjustedY, out hoveredIndex) &&
             hoveredIndex >= 0 &&
             hoveredIndex < layout.HitTestMap.ActionSpans.Count)
         {
@@ -2435,6 +2435,72 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private static bool IsCdCommand(string commandText) => commandText.StartsWith("cd ", StringComparison.OrdinalIgnoreCase);
 
+    private static bool TryGetActionSpanIndexOnRow(LayoutFrame layout, int pixelX, int pixelY, out int spanIndex)
+    {
+        var map = layout.HitTestMap;
+        if (map.TryGetActionAt(pixelX, pixelY, out spanIndex))
+        {
+            return true;
+        }
+
+        spanIndex = -1;
+        var grid = layout.Grid;
+        var cellH = grid.CellHeightPx;
+        if (cellH <= 0)
+        {
+            return false;
+        }
+
+        var localY = pixelY - grid.PaddingTopPx;
+        if (localY < 0)
+        {
+            return false;
+        }
+
+        var row = localY / cellH;
+        var rowY = grid.PaddingTopPx + (row * cellH);
+
+        var best = -1;
+        var bestDist = int.MaxValue;
+        var spans = map.ActionSpans;
+        for (var i = 0; i < spans.Count; i++)
+        {
+            var span = spans[i];
+            var r = span.RectPx;
+            if (r.Y > rowY)
+            {
+                break;
+            }
+
+            if (r.Y != rowY)
+            {
+                continue;
+            }
+
+            var dist = 0;
+            if (pixelX < r.X) dist = r.X - pixelX;
+            else if (pixelX >= r.X + r.Width) dist = pixelX - (r.X + r.Width);
+
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = i;
+                if (dist == 0)
+                {
+                    break;
+                }
+            }
+        }
+
+        if (best >= 0)
+        {
+            spanIndex = best;
+            return true;
+        }
+
+        return false;
+    }
+
     private void ClearSelectedActionSpan()
     {
         _selectedActionSpanIndex = -1;
@@ -2579,7 +2645,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         var scrollOffsetRows = GetScrollOffsetRows(_document, layout);
         var adjustedY = mouseEvent.Y + (scrollOffsetRows * layout.Grid.CellHeightPx);
 
-        if (!layout.HitTestMap.TryGetActionAt(mouseEvent.X, adjustedY, out int spanIndex) ||
+        if (!TryGetActionSpanIndexOnRow(layout, mouseEvent.X, adjustedY, out int spanIndex) ||
             spanIndex < 0 ||
             spanIndex >= layout.HitTestMap.ActionSpans.Count)
         {

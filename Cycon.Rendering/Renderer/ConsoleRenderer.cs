@@ -94,7 +94,7 @@ public sealed class ConsoleRenderer
 
         HitTestActionSpan? hoveredSpan = null;
         if (hasMousePosition &&
-            layout.HitTestMap.TryGetActionAt(mouseX, mouseY + scrollYPx, out int hoveredIndex) &&
+            TryGetActionSpanIndexOnRow(layout, mouseX, mouseY + scrollYPx, out var hoveredIndex) &&
             hoveredIndex >= 0 &&
             hoveredIndex < layout.HitTestMap.ActionSpans.Count)
         {
@@ -104,14 +104,14 @@ public sealed class ConsoleRenderer
         // Inverted highlight for clickable entries: bg becomes fg, text becomes bg.
         if (selectedSpan is { } selectedSpanValue)
         {
-            AddActionSpanHighlight(frame, selectedSpanValue, scrollYPx, layout.Grid.FramebufferHeightPx, defaultFg);
+            AddActionSpanHighlight(frame, selectedSpanValue, scrollYPx, layout.Grid, defaultFg);
         }
         if (hoveredSpan is { } h)
         {
             // Don't double-layer when the same segment is both selected and hovered.
             if (selectedSpan is null || h != selectedSpan.Value)
             {
-                AddActionSpanHighlight(frame, h, scrollYPx, layout.Grid.FramebufferHeightPx, defaultFg);
+                AddActionSpanHighlight(frame, h, scrollYPx, layout.Grid, defaultFg);
             }
         }
 
@@ -227,24 +227,90 @@ public sealed class ConsoleRenderer
         return Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
     }
 
-    private static void AddActionSpanHighlight(RenderFrame frame, in HitTestActionSpan span, int scrollYPx, int framebufferHeightPx, int rgba)
+    private static void AddActionSpanHighlight(RenderFrame frame, in HitTestActionSpan span, int scrollYPx, in FixedCellGrid grid, int rgba)
     {
         var rect = span.RectPx;
-        var x = rect.X;
+        var x = grid.PaddingLeftPx;
         var y = rect.Y - scrollYPx;
-        var w = rect.Width;
-        var h = rect.Height;
+        var w = grid.ContentWidthPx;
+        var h = grid.CellHeightPx;
 
         if (w <= 0 || h <= 0)
         {
             return;
         }
 
-        if (y >= framebufferHeightPx || y + h <= 0)
+        if (y >= grid.FramebufferHeightPx || y + h <= 0)
         {
             return;
         }
 
         frame.Add(new DrawQuad(x, y, w, h, rgba));
+    }
+
+    private static bool TryGetActionSpanIndexOnRow(LayoutFrame layout, int pixelX, int pixelY, out int spanIndex)
+    {
+        var map = layout.HitTestMap;
+        if (map.TryGetActionAt(pixelX, pixelY, out spanIndex))
+        {
+            return true;
+        }
+
+        spanIndex = -1;
+        var grid = layout.Grid;
+        var cellH = grid.CellHeightPx;
+        if (cellH <= 0)
+        {
+            return false;
+        }
+
+        var localY = pixelY - grid.PaddingTopPx;
+        if (localY < 0)
+        {
+            return false;
+        }
+
+        var row = localY / cellH;
+        var rowY = grid.PaddingTopPx + (row * cellH);
+
+        var best = -1;
+        var bestDist = int.MaxValue;
+        var spans = map.ActionSpans;
+        for (var i = 0; i < spans.Count; i++)
+        {
+            var span = spans[i];
+            var r = span.RectPx;
+            if (r.Y > rowY)
+            {
+                break;
+            }
+
+            if (r.Y != rowY)
+            {
+                continue;
+            }
+
+            var dist = 0;
+            if (pixelX < r.X) dist = r.X - pixelX;
+            else if (pixelX >= r.X + r.Width) dist = pixelX - (r.X + r.Width);
+
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                best = i;
+                if (dist == 0)
+                {
+                    break;
+                }
+            }
+        }
+
+        if (best >= 0)
+        {
+            spanIndex = best;
+            return true;
+        }
+
+        return false;
     }
 }
