@@ -538,7 +538,13 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             commandIndicators: _visibleCommandIndicators,
             caretAlpha: caretAlpha,
             meshReleases: TakePendingMeshReleases(),
-            focusedViewportBlockId: _focusedInlineViewportBlockId);
+            focusedViewportBlockId: _focusedInlineViewportBlockId,
+            selectedActionSpanBlockId: _selectedActionSpanBlockId,
+            selectedActionSpanCommandText: _selectedActionSpanCommandText,
+            selectedActionSpanIndex: _selectedActionSpanIndex,
+            hasMousePosition: _hasMousePosition,
+            mouseX: _lastMouseX,
+            mouseY: _lastMouseY);
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         ClearPendingMeshReleases();
         _lastFrame = backendFrame;
