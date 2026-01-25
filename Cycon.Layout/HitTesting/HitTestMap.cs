@@ -61,4 +61,4 @@ public sealed class HitTestMap
 
 public readonly record struct HitTestLine(BlockId BlockId, int BlockIndex, int Start, int Length, int RowIndex);
 
-public readonly record struct HitTestActionSpan(BlockId BlockId, PxRect RectPx, string CommandText);
+public readonly record struct HitTestActionSpan(BlockId BlockId, PxRect RectPx, string CommandText, int CharStart, int CharLength);

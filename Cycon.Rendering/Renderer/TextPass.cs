@@ -6,6 +6,7 @@ using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Layout;
+using Cycon.Layout.HitTesting;
 using Cycon.Layout.Metrics;
 using Cycon.Rendering.Commands;
 
@@ -81,9 +82,14 @@ internal static class TextPass
         string text,
         int lineForeground,
         SelectionPass.SelectionBounds? selection,
-        int selectionForegroundRgba)
+        int selectionForegroundRgba,
+        HitTestActionSpan? hoveredActionSpan = null,
+        HitTestActionSpan? selectedActionSpan = null,
+        int? invertedTextRgba = null)
     {
         var glyphs = new List<GlyphInstance>(line.Length);
+        var invert = invertedTextRgba.HasValue;
+        var inv = invertedTextRgba.GetValueOrDefault();
         for (var i = 0; i < line.Length; i++)
         {
             var charIndex = line.Start + i;
@@ -98,9 +104,27 @@ internal static class TextPass
             var glyphX = cellX + glyph.BearingX;
             var glyphY = baselineY - glyph.BearingY;
 
-            var color = selection is { } bounds && SelectionPass.IsSelectablePromptChar(block, charIndex) && bounds.Contains(line.BlockIndex, charIndex)
-                ? selectionForegroundRgba
-                : lineForeground;
+            var color = lineForeground;
+            if (selection is { } bounds &&
+                SelectionPass.IsSelectablePromptChar(block, charIndex) &&
+                bounds.Contains(line.BlockIndex, charIndex))
+            {
+                color = selectionForegroundRgba;
+            }
+            else if (invert &&
+                     block.Id == selectedActionSpan?.BlockId &&
+                     charIndex >= selectedActionSpan.Value.CharStart &&
+                     charIndex < selectedActionSpan.Value.CharStart + selectedActionSpan.Value.CharLength)
+            {
+                color = inv;
+            }
+            else if (invert &&
+                     block.Id == hoveredActionSpan?.BlockId &&
+                     charIndex >= hoveredActionSpan.Value.CharStart &&
+                     charIndex < hoveredActionSpan.Value.CharStart + hoveredActionSpan.Value.CharLength)
+            {
+                color = inv;
+            }
             glyphs.Add(new GlyphInstance(glyph.Codepoint, glyphX, glyphY, color));
         }
 

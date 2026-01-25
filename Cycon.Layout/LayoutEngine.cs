@@ -111,7 +111,7 @@ public sealed class LayoutEngine
                         var y = grid.PaddingTopPx + (rowIndex * grid.CellHeightPx);
                         var w = colLen * grid.CellWidthPx;
                         var h = grid.CellHeightPx;
-                        actionSpans.Add(new HitTestActionSpan(block.Id, new PxRect(x, y, w, h), action.CommandText));
+                        actionSpans.Add(new HitTestActionSpan(block.Id, new PxRect(x, y, w, h), action.CommandText, segStart, colLen));
                     }
                 }
 

@@ -44,9 +44,12 @@ internal sealed class RenderPipeline
         IReadOnlyDictionary<BlockId, BlockId> commandIndicators,
         IReadOnlyList<int>? meshReleases,
         BlockId? focusedViewportBlockId = null,
-        HitTestActionSpan? hoveredActionSpan = null,
         BlockId? selectedActionSpanBlockId = null,
-        string? selectedActionSpanCommandText = null)
+        string? selectedActionSpanCommandText = null,
+        int selectedActionSpanIndex = -1,
+        bool hasMousePosition = false,
+        int mouseX = 0,
+        int mouseY = 0)
     {
         var layout = _layoutEngine.Layout(document, layoutSettings, viewport);
         if (restoreAnchor)
@@ -83,19 +86,6 @@ internal sealed class RenderPipeline
             layout = new LayoutFrame(layout.Grid, layout.Lines, layout.HitTestMap, layout.TotalRows, scrollbar, layout.Scene3DViewports);
         }
 
-        HitTestActionSpan? selectedActionSpan = null;
-        if (selectedActionSpanBlockId is { } selectedBlock && !string.IsNullOrEmpty(selectedActionSpanCommandText))
-        {
-            foreach (var span in layout.HitTestMap.ActionSpans)
-            {
-                if (span.BlockId == selectedBlock && span.CommandText == selectedActionSpanCommandText)
-                {
-                    selectedActionSpan = span;
-                    break;
-                }
-            }
-        }
-
         var renderFrame = _renderer.Render(
             document,
             layout,
@@ -106,8 +96,12 @@ internal sealed class RenderPipeline
             caretAlpha: caretAlpha,
             meshReleases: meshReleases,
             focusedViewportBlockId: focusedViewportBlockId,
-            hoveredActionSpan: hoveredActionSpan,
-            selectedActionSpan: selectedActionSpan);
+            selectedActionSpanBlockId: selectedActionSpanBlockId,
+            selectedActionSpanCommandText: selectedActionSpanCommandText,
+            selectedActionSpanIndex: selectedActionSpanIndex,
+            hasMousePosition: hasMousePosition,
+            mouseX: mouseX,
+            mouseY: mouseY);
 
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         return new RenderPipelineResult(backendFrame, backendFrame.BuiltGrid, layout, renderFrame);

@@ -374,9 +374,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                     _visibleCommandIndicators,
                     TakePendingMeshReleases(),
                     focusedViewportBlockId: _focusedInlineViewportBlockId,
-                    hoveredActionSpan: _hoveredActionSpan,
                     selectedActionSpanBlockId: _selectedActionSpanBlockId,
-                    selectedActionSpanCommandText: _selectedActionSpanCommandText);
+                    selectedActionSpanCommandText: _selectedActionSpanCommandText,
+                    selectedActionSpanIndex: _selectedActionSpanIndex,
+                    hasMousePosition: _hasMousePosition,
+                    mouseX: _lastMouseX,
+                    mouseY: _lastMouseY);
 
                 _lastFrame = result.BackendFrame;
                 _lastLayout = result.Layout;
@@ -385,11 +388,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(passNowTicks);
                 _lastCaretRenderTicks = passNowTicks;
                 ClearPendingMeshReleases();
-
-                if (_hasMousePosition && _lastLayout is not null && UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout))
-                {
-                    _pendingContentRebuild = true;
-                }
 
                 var verifySnapshot = _resizeCoordinator.GetLatestSnapshot();
                 var verifyGrid = verifySnapshot.Grid;
@@ -456,9 +454,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 _visibleCommandIndicators,
                 TakePendingMeshReleases(),
                 focusedViewportBlockId: _focusedInlineViewportBlockId,
-                hoveredActionSpan: _hoveredActionSpan,
                 selectedActionSpanBlockId: _selectedActionSpanBlockId,
-                selectedActionSpanCommandText: _selectedActionSpanCommandText);
+                selectedActionSpanCommandText: _selectedActionSpanCommandText,
+                selectedActionSpanIndex: _selectedActionSpanIndex,
+                hasMousePosition: _hasMousePosition,
+                mouseX: _lastMouseX,
+                mouseY: _lastMouseY);
 
             _lastFrame = result.BackendFrame;
             _lastLayout = result.Layout;
@@ -469,11 +470,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             _lastCaretRenderTicks = rebuiltTicks;
             _pendingContentRebuild = false;
             ClearPendingMeshReleases();
-
-            if (_hasMousePosition && _lastLayout is not null && UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout))
-            {
-                _pendingContentRebuild = true;
-            }
         }
 
         MaybeUpdateOverlays(framebufferWidth, framebufferHeight, nowTicks, resizePlan.FramebufferSettled);
@@ -912,9 +908,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             _visibleCommandIndicators,
             TakePendingMeshReleases(),
             focusedViewportBlockId: _focusedInlineViewportBlockId,
-            hoveredActionSpan: _hoveredActionSpan,
             selectedActionSpanBlockId: _selectedActionSpanBlockId,
-            selectedActionSpanCommandText: _selectedActionSpanCommandText);
+            selectedActionSpanCommandText: _selectedActionSpanCommandText,
+            selectedActionSpanIndex: _selectedActionSpanIndex,
+            hasMousePosition: _hasMousePosition,
+            mouseX: _lastMouseX,
+            mouseY: _lastMouseY);
 
         _lastFrame = result.BackendFrame;
         _lastLayout = result.Layout;
@@ -923,11 +922,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(nowTicks);
         _lastCaretRenderTicks = nowTicks;
         ClearPendingMeshReleases();
-
-        if (_hasMousePosition && _lastLayout is not null && UpdateHoverAndCursor(_lastMouseX, _lastMouseY, _lastLayout))
-        {
-            _pendingContentRebuild = true;
-        }
     }
 
     private bool UpdateHoverAndCursor(int mouseX, int mouseY, LayoutFrame layout)

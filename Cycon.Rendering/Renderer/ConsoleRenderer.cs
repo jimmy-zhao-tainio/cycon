@@ -25,8 +25,12 @@ public sealed class ConsoleRenderer
         byte caretAlpha = 0xFF,
         IReadOnlyList<int>? meshReleases = null,
         BlockId? focusedViewportBlockId = null,
-        HitTestActionSpan? hoveredActionSpan = null,
-        HitTestActionSpan? selectedActionSpan = null)
+        BlockId? selectedActionSpanBlockId = null,
+        string? selectedActionSpanCommandText = null,
+        int selectedActionSpanIndex = -1,
+        bool hasMousePosition = false,
+        int mouseX = 0,
+        int mouseY = 0)
     {
         var frame = new RenderFrame
         {
@@ -58,21 +62,56 @@ public sealed class ConsoleRenderer
 
         CaretPass.CaretQuad? pendingCaret = null;
 
-        // Background highlight for clickable file entries.
-        var highlightHoverRgba = unchecked((int)0x1C1C1CFF);
-        var highlightSelectedRgba = unchecked((int)0x2A2A2AFF);
+        var defaultFg = document.Settings.DefaultTextStyle.ForegroundRgba;
+        var defaultBg = document.Settings.DefaultTextStyle.BackgroundRgba;
 
-        if (selectedActionSpan is { } selectedSpan)
+        HitTestActionSpan? selectedSpan = null;
+        if (selectedActionSpanIndex >= 0 &&
+            selectedActionSpanIndex < layout.HitTestMap.ActionSpans.Count &&
+            selectedActionSpanBlockId is { } selBlock &&
+            !string.IsNullOrEmpty(selectedActionSpanCommandText))
         {
-            AddActionSpanHighlight(frame, selectedSpan, scrollYPx, layout.Grid.FramebufferHeightPx, highlightSelectedRgba);
+            var candidate = layout.HitTestMap.ActionSpans[selectedActionSpanIndex];
+            if (candidate.BlockId == selBlock && candidate.CommandText == selectedActionSpanCommandText)
+            {
+                selectedSpan = candidate;
+            }
         }
 
-        if (hoveredActionSpan is { } hoveredSpan)
+        if (selectedSpan is null &&
+            selectedActionSpanBlockId is { } selectedBlock &&
+            !string.IsNullOrEmpty(selectedActionSpanCommandText))
         {
-            // Don't double-layer when the same span is both selected and hovered.
-            if (selectedActionSpan is null || hoveredSpan != selectedActionSpan.Value)
+            foreach (var span in layout.HitTestMap.ActionSpans)
             {
-                AddActionSpanHighlight(frame, hoveredSpan, scrollYPx, layout.Grid.FramebufferHeightPx, highlightHoverRgba);
+                if (span.BlockId == selectedBlock && span.CommandText == selectedActionSpanCommandText)
+                {
+                    selectedSpan = span;
+                    break;
+                }
+            }
+        }
+
+        HitTestActionSpan? hoveredSpan = null;
+        if (hasMousePosition &&
+            layout.HitTestMap.TryGetActionAt(mouseX, mouseY + scrollYPx, out int hoveredIndex) &&
+            hoveredIndex >= 0 &&
+            hoveredIndex < layout.HitTestMap.ActionSpans.Count)
+        {
+            hoveredSpan = layout.HitTestMap.ActionSpans[hoveredIndex];
+        }
+
+        // Inverted highlight for clickable entries: bg becomes fg, text becomes bg.
+        if (selectedSpan is { } selectedSpanValue)
+        {
+            AddActionSpanHighlight(frame, selectedSpanValue, scrollYPx, layout.Grid.FramebufferHeightPx, defaultFg);
+        }
+        if (hoveredSpan is { } h)
+        {
+            // Don't double-layer when the same segment is both selected and hovered.
+            if (selectedSpan is null || h != selectedSpan.Value)
+            {
+                AddActionSpanHighlight(frame, h, scrollYPx, layout.Grid.FramebufferHeightPx, defaultFg);
             }
         }
 
@@ -164,7 +203,10 @@ public sealed class ConsoleRenderer
                 text,
                 lineForeground,
                 selection,
-                selectionStyle.SelectedForegroundRgba);
+                selectionStyle.SelectedForegroundRgba,
+                hoveredActionSpan: hoveredSpan,
+                selectedActionSpan: selectedSpan,
+                invertedTextRgba: defaultBg);
         }
 
         if (pendingCaret is { } caretQuad)
