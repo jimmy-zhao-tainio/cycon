@@ -111,7 +111,8 @@ public sealed class ConsoleRenderer
             // Don't double-layer when the same segment is both selected and hovered.
             if (selectedSpan is null || h != selectedSpan.Value)
             {
-                AddActionSpanHighlight(frame, h, scrollYPx, layout.Grid, defaultFg);
+                var hoverBg = (defaultFg & unchecked((int)0xFFFFFF00)) | 0x80; // 50% alpha
+                AddActionSpanHighlight(frame, h, scrollYPx, layout.Grid, hoverBg);
             }
         }
 

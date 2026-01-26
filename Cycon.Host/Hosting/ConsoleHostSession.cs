@@ -1135,7 +1135,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             block is IBlockCommandActivationProvider activationProvider &&
             activationProvider.TryDequeueActivation(out var activation))
         {
-            ActivateEntry(activation.CommandText, activation.RefreshCommandText);
+            ActivateEntry(activation.CommandText);
             SetFocusedInlineViewport(null);
         }
 
@@ -1323,8 +1323,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 if (isDoubleClick &&
                     grid.TryGetInsertionCommand(e.X, e.Y, hitViewportRectPx, out var commandText))
                 {
-                    var refresh = IsCdCommand(commandText) ? $"grid -s {grid.SizePx}" : null;
-                    ActivateEntry(commandText, refreshCommandText: refresh);
+                    ActivateEntry(commandText);
                     grid.SetSelectedIndex(-1);
                     SetFocusedInlineViewport(null);
                     return true;
@@ -2534,7 +2533,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         if (key.KeyCode == HostKey.Enter)
         {
-            ActivateEntry(_selectedActionSpanCommandText, refreshCommandText: IsCdCommand(_selectedActionSpanCommandText) ? "ls" : null);
+            ActivateEntry(_selectedActionSpanCommandText);
             ClearSelectedActionSpan();
             return true;
         }
@@ -2687,14 +2686,14 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         if (isDoubleClick)
         {
-            ActivateEntry(span.CommandText, refreshCommandText: IsCdCommand(span.CommandText) ? "ls" : null);
+            ActivateEntry(span.CommandText);
             ClearSelectedActionSpan();
         }
 
         return true;
     }
 
-    private void ActivateEntry(string commandText, string? refreshCommandText)
+    private void ActivateEntry(string commandText)
     {
         if (string.IsNullOrWhiteSpace(commandText))
         {
@@ -2702,10 +2701,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         ExecuteCommandLine(commandText);
-        if (refreshCommandText is not null && IsCdCommand(commandText))
-        {
-            ExecuteCommandLine(refreshCommandText);
-        }
     }
 
     private void ExecuteCommandLine(string commandLine)
