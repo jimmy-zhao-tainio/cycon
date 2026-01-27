@@ -111,7 +111,7 @@ public sealed class ConsoleRenderer
             // Don't double-layer when the same segment is both selected and hovered.
             if (selectedSpan is null || h != selectedSpan.Value)
             {
-                var hoverBg = (defaultFg & unchecked((int)0xFFFFFF00)) | 0x80; // 50% alpha
+                var hoverBg = (defaultFg & unchecked((int)0xFFFFFF00)) | 0x33; // 20% alpha
                 AddActionSpanHighlight(frame, h, scrollYPx, layout.Grid, hoverBg);
             }
         }
@@ -205,7 +205,7 @@ public sealed class ConsoleRenderer
                 lineForeground,
                 selection,
                 selectionStyle.SelectedForegroundRgba,
-                hoveredActionSpan: hoveredSpan,
+                hoveredActionSpan: null,
                 selectedActionSpan: selectedSpan,
                 invertedTextRgba: defaultBg);
         }
