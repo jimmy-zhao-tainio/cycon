@@ -111,7 +111,8 @@ public sealed class ConsoleRenderer
             // Don't double-layer when the same segment is both selected and hovered.
             if (selectedSpan is null || h != selectedSpan.Value)
             {
-                var hoverBg = (defaultFg & unchecked((int)0xFFFFFF00)) | 0x80; // 50% alpha
+                // Hover uses a darker background while keeping normal text color.
+                var hoverBg = unchecked((int)0x202020FF);
                 AddActionSpanHighlight(frame, h, scrollYPx, layout.Grid, hoverBg);
             }
         }
