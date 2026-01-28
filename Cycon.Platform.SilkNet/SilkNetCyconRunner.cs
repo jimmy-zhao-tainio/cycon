@@ -15,6 +15,7 @@ public static class SilkNetCyconRunner
     private const int ActiveHz = 60;
     private const int CaretBlinkIntervalMs = 500;
     private const int AnimationBoostMs = 250;
+    private const int MaxTickDtMs = 33;
 
     public static void Run2D(CyconAppOptions options)
     {
@@ -37,8 +38,8 @@ public static class SilkNetCyconRunner
         var animationBoostUntilTicks = 0L;
         var nextFrameAtTicks = 0L;
         var caretBlinkIntervalTicks = MsToTicks(CaretBlinkIntervalMs);
-        var nextCaretBlinkAtTicks = AlignNext(Stopwatch.GetTimestamp(), caretBlinkIntervalTicks);
-        var caretBlinkEnabled = true;
+        var caretOn = true;
+        var nextCaretAtTicks = Stopwatch.GetTimestamp() + caretBlinkIntervalTicks;
 
         void Invalidate(long nowTicks, bool wake = false)
         {
@@ -55,6 +56,7 @@ public static class SilkNetCyconRunner
             clipboard,
             wake: () => Invalidate(Stopwatch.GetTimestamp(), wake: true),
             configureBlockCommands: options.ConfigureBlockCommands);
+        session.SetCaretAlphaOverride(0xFF);
 
         window.Loaded += () =>
         {
@@ -97,7 +99,13 @@ public static class SilkNetCyconRunner
             var nowTicks = Stopwatch.GetTimestamp();
             Invalidate(nowTicks);
             UpdateModifiers(ref ctrlDown, ref shiftDown, ref altDown, key, isDown: true);
+            var wasActive = pressedKeys.Count > 0 || buttonsDown != HostMouseButtons.None;
             pressedKeys.Add(key);
+            var isActive = pressedKeys.Count > 0 || buttonsDown != HostMouseButtons.None;
+            if (!wasActive && isActive)
+            {
+                session.ResetTickClock(nowTicks);
+            }
 
             var mapped = MapKey(key);
             if (IsRepeatable(mapped))
@@ -120,9 +128,12 @@ public static class SilkNetCyconRunner
 
         window.MouseDown += (x, y, button) =>
         {
-            Invalidate(Stopwatch.GetTimestamp());
+            var nowTicks = Stopwatch.GetTimestamp();
+            Invalidate(nowTicks);
             lastMouseX = x;
             lastMouseY = y;
+
+            var wasActive = pressedKeys.Count > 0 || buttonsDown != HostMouseButtons.None;
 
             if (button == MouseButton.Left)
             {
@@ -132,6 +143,10 @@ public static class SilkNetCyconRunner
                 }
 
                 buttonsDown |= HostMouseButtons.Left;
+                if (!wasActive)
+                {
+                    session.ResetTickClock(nowTicks);
+                }
                 session.OnMouseEvent(new HostMouseEvent(
                     HostMouseEventKind.Down,
                     x,
@@ -149,6 +164,10 @@ public static class SilkNetCyconRunner
                 }
 
                 buttonsDown |= HostMouseButtons.Right;
+                if (!wasActive)
+                {
+                    session.ResetTickClock(nowTicks);
+                }
                 session.OnMouseEvent(new HostMouseEvent(
                     HostMouseEventKind.Down,
                     x,
@@ -319,6 +338,7 @@ public static class SilkNetCyconRunner
                 }
             }
 
+            session.ClampTickDelta(nowTicks, MaxTickDtMs);
             var tick = session.Tick();
             if (tick.SetVSync.HasValue)
             {
@@ -326,7 +346,6 @@ public static class SilkNetCyconRunner
             }
 
             window.SetStandardCursor(MapCursor(session.CursorKind));
-            caretBlinkEnabled = tick.OverlayFrame is not null;
 
             executor.Resize(tick.FramebufferWidth, tick.FramebufferHeight);
             executor.Execute(tick.Frame, session.Atlas);
@@ -376,10 +395,7 @@ public static class SilkNetCyconRunner
                 nextDeadlineTicks = Math.Min(nextDeadlineTicks, nextFrameAtTicks);
             }
 
-            if (caretBlinkEnabled)
-            {
-                nextDeadlineTicks = Math.Min(nextDeadlineTicks, nextCaretBlinkAtTicks);
-            }
+            nextDeadlineTicks = Math.Min(nextDeadlineTicks, nextCaretAtTicks);
 
             if (nextDeadlineTicks == long.MaxValue)
             {
@@ -403,15 +419,20 @@ public static class SilkNetCyconRunner
             }
 
             var nowTicks = Stopwatch.GetTimestamp();
-            if (dirty)
+            if (nowTicks >= nextCaretAtTicks)
             {
-                return true;
+                while (nowTicks >= nextCaretAtTicks)
+                {
+                    caretOn = !caretOn;
+                    nextCaretAtTicks += caretBlinkIntervalTicks;
+                }
+
+                session.SetCaretAlphaOverride(caretOn ? (byte)0xFF : (byte)0);
+                dirty = true;
             }
 
-            if (caretBlinkEnabled && nowTicks >= nextCaretBlinkAtTicks)
+            if (dirty)
             {
-                nextCaretBlinkAtTicks = AlignNext(nowTicks, caretBlinkIntervalTicks);
-                dirty = true;
                 return true;
             }
 
@@ -451,15 +472,6 @@ public static class SilkNetCyconRunner
     private static long MsToTicks(int ms) =>
         (long)(ms * (Stopwatch.Frequency / 1000.0));
 
-    private static long AlignNext(long nowTicks, long intervalTicks)
-    {
-        if (intervalTicks <= 0)
-        {
-            return nowTicks;
-        }
-
-        return (nowTicks / intervalTicks + 1) * intervalTicks;
-    }
 
     private static void UpdateModifiers(ref bool ctrl, ref bool shift, ref bool alt, Key key, bool isDown)
     {

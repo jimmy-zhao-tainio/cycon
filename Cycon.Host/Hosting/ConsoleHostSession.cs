@@ -101,6 +101,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private int _lastSpinnerFrameIndex = -1;
     private long _lastTickTicks;
     private int _tickIndex;
+    private byte? _caretAlphaOverride;
 
     private ConsoleHostSession(
         string text,
@@ -329,7 +330,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         var currentGrid = resizePlan.CurrentGrid;
 
-        var caretAlphaNow = ComputeCaretAlpha(nowTicks);
+        var caretAlphaNow = _caretAlphaOverride ?? ComputeCaretAlpha(nowTicks);
         if (_document.Selection.ActiveRange is { } range && range.Anchor != range.Caret)
         {
             caretAlphaNow = 0;
@@ -510,7 +511,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             return;
         }
 
-        var caretAlpha = ComputeCaretAlpha(nowTicks);
+        var caretAlpha = _caretAlphaOverride ?? ComputeCaretAlpha(nowTicks);
         if (_document.Selection.ActiveRange is { } range && range.Anchor != range.Caret)
         {
             caretAlpha = 0;
@@ -548,6 +549,32 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _lastCaretAlpha = caretAlpha;
         _lastSpinnerFrameIndex = spinnerIndex;
         _lastCaretRenderTicks = nowTicks;
+    }
+
+    public void ResetTickClock(long nowTicks)
+    {
+        _lastTickTicks = nowTicks;
+    }
+
+    public void ClampTickDelta(long nowTicks, int maxDtMs)
+    {
+        if (_lastTickTicks == 0)
+        {
+            _lastTickTicks = nowTicks;
+            return;
+        }
+
+        var maxDtTicks = (long)(maxDtMs * (Stopwatch.Frequency / 1000.0));
+        var minLastTickTicks = nowTicks - maxDtTicks;
+        if (_lastTickTicks < minLastTickTicks)
+        {
+            _lastTickTicks = minLastTickTicks;
+        }
+    }
+
+    public void SetCaretAlphaOverride(byte? alpha)
+    {
+        _caretAlphaOverride = alpha;
     }
 
     private void UpdateVisibleCommandIndicators(long nowTicks)
