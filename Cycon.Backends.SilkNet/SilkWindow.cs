@@ -17,6 +17,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     private int _lastPolledMouseY;
     private bool _lastPolledLeftPressed;
     private bool _lastPolledRightPressed;
+    private float _wheelAccumY;
     private bool _disposed;
     private bool _resizingSnap;
 
@@ -278,8 +279,13 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
             mouse.Scroll += (_, wheel) =>
             {
                 var pos = mouse.Position;
-                var delta = (int)MathF.Round(wheel.Y);
-                MouseWheel?.Invoke((int)pos.X, (int)pos.Y, delta);
+                _wheelAccumY += wheel.Y;
+                var delta = (int)MathF.Truncate(_wheelAccumY);
+                if (delta != 0)
+                {
+                    _wheelAccumY -= delta;
+                    MouseWheel?.Invoke((int)pos.X, (int)pos.Y, delta);
+                }
             };
         }
     }

@@ -59,7 +59,7 @@ internal sealed class ConsoleScrollModel : IScrollModel
         }
 
         var before = _document.Scroll.ScrollOffsetRows;
-        var deltaRows = -wheelDelta * 3;
+        var deltaRows = -wheelDelta;
         _document.Scroll.ApplyUserScrollDelta(deltaRows, maxScrollOffsetRows);
         return _document.Scroll.ScrollOffsetRows != before;
     }

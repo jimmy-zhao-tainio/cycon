@@ -922,6 +922,22 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private bool UpdateHoverAndCursor(int mouseX, int mouseY, LayoutFrame layout)
     {
+        if (layout.Scrollbar.IsScrollable)
+        {
+            var sb = layout.Scrollbar;
+            if (mouseX >= sb.HitTrackRectPx.X &&
+                mouseY >= sb.HitTrackRectPx.Y &&
+                mouseX < sb.HitTrackRectPx.X + sb.HitTrackRectPx.Width &&
+                mouseY < sb.HitTrackRectPx.Y + sb.HitTrackRectPx.Height)
+            {
+                var hadHover = _hoveredActionSpan is not null;
+                _hoveredActionSpan = null;
+                _hoveredActionSpanIndex = -1;
+                _cursorKind = HostCursorKind.Default;
+                return hadHover;
+            }
+        }
+
         var scrollOffsetRows = GetScrollOffsetRows(_document, layout);
         var adjustedY = mouseY + (scrollOffsetRows * layout.Grid.CellHeightPx);
         var scrollYPx = scrollOffsetRows * layout.Grid.CellHeightPx;
@@ -2538,6 +2554,18 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         if ((mouseEvent.Mods & HostKeyModifiers.Shift) != 0)
         {
             return false;
+        }
+
+        if (layout.Scrollbar.IsScrollable)
+        {
+            var sb = layout.Scrollbar;
+            if (mouseEvent.X >= sb.HitTrackRectPx.X &&
+                mouseEvent.Y >= sb.HitTrackRectPx.Y &&
+                mouseEvent.X < sb.HitTrackRectPx.X + sb.HitTrackRectPx.Width &&
+                mouseEvent.Y < sb.HitTrackRectPx.Y + sb.HitTrackRectPx.Height)
+            {
+                return false;
+            }
         }
 
         var scrollOffsetRows = GetScrollOffsetRows(_document, layout);
