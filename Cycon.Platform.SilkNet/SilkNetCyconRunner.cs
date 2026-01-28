@@ -285,7 +285,7 @@ public static class SilkNetCyconRunner
             var frameIntervalTicks = targetFps <= 0 ? 0 : (long)(Stopwatch.Frequency / (double)targetFps);
             if (frameIntervalTicks > 0 && lastPresentedTicks != 0 && nowTicks - lastPresentedTicks < frameIntervalTicks)
             {
-                Thread.Sleep(0);
+                SleepTicks(frameIntervalTicks - (nowTicks - lastPresentedTicks));
                 return;
             }
 
@@ -348,6 +348,26 @@ public static class SilkNetCyconRunner
 
     private static long MsToTicks(int ms) =>
         (long)(ms * (Stopwatch.Frequency / 1000.0));
+
+    private static void SleepTicks(long remainingTicks)
+    {
+        if (remainingTicks <= 0)
+        {
+            return;
+        }
+
+        var deadline = Stopwatch.GetTimestamp() + remainingTicks;
+        var ms = (int)(remainingTicks * 1000.0 / Stopwatch.Frequency);
+        if (ms > 1)
+        {
+            Thread.Sleep(ms - 1);
+        }
+
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            Thread.SpinWait(50);
+        }
+    }
 
     private static void UpdateModifiers(ref bool ctrl, ref bool shift, ref bool alt, Key key, bool isDown)
     {

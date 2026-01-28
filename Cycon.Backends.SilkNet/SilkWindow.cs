@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using Cycon.Backends.Abstractions;
 using Silk.NET.Input;
 using Silk.NET.Maths;
@@ -9,24 +8,13 @@ namespace Cycon.Backends.SilkNet;
 
 public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposable
 {
-    private const int ActiveMousePollFps = 60;
-    private const int IdleMousePollFps = 20;
-    private const int IdleAfterMs = 250;
-    private const int MousePollBoostMs = 250;
-
     private readonly Silk.NET.Windowing.IWindow _window;
     private IInputContext? _input;
     private IMouse? _primaryMouse;
     private bool _lastPointerInWindow = true;
-    private bool _havePolledMouse;
-    private int _lastPolledMouseX;
-    private int _lastPolledMouseY;
-    private bool _lastPolledLeftPressed;
-    private bool _lastPolledRightPressed;
+    private int _lastMouseX;
+    private int _lastMouseY;
     private float _wheelAccumYPx;
-    private long _lastInteractionTicks = Stopwatch.GetTimestamp();
-    private long _pollBoostUntilTicks;
-    private long _nextMousePollTicks;
     private bool _disposed;
     private bool _resizingSnap;
 
@@ -215,25 +203,16 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
     private void HandleRender(double deltaTime)
     {
-        var nowTicks = Stopwatch.GetTimestamp();
-        if (ShouldPollMouse(nowTicks))
-        {
-            PollMouse(nowTicks);
-            UpdatePointerInWindow();
-        }
-
         Render?.Invoke(deltaTime);
     }
 
     private void OnFramebufferResize(Vector2D<int> size)
     {
-        MarkInteraction();
         FramebufferResized?.Invoke(size.X, size.Y);
     }
 
     private void OnResize(Vector2D<int> size)
     {
-        MarkInteraction();
         if (_resizingSnap)
         {
             return;
@@ -251,7 +230,6 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
     private void OnFileDrop(string[] paths)
     {
-        MarkInteraction();
         var handler = FileDropped;
         if (handler is null)
         {
@@ -269,7 +247,6 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
     private void OnFocusChanged(bool isFocused)
     {
-        MarkInteraction();
         FocusChanged?.Invoke(isFocused);
     }
 
@@ -283,32 +260,59 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         if (input.Mice.Count > 0)
         {
             _primaryMouse = input.Mice[0];
+
+            var pos = _primaryMouse.Position;
+            _lastMouseX = (int)pos.X;
+            _lastMouseY = (int)pos.Y;
+            UpdatePointerInWindow(_lastMouseX, _lastMouseY);
         }
 
         foreach (var keyboard in input.Keyboards)
         {
             keyboard.KeyChar += (_, ch) =>
             {
-                MarkInteraction();
                 TextInput?.Invoke(ch);
             };
             keyboard.KeyDown += (_, key, _) =>
             {
-                MarkInteraction();
                 KeyDown?.Invoke(key);
             };
             keyboard.KeyUp += (_, key, _) =>
             {
-                MarkInteraction();
                 KeyUp?.Invoke(key);
             };
         }
 
         foreach (var mouse in input.Mice)
         {
+            mouse.MouseMove += (_, pos) =>
+            {
+                _lastMouseX = (int)pos.X;
+                _lastMouseY = (int)pos.Y;
+                MouseMoved?.Invoke(_lastMouseX, _lastMouseY);
+                UpdatePointerInWindow(_lastMouseX, _lastMouseY);
+            };
+
+            mouse.MouseDown += (_, button) =>
+            {
+                var pos = mouse.Position;
+                _lastMouseX = (int)pos.X;
+                _lastMouseY = (int)pos.Y;
+                MouseDown?.Invoke(_lastMouseX, _lastMouseY, button);
+                UpdatePointerInWindow(_lastMouseX, _lastMouseY);
+            };
+
+            mouse.MouseUp += (_, button) =>
+            {
+                var pos = mouse.Position;
+                _lastMouseX = (int)pos.X;
+                _lastMouseY = (int)pos.Y;
+                MouseUp?.Invoke(_lastMouseX, _lastMouseY, button);
+                UpdatePointerInWindow(_lastMouseX, _lastMouseY);
+            };
+
             mouse.Scroll += (_, wheel) =>
             {
-                MarkInteraction();
                 var pos = mouse.Position;
                 // Convert smooth (fractional) wheel input into pixel-precise deltas.
                 // One "wheel unit" corresponds to three text rows (48px), matching classic terminal scroll speed.
@@ -323,152 +327,11 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         }
     }
 
-    private void MarkInteraction()
-    {
-        var nowTicks = Stopwatch.GetTimestamp();
-        _lastInteractionTicks = nowTicks;
-        var boostUntil = nowTicks + MsToTicks(MousePollBoostMs);
-        if (boostUntil > _pollBoostUntilTicks)
-        {
-            _pollBoostUntilTicks = boostUntil;
-        }
-    }
-
-    private bool ShouldPollMouse(long nowTicks)
-    {
-        if (!_havePolledMouse)
-        {
-            return true;
-        }
-
-        if (_lastPolledLeftPressed || _lastPolledRightPressed)
-        {
-            return true;
-        }
-
-        if (nowTicks < _pollBoostUntilTicks)
-        {
-            return true;
-        }
-
-        var idle = nowTicks - _lastInteractionTicks >= MsToTicks(IdleAfterMs);
-        var targetFps = idle ? IdleMousePollFps : ActiveMousePollFps;
-        if (targetFps <= 0)
-        {
-            return false;
-        }
-
-        var intervalTicks = (long)(Stopwatch.Frequency / (double)targetFps);
-        if (_nextMousePollTicks == 0)
-        {
-            _nextMousePollTicks = nowTicks;
-        }
-
-        if (nowTicks < _nextMousePollTicks)
-        {
-            return false;
-        }
-
-        _nextMousePollTicks = nowTicks + intervalTicks;
-        return true;
-    }
-
-    private void PollMouse(long nowTicks)
-    {
-        var mouse = _primaryMouse;
-        if (mouse is null)
-        {
-            return;
-        }
-
-        var pos = mouse.Position;
-        var x = (int)pos.X;
-        var y = (int)pos.Y;
-
-        if (!_havePolledMouse)
-        {
-            _havePolledMouse = true;
-            _lastPolledMouseX = x;
-            _lastPolledMouseY = y;
-            _lastPolledLeftPressed = mouse.IsButtonPressed(MouseButton.Left);
-            _lastPolledRightPressed = mouse.IsButtonPressed(MouseButton.Right);
-
-            if (_lastPolledLeftPressed)
-            {
-                MouseDown?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Left);
-            }
-
-            if (_lastPolledRightPressed)
-            {
-                MouseDown?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Right);
-            }
-
-            return;
-        }
-
-        if (x != _lastPolledMouseX || y != _lastPolledMouseY)
-        {
-            _lastPolledMouseX = x;
-            _lastPolledMouseY = y;
-            MouseMoved?.Invoke(x, y);
-            _lastInteractionTicks = nowTicks;
-            _pollBoostUntilTicks = Math.Max(_pollBoostUntilTicks, nowTicks + MsToTicks(MousePollBoostMs));
-        }
-
-        var left = mouse.IsButtonPressed(MouseButton.Left);
-        if (left != _lastPolledLeftPressed)
-        {
-            _lastPolledLeftPressed = left;
-            if (left)
-            {
-                MouseDown?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Left);
-            }
-            else
-            {
-                MouseUp?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Left);
-            }
-
-            _lastInteractionTicks = nowTicks;
-            _pollBoostUntilTicks = Math.Max(_pollBoostUntilTicks, nowTicks + MsToTicks(MousePollBoostMs));
-        }
-
-        var right = mouse.IsButtonPressed(MouseButton.Right);
-        if (right != _lastPolledRightPressed)
-        {
-            _lastPolledRightPressed = right;
-            if (right)
-            {
-                MouseDown?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Right);
-            }
-            else
-            {
-                MouseUp?.Invoke(_lastPolledMouseX, _lastPolledMouseY, MouseButton.Right);
-            }
-
-            _lastInteractionTicks = nowTicks;
-            _pollBoostUntilTicks = Math.Max(_pollBoostUntilTicks, nowTicks + MsToTicks(MousePollBoostMs));
-        }
-    }
-
-    private void UpdatePointerInWindow()
+    private void UpdatePointerInWindow(int x, int y)
     {
         if (_primaryMouse is null)
         {
             return;
-        }
-
-        int x;
-        int y;
-        if (_havePolledMouse)
-        {
-            x = _lastPolledMouseX;
-            y = _lastPolledMouseY;
-        }
-        else
-        {
-            var pos = _primaryMouse.Position;
-            x = (int)pos.X;
-            y = (int)pos.Y;
         }
 
         var inWindow =
@@ -483,9 +346,6 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         _lastPointerInWindow = inWindow;
         PointerInWindowChanged?.Invoke(inWindow);
     }
-
-    private static long MsToTicks(int ms) =>
-        (long)(ms * (Stopwatch.Frequency / 1000.0));
 
     private static int SnapToStep(int value, int step)
     {
