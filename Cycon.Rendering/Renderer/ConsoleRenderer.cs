@@ -142,7 +142,10 @@ public sealed class ConsoleRenderer
                 focusedViewportBlockId);
 
             var rowOnScreen = line.RowIndex - scrollOffsetRows;
-            if (rowOnScreen < 0 || rowOnScreen > grid.Rows || (rowOnScreen == grid.Rows && !allowExtraRow))
+            var lineY = grid.PaddingTopPx + (rowOnScreen * cellH) - scrollRemainderPx;
+            if (cellH <= 0 ||
+                lineY >= grid.FramebufferHeightPx ||
+                lineY + cellH <= 0)
             {
                 continue;
             }
