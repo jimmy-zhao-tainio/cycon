@@ -13,7 +13,7 @@ public static class SilkNetCyconRunner
     private const int KeyRepeatInitialDelayMs = 400;
     private const int KeyRepeatIntervalMs = 33;
     private const int ActiveFps = 60;
-    private const int IdleFps = 10;
+    private const int IdleFps = 1;
     private const int IdleAfterMs = 250;
 
     public static void Run2D(CyconAppOptions options)
@@ -36,6 +36,11 @@ public static class SilkNetCyconRunner
         var repeatKeys = new Dictionary<HostKey, long>();
         var lastInteractionTicks = Stopwatch.GetTimestamp();
         var lastAppliedFps = ActiveFps;
+        var dirty = true;
+
+        var debugLastReportTicks = 0L;
+        var debugRenderedFrames = 0;
+        var debugSkippedFrames = 0;
 
         window.Loaded += () =>
         {
@@ -67,23 +72,23 @@ public static class SilkNetCyconRunner
         window.FramebufferResized += (width, height) =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             session.OnFramebufferResized(width, height);
         };
 
         window.TextInput += ch =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             session.OnTextInput(new HostTextInputEvent(ch));
         };
 
         window.KeyDown += key =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             UpdateModifiers(ref ctrlDown, ref shiftDown, ref altDown, key, isDown: true);
-            if (!pressedKeys.Add(key))
-            {
-                return;
-            }
+            pressedKeys.Add(key);
 
             var mapped = MapKey(key);
             var nowTicks = Stopwatch.GetTimestamp();
@@ -98,6 +103,7 @@ public static class SilkNetCyconRunner
         window.KeyUp += key =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             UpdateModifiers(ref ctrlDown, ref shiftDown, ref altDown, key, isDown: false);
             pressedKeys.Remove(key);
             var mapped = MapKey(key);
@@ -108,6 +114,7 @@ public static class SilkNetCyconRunner
         window.MouseDown += (x, y, button) =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             lastMouseX = x;
             lastMouseY = y;
 
@@ -149,6 +156,7 @@ public static class SilkNetCyconRunner
         window.MouseMoved += (x, y) =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             lastMouseX = x;
             lastMouseY = y;
 
@@ -164,6 +172,7 @@ public static class SilkNetCyconRunner
         window.MouseUp += (x, y, button) =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             lastMouseX = x;
             lastMouseY = y;
 
@@ -205,6 +214,7 @@ public static class SilkNetCyconRunner
         window.MouseWheel += (x, y, delta) =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             lastMouseX = x;
             lastMouseY = y;
 
@@ -220,11 +230,13 @@ public static class SilkNetCyconRunner
         window.FileDropped += path =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             session.OnFileDrop(new HostFileDropEvent(path));
         };
         window.FocusChanged += isFocused =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             session.OnWindowFocusChanged(isFocused);
 
             if (isFocused)
@@ -271,6 +283,7 @@ public static class SilkNetCyconRunner
         window.PointerInWindowChanged += isInWindow =>
         {
             lastInteractionTicks = Stopwatch.GetTimestamp();
+            dirty = true;
             session.OnPointerInWindowChanged(isInWindow);
         };
 
@@ -290,6 +303,13 @@ public static class SilkNetCyconRunner
                 window.FramesPerSecond = targetFps;
                 window.UpdatesPerSecond = targetFps;
                 lastAppliedFps = targetFps;
+            }
+
+            if (!dirty && !active && repeatKeys.Count == 0)
+            {
+                debugSkippedFrames++;
+                ReportLoopStats(nowTicks, ref debugLastReportTicks, ref debugRenderedFrames, ref debugSkippedFrames);
+                return;
             }
 
             if (repeatKeys.Count > 0)
@@ -312,6 +332,7 @@ public static class SilkNetCyconRunner
 
                     repeatKeys[hostKey] = newNextRepeat;
                     lastInteractionTicks = nowTicks;
+                    dirty = true;
                 }
             }
 
@@ -334,6 +355,9 @@ public static class SilkNetCyconRunner
                 session.ReportRenderFailure(failure.Key, failure.Value);
             }
             swapchain.Present();
+            dirty = false;
+            debugRenderedFrames++;
+            ReportLoopStats(nowTicks, ref debugLastReportTicks, ref debugRenderedFrames, ref debugSkippedFrames);
 
             if (tick.RequestExit)
             {
@@ -350,6 +374,26 @@ public static class SilkNetCyconRunner
 
     private static long MsToTicks(int ms) =>
         (long)(ms * (Stopwatch.Frequency / 1000.0));
+
+    private static void ReportLoopStats(long nowTicks, ref long lastReportTicks, ref int renderedFrames, ref int skippedFrames)
+    {
+        if (lastReportTicks == 0)
+        {
+            lastReportTicks = nowTicks;
+            return;
+        }
+
+        var elapsedTicks = nowTicks - lastReportTicks;
+        if (elapsedTicks < Stopwatch.Frequency)
+        {
+            return;
+        }
+
+        Debug.WriteLine($"Cycon loop: rendered={renderedFrames}/s skipped={skippedFrames}/s");
+        renderedFrames = 0;
+        skippedFrames = 0;
+        lastReportTicks = nowTicks;
+    }
 
     private static void UpdateModifiers(ref bool ctrl, ref bool shift, ref bool alt, Key key, bool isDown)
     {

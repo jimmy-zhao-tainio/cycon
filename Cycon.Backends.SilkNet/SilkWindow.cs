@@ -92,6 +92,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         options.Size = new Vector2D<int>(snapWidth, snapHeight);
         options.Title = title;
         options.IsVisible = false;
+        options.IsEventDriven = true;
         options.FramesPerSecond = 60;
         options.UpdatesPerSecond = 60;
         options.API = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.ForwardCompatible, new APIVersion(3, 3));
@@ -145,6 +146,8 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     public void Run() => _window.Run();
 
     internal void SwapBuffers() => _window.SwapBuffers();
+
+    public void Wake() => _window.ContinueEvents();
 
     public void SetStandardCursor(StandardCursor cursor)
     {
