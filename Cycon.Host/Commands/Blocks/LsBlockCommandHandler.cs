@@ -59,6 +59,16 @@ public sealed class LsBlockCommandHandler : IBlockCommandHandler
             return true;
         }
 
+        string? parentDir = null;
+        try
+        {
+            parentDir = Directory.GetParent(fullTarget)?.FullName;
+        }
+        catch
+        {
+            parentDir = null;
+        }
+
         var entries = new List<FileSystemEntry>();
         foreach (var entry in fs.FileSystem.Enumerate(fullTarget))
         {
@@ -70,6 +80,11 @@ public sealed class LsBlockCommandHandler : IBlockCommandHandler
             var byDir = b.IsDirectory.CompareTo(a.IsDirectory);
             return byDir != 0 ? byDir : StringComparer.OrdinalIgnoreCase.Compare(a.Name, b.Name);
         });
+
+        if (!string.IsNullOrEmpty(parentDir))
+        {
+            entries.Insert(0, new FileSystemEntry("..", parentDir, IsDirectory: true));
+        }
 
         EmitListing(ctx, entries);
         return true;
@@ -83,7 +98,9 @@ public sealed class LsBlockCommandHandler : IBlockCommandHandler
         for (var i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
-            var displayName = entry.IsDirectory ? entry.Name + "\\" : entry.Name;
+            var displayName = entry.Name == ".."
+                ? ".."
+                : (entry.IsDirectory ? entry.Name + "\\" : entry.Name);
 
             var start = text.Length;
             text.Append(displayName);
