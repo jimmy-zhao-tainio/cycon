@@ -916,7 +916,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         var nowTicks = Stopwatch.GetTimestamp();
         UpdateVisibleCommandIndicators(nowTicks);
-        var caretAlphaNow = ComputeCaretAlpha(nowTicks);
+        var caretAlphaNow = _caretAlphaOverride ?? ComputeCaretAlpha(nowTicks);
         if (_document.Selection.ActiveRange is { } range && range.Anchor != range.Caret)
         {
             caretAlphaNow = 0;
