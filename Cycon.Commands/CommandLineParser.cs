@@ -61,6 +61,20 @@ public static class CommandLineParser
                     var next = input[i + 1];
                     if (next == quoteChar || next == '\\')
                     {
+                        // Special-case trailing backslash before a closing quote:
+                        // `cd "C:\"` should parse as `C:\` (backslash is part of the path),
+                        // not as an escaped quote.
+                        if (next == quoteChar)
+                        {
+                            var afterQuoteIndex = i + 2;
+                            var closesToken = afterQuoteIndex >= input.Length || char.IsWhiteSpace(input[afterQuoteIndex]);
+                            if (closesToken)
+                            {
+                                current.Append('\\');
+                                continue;
+                            }
+                        }
+
                         current.Append(next);
                         i++;
                         continue;
