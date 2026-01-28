@@ -926,10 +926,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         if (layout.Scrollbar.IsScrollable)
         {
             var sb = layout.Scrollbar;
-            if (mouseX >= sb.HitTrackRectPx.X &&
-                mouseY >= sb.HitTrackRectPx.Y &&
-                mouseX < sb.HitTrackRectPx.X + sb.HitTrackRectPx.Width &&
-                mouseY < sb.HitTrackRectPx.Y + sb.HitTrackRectPx.Height)
+            if ((mouseX >= sb.HitTrackRectPx.X &&
+                 mouseY >= sb.HitTrackRectPx.Y &&
+                 mouseX < sb.HitTrackRectPx.X + sb.HitTrackRectPx.Width &&
+                 mouseY < sb.HitTrackRectPx.Y + sb.HitTrackRectPx.Height) ||
+                mouseX >= sb.TrackRectPx.X)
             {
                 var hadHover = _hoveredActionSpan is not null;
                 _hoveredActionSpan = null;
@@ -2561,6 +2562,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 mouseEvent.Y >= sb.HitTrackRectPx.Y &&
                 mouseEvent.X < sb.HitTrackRectPx.X + sb.HitTrackRectPx.Width &&
                 mouseEvent.Y < sb.HitTrackRectPx.Y + sb.HitTrackRectPx.Height)
+            {
+                return false;
+            }
+
+            if (mouseEvent.X >= sb.TrackRectPx.X)
             {
                 return false;
             }

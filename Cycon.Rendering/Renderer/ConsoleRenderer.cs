@@ -52,6 +52,8 @@ public sealed class ConsoleRenderer
         var scrollOffsetRows = cellH <= 0 ? 0 : scrollOffsetPx / cellH;
         var scrollRemainderPx = cellH <= 0 ? 0 : scrollOffsetPx - (scrollOffsetRows * cellH);
         var scrollYPx = scrollOffsetPx;
+        var bottomSpillPx = grid.FramebufferHeightPx - (grid.PaddingTopPx + (grid.Rows * cellH));
+        var allowExtraRow = scrollRemainderPx != 0 || bottomSpillPx > 0;
         var scrollbarClipRightX = layout.Scrollbar.IsScrollable ? layout.Scrollbar.TrackRectPx.X : grid.PaddingLeftPx + grid.ContentWidthPx;
         var contentHighlightWidthPx = Math.Max(0, scrollbarClipRightX - grid.PaddingLeftPx);
 
@@ -99,7 +101,7 @@ public sealed class ConsoleRenderer
 
         HitTestActionSpan? hoveredSpan = null;
         if (hasMousePosition &&
-            (!layout.Scrollbar.IsScrollable || !layout.Scrollbar.HitTrackRectPx.Contains(mouseX, mouseY)) &&
+            (!layout.Scrollbar.IsScrollable || (!layout.Scrollbar.HitTrackRectPx.Contains(mouseX, mouseY) && mouseX < layout.Scrollbar.TrackRectPx.X)) &&
             TryGetActionSpanIndexOnRow(layout, mouseX, mouseY + scrollYPx, out var hoveredIndex) &&
             hoveredIndex >= 0 &&
             hoveredIndex < layout.HitTestMap.ActionSpans.Count)
@@ -140,7 +142,7 @@ public sealed class ConsoleRenderer
                 focusedViewportBlockId);
 
             var rowOnScreen = line.RowIndex - scrollOffsetRows;
-            if (rowOnScreen < 0 || rowOnScreen > grid.Rows || (rowOnScreen == grid.Rows && scrollRemainderPx == 0))
+            if (rowOnScreen < 0 || rowOnScreen > grid.Rows || (rowOnScreen == grid.Rows && !allowExtraRow))
             {
                 continue;
             }
