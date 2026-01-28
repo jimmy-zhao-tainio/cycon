@@ -29,7 +29,6 @@ public sealed class ProgressBlockCommandHandler : IBlockCommandHandler
             kind: ActivityKind.Progress,
             duration: duration.Value,
             stream: ConsoleTextStream.System));
-        ctx.AttachIndicator(activityId);
         return true;
     }
 

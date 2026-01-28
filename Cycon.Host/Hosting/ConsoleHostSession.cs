@@ -26,7 +26,6 @@ using Cycon.Host.Input;
 using Cycon.Host.Scrolling;
 using Cycon.Host.Rendering;
 using Cycon.Host.Services;
-using Cycon.Host.Thumbnails;
 using Cycon.Layout;
 using Cycon.Layout.Metrics;
 using Cycon.Layout.Scrolling;
@@ -85,10 +84,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private long _lastActionSpanClickTicks;
     private int _lastActionSpanClickIndex = -1;
     private BlockId? _lastActionSpanClickBlockId;
-    private long _lastGridClickTicks;
-    private int _lastGridClickEntryIndex = -1;
-    private BlockId? _lastGridClickBlockId;
-    private BlockId? _hoveredGridBlockId;
     private int _lastMouseX;
     private int _lastMouseY;
     private bool _hasMousePosition;
@@ -880,11 +875,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private void EnsureLayoutExists(int framebufferWidth, int framebufferHeight)
     {
-        if (OperatingSystem.IsWindows() && ShellThumbnailService.Instance.ConsumeHasUpdates())
-        {
-            _pendingContentRebuild = true;
-        }
-
         if (_lastLayout is not null && _lastFrame is not null && !_pendingContentRebuild)
         {
             return;
@@ -950,59 +940,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             _hoveredActionSpan = span;
             _hoveredActionSpanIndex = hoveredIndex;
             _cursorKind = cursor;
-
-            // Leaving any inline viewport hover behind looks odd when hovering transcript entries.
-            if (_hoveredGridBlockId is { } previousGrid && TryGetBlockById(previousGrid, out var gridBlock) && gridBlock is ThumbnailGridBlock grid)
-            {
-                if (grid.SetHoveredIndex(-1))
-                {
-                    hoverChanged = true;
-                }
-            }
-            _hoveredGridBlockId = null;
             return hoverChanged;
         }
 
         var clearedHover = _hoveredActionSpan is not null;
         _hoveredActionSpan = null;
         _hoveredActionSpanIndex = -1;
-
-        // Inline viewport hover (grid tiles).
-        if (TryHitTestInlineViewport(layout, mouseX, mouseY, scrollYPx, out var hitViewport, out var hitViewportRectPx) &&
-            TryGetInlineViewportBlock(hitViewport, out var hitBlock) &&
-            hitBlock is ThumbnailGridBlock hoveredGrid)
-        {
-            var hoverIndexChanged = false;
-
-            if (_hoveredGridBlockId is { } previous && previous != hitViewport.BlockId && TryGetBlockById(previous, out var previousBlock) && previousBlock is ThumbnailGridBlock previousGrid)
-            {
-                if (previousGrid.SetHoveredIndex(-1))
-                {
-                    hoverIndexChanged = true;
-                }
-            }
-
-            _hoveredGridBlockId = hitViewport.BlockId;
-            var hoverIndex = hoveredGrid.TryGetEntryIndexAt(mouseX, mouseY, hitViewportRectPx, out var index) ? index : -1;
-            if (hoveredGrid.SetHoveredIndex(hoverIndex))
-            {
-                hoverIndexChanged = true;
-            }
-
-            cursor = HostCursorKind.Default;
-            _cursorKind = cursor;
-            return clearedHover || hoverIndexChanged;
-        }
-
-        if (_hoveredGridBlockId is { } prevGrid && TryGetBlockById(prevGrid, out var prevBlock) && prevBlock is ThumbnailGridBlock prevHoveredGrid)
-        {
-            var hoverIndexChanged = prevHoveredGrid.SetHoveredIndex(-1);
-            _hoveredGridBlockId = null;
-            if (hoverIndexChanged)
-            {
-                clearedHover = true;
-            }
-        }
 
         cursor = HostCursorKind.Default;
         if (layout.HitTestMap.Lines.Count > 0)
@@ -1131,14 +1074,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         var handled = keyHandler.HandleKey(new HostKeyEvent(key.KeyCode, key.Mods, key.IsDown));
-        if (handled &&
-            block is IBlockCommandActivationProvider activationProvider &&
-            activationProvider.TryDequeueActivation(out var activation))
-        {
-            ActivateEntry(activation.CommandText);
-            SetFocusedInlineViewport(null);
-        }
-
         return handled;
     }
 
@@ -1299,44 +1234,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             !TryGetInlineViewportBlock(hitViewport, out var hitBlock))
         {
             return false;
-        }
-
-        if (e.Kind == HostMouseEventKind.Down &&
-            (e.Buttons & HostMouseButtons.Left) != 0 &&
-            hitBlock is ThumbnailGridBlock grid)
-        {
-            var hit = grid.TryGetEntryIndexAt(e.X, e.Y, hitViewportRectPx, out var entryIndex);
-            _ = grid.SetSelectedIndex(hit ? entryIndex : -1);
-
-            if (hit)
-            {
-                var nowTicks = Stopwatch.GetTimestamp();
-                var isDoubleClick =
-                    _lastGridClickBlockId == hitViewport.BlockId &&
-                    _lastGridClickEntryIndex == entryIndex &&
-                    nowTicks - _lastGridClickTicks <= GetDoubleClickTicks();
-
-                _lastGridClickTicks = nowTicks;
-                _lastGridClickEntryIndex = entryIndex;
-                _lastGridClickBlockId = hitViewport.BlockId;
-
-                if (isDoubleClick &&
-                    grid.TryGetInsertionCommand(e.X, e.Y, hitViewportRectPx, out var commandText))
-                {
-                    ActivateEntry(commandText);
-                    grid.SetSelectedIndex(-1);
-                    SetFocusedInlineViewport(null);
-                    return true;
-                }
-            }
-            else
-            {
-                _lastGridClickTicks = 0;
-                _lastGridClickEntryIndex = -1;
-                _lastGridClickBlockId = null;
-            }
-
-            return true;
         }
 
         var isInsideContentRect =
@@ -1902,10 +1799,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _hoveredActionSpanIndex = -1;
         _hoveredActionSpan = null;
         ClearSelectedActionSpan();
-        _lastGridClickTicks = 0;
-        _lastGridClickEntryIndex = -1;
-        _lastGridClickBlockId = null;
-        _hoveredGridBlockId = null;
         SetCaretToEndOfLastPrompt(_document.Transcript);
         UpdateShellPromptTextIfPresent();
 

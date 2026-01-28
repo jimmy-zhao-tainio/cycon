@@ -30,7 +30,6 @@ public sealed class WaitBlockCommandHandler : IBlockCommandHandler
             kind: ActivityKind.Wait,
             duration: duration.Value,
             stream: ConsoleTextStream.System));
-        ctx.AttachIndicator(activityId);
         return true;
     }
 
