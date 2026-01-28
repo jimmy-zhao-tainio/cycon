@@ -149,9 +149,9 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
             SyncTargetsToCurrent();
         }
 
-        // Wheel deltas are pixel-scaled (16px per wheel unit) to support smooth scrolling.
+        // Wheel deltas are pixel-scaled (48px per wheel unit) to support smooth scrolling.
         // Normalize back to wheel "units" for zoom.
-        var wheel = e.WheelDelta / 16f;
+        var wheel = e.WheelDelta / 48f;
 
         _input.WheelDeltaAccum += wheel * WheelZoomSpeed;
         var minScale = MinScale; //GetFitScale(viewportRectPx);

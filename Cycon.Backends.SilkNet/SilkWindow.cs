@@ -280,8 +280,8 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
             {
                 var pos = mouse.Position;
                 // Convert smooth (fractional) wheel input into pixel-precise deltas.
-                // One "wheel unit" corresponds to one text row (16px) to match the console grid.
-                _wheelAccumYPx += wheel.Y * 16f;
+                // One "wheel unit" corresponds to three text rows (48px), matching classic terminal scroll speed.
+                _wheelAccumYPx += wheel.Y * 48f;
                 var delta = (int)MathF.Truncate(_wheelAccumYPx);
                 if (delta != 0)
                 {

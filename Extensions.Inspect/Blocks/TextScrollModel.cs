@@ -158,9 +158,9 @@ public sealed class TextScrollModel : IScrollModel
 
         UpdateViewport(viewportRectPx);
         var before = _scrollOffsetRows;
-        // Wheel deltas are pixel-scaled (16px per wheel unit) to support smooth scrolling.
+        // Wheel deltas are pixel-scaled (48px per wheel unit) to support smooth scrolling.
         // Normalize back to wheel "units" for row-based scrolling.
-        var wheelUnits = wheelDelta / 16f;
+        var wheelUnits = wheelDelta / 48f;
         var deltaRows = (int)MathF.Round(-wheelUnits * 3f);
         if (deltaRows == 0)
         {

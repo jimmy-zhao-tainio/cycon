@@ -52,6 +52,8 @@ public sealed class ConsoleRenderer
         var scrollOffsetRows = cellH <= 0 ? 0 : scrollOffsetPx / cellH;
         var scrollRemainderPx = cellH <= 0 ? 0 : scrollOffsetPx - (scrollOffsetRows * cellH);
         var scrollYPx = scrollOffsetPx;
+        var scrollbarClipRightX = layout.Scrollbar.IsScrollable ? layout.Scrollbar.TrackRectPx.X : grid.PaddingLeftPx + grid.ContentWidthPx;
+        var contentHighlightWidthPx = Math.Max(0, scrollbarClipRightX - grid.PaddingLeftPx);
 
         var selection = SelectionPass.ComputeSelectionBounds(document);
         var selectionBackground = selectionStyle.SelectedBackgroundRgba;
@@ -97,6 +99,7 @@ public sealed class ConsoleRenderer
 
         HitTestActionSpan? hoveredSpan = null;
         if (hasMousePosition &&
+            (!layout.Scrollbar.IsScrollable || !layout.Scrollbar.HitTrackRectPx.Contains(mouseX, mouseY)) &&
             TryGetActionSpanIndexOnRow(layout, mouseX, mouseY + scrollYPx, out var hoveredIndex) &&
             hoveredIndex >= 0 &&
             hoveredIndex < layout.HitTestMap.ActionSpans.Count)
@@ -107,7 +110,7 @@ public sealed class ConsoleRenderer
         // Inverted highlight for clickable entries: bg becomes fg, text becomes bg.
         if (selectedSpan is { } selectedSpanValue)
         {
-            AddActionSpanHighlight(frame, selectedSpanValue, scrollYPx, layout.Grid, defaultFg);
+            AddActionSpanHighlight(frame, selectedSpanValue, scrollYPx, layout.Grid, contentHighlightWidthPx, defaultFg);
         }
         if (hoveredSpan is { } h)
         {
@@ -116,7 +119,7 @@ public sealed class ConsoleRenderer
             {
                 // Hover uses a darker background while keeping normal text color.
                 var hoverBg = unchecked((int)0x202020FF);
-                AddActionSpanHighlight(frame, h, scrollYPx, layout.Grid, hoverBg);
+                AddActionSpanHighlight(frame, h, scrollYPx, layout.Grid, contentHighlightWidthPx, hoverBg);
             }
         }
 
@@ -137,7 +140,7 @@ public sealed class ConsoleRenderer
                 focusedViewportBlockId);
 
             var rowOnScreen = line.RowIndex - scrollOffsetRows;
-            if (rowOnScreen < 0 || rowOnScreen >= grid.Rows)
+            if (rowOnScreen < 0 || rowOnScreen > grid.Rows || (rowOnScreen == grid.Rows && scrollRemainderPx == 0))
             {
                 continue;
             }
@@ -237,12 +240,12 @@ public sealed class ConsoleRenderer
         return Math.Clamp(document.Scroll.ScrollOffsetPx, 0, maxScrollOffsetPx);
     }
 
-    private static void AddActionSpanHighlight(RenderFrame frame, in HitTestActionSpan span, int scrollYPx, in FixedCellGrid grid, int rgba)
+    private static void AddActionSpanHighlight(RenderFrame frame, in HitTestActionSpan span, int scrollYPx, in FixedCellGrid grid, int widthPx, int rgba)
     {
         var rect = span.RectPx;
         var x = grid.PaddingLeftPx;
         var y = rect.Y - scrollYPx;
-        var w = grid.ContentWidthPx;
+        var w = widthPx;
         var h = grid.CellHeightPx;
 
         if (w <= 0 || h <= 0)

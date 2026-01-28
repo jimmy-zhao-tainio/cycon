@@ -236,9 +236,9 @@ internal sealed class Scene3DPointerController
             return;
         }
 
-        // Wheel deltas are pixel-scaled (16px per wheel unit) to support smooth scrolling.
+        // Wheel deltas are pixel-scaled (48px per wheel unit) to support smooth scrolling.
         // Normalize back to wheel "units" for camera zoom.
-        var deltaUnits = (settings.InvertZoom ? -wheelDelta : wheelDelta) / 16f;
+        var deltaUnits = (settings.InvertZoom ? -wheelDelta : wheelDelta) / 48f;
         var factor = MathF.Exp(-deltaUnits * settings.ZoomSensitivity);
         ApplySceneDollyFactor(stl, factor);
     }
