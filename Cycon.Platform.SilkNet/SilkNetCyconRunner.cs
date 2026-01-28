@@ -15,7 +15,7 @@ public static class SilkNetCyconRunner
     private const int ActiveHz = 60;
     private const int AnimationBoostMs = 250;
     private const int MaxTickDtMs = 33;
-    private const int CaretPeriodMs = 1200;
+    private const double CaretPeriodSeconds = 1.2;
     private const int CaretAnimHz = 30;
 
     public static void Run2D(CyconAppOptions options)
@@ -38,10 +38,11 @@ public static class SilkNetCyconRunner
         var dirty = true;
         var animationBoostUntilTicks = 0L;
         var nextFrameAtTicks = 0L;
-        var caretPeriodTicks = MsToTicks(CaretPeriodMs);
-        var caretAnimIntervalTicks = (long)(Stopwatch.Frequency / (double)CaretAnimHz);
-        var caretPhaseStartTicks = Stopwatch.GetTimestamp();
-        byte lastCaretAlpha = 0xFF;
+        var caretPeriodTicks = (long)(Stopwatch.Frequency * CaretPeriodSeconds);
+        var caretAnimIntervalTicks = (long)(Stopwatch.Frequency / (double)Math.Max(1, CaretAnimHz));
+        var caretEpochTicks = Stopwatch.GetTimestamp();
+        long nextCaretUpdateAtTicks;
+        byte lastCaretAlpha;
 
         void Invalidate(long nowTicks, bool wake = false)
         {
@@ -60,7 +61,8 @@ public static class SilkNetCyconRunner
             configureBlockCommands: options.ConfigureBlockCommands);
         {
             var nowTicks = Stopwatch.GetTimestamp();
-            lastCaretAlpha = ComputeCaretAlpha(nowTicks, caretPhaseStartTicks, caretPeriodTicks);
+            nextCaretUpdateAtTicks = ComputeNextCaretUpdateTicks(nowTicks, caretEpochTicks, caretPeriodTicks, caretAnimIntervalTicks);
+            lastCaretAlpha = ComputeCaretAlpha(nowTicks, caretEpochTicks, caretPeriodTicks);
             session.SetCaretAlphaOverride(lastCaretAlpha);
         }
 
@@ -403,7 +405,7 @@ public static class SilkNetCyconRunner
 
             nextDeadlineTicks = Math.Min(
                 nextDeadlineTicks,
-                ComputeNextCaretUpdateTicks(nowTicks, caretPhaseStartTicks, caretPeriodTicks, caretAnimIntervalTicks));
+                nextCaretUpdateAtTicks);
 
             if (nextDeadlineTicks == long.MaxValue)
             {
@@ -427,12 +429,17 @@ public static class SilkNetCyconRunner
             }
 
             var nowTicks = Stopwatch.GetTimestamp();
-            var caretAlpha = ComputeCaretAlpha(nowTicks, caretPhaseStartTicks, caretPeriodTicks);
-            if (caretAlpha != lastCaretAlpha)
+            if (nowTicks >= nextCaretUpdateAtTicks)
             {
-                lastCaretAlpha = caretAlpha;
-                session.SetCaretAlphaOverride(caretAlpha);
-                dirty = true;
+                var caretAlpha = ComputeCaretAlpha(nowTicks, caretEpochTicks, caretPeriodTicks);
+                if (caretAlpha != lastCaretAlpha)
+                {
+                    lastCaretAlpha = caretAlpha;
+                    session.SetCaretAlphaOverride(caretAlpha);
+                    dirty = true;
+                }
+
+                nextCaretUpdateAtTicks = ComputeNextCaretUpdateTicks(nowTicks, caretEpochTicks, caretPeriodTicks, caretAnimIntervalTicks);
             }
 
             if (dirty)
@@ -476,14 +483,14 @@ public static class SilkNetCyconRunner
     private static long MsToTicks(int ms) =>
         (long)(ms * (Stopwatch.Frequency / 1000.0));
 
-    private static byte ComputeCaretAlpha(long nowTicks, long phaseStartTicks, long periodTicks)
+    private static byte ComputeCaretAlpha(long nowTicks, long caretEpochTicks, long periodTicks)
     {
         if (periodTicks <= 0)
         {
             return 0xFF;
         }
 
-        var elapsed = nowTicks - phaseStartTicks;
+        var elapsed = nowTicks - caretEpochTicks;
         if (elapsed < 0)
         {
             elapsed = 0;
@@ -491,10 +498,10 @@ public static class SilkNetCyconRunner
 
         var phaseTicks = elapsed % periodTicks;
 
-        var off1End = periodTicks * 15 / 100;
-        var fadeInEnd = periodTicks * 25 / 100;
-        var onEnd = periodTicks * 65 / 100;
-        var fadeOutEnd = periodTicks * 75 / 100;
+        var off1End = (long)Math.Round(periodTicks * 0.15);
+        var fadeInEnd = (long)Math.Round(periodTicks * 0.25);
+        var onEnd = (long)Math.Round(periodTicks * 0.65);
+        var fadeOutEnd = (long)Math.Round(periodTicks * 0.75);
 
         static double SmoothStep(double x)
         {
@@ -529,7 +536,7 @@ public static class SilkNetCyconRunner
         return (byte)Math.Clamp((int)Math.Round(a * 255.0), 0, 255);
     }
 
-    private static long ComputeNextCaretUpdateTicks(long nowTicks, long phaseStartTicks, long periodTicks, long animIntervalTicks)
+    private static long ComputeNextCaretUpdateTicks(long nowTicks, long caretEpochTicks, long periodTicks, long animIntervalTicks)
     {
         if (periodTicks <= 0)
         {
@@ -541,42 +548,46 @@ public static class SilkNetCyconRunner
             animIntervalTicks = 1;
         }
 
-        var elapsed = nowTicks - phaseStartTicks;
+        var elapsed = nowTicks - caretEpochTicks;
         if (elapsed < 0)
         {
             elapsed = 0;
         }
 
         var cycleIndex = elapsed / periodTicks;
-        var cycleStart = phaseStartTicks + cycleIndex * periodTicks;
+        var cycleStart = caretEpochTicks + cycleIndex * periodTicks;
         var phaseTicks = nowTicks - cycleStart;
 
-        var off1End = periodTicks * 15 / 100;
-        var fadeInEnd = periodTicks * 25 / 100;
-        var onEnd = periodTicks * 65 / 100;
-        var fadeOutEnd = periodTicks * 75 / 100;
+        var off1End = (long)Math.Round(periodTicks * 0.15);
+        var fadeInEnd = (long)Math.Round(periodTicks * 0.25);
+        var onEnd = (long)Math.Round(periodTicks * 0.65);
+        var fadeOutEnd = (long)Math.Round(periodTicks * 0.75);
+
+        var nextSample = caretEpochTicks + ((elapsed / animIntervalTicks) + 1) * animIntervalTicks;
 
         long nextEdge;
         if (phaseTicks < off1End)
         {
-            return cycleStart + off1End;
+            nextEdge = cycleStart + off1End;
+            return nextEdge;
         }
 
         if (phaseTicks < fadeInEnd)
         {
             nextEdge = cycleStart + fadeInEnd;
-            return Math.Min(nowTicks + animIntervalTicks, nextEdge);
+            return Math.Min(nextSample, nextEdge);
         }
 
         if (phaseTicks < onEnd)
         {
-            return cycleStart + onEnd;
+            nextEdge = cycleStart + onEnd;
+            return nextEdge;
         }
 
         if (phaseTicks < fadeOutEnd)
         {
             nextEdge = cycleStart + fadeOutEnd;
-            return Math.Min(nowTicks + animIntervalTicks, nextEdge);
+            return Math.Min(nextSample, nextEdge);
         }
 
         return cycleStart + periodTicks;

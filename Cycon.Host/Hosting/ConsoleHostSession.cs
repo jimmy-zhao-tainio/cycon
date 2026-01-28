@@ -504,6 +504,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             var fps = Math.Max(1, indicators.AnimationFps);
             minIntervalMs = (int)Math.Clamp(Math.Floor(1000.0 / fps), 1.0, 33.0);
         }
+        if (_caretAlphaOverride is not null)
+        {
+            minIntervalMs = 0;
+        }
 
         var elapsedSinceCaretMs = (nowTicks - _lastCaretRenderTicks) * 1000.0 / Stopwatch.Frequency;
         if (_lastCaretRenderTicks != 0 && elapsedSinceCaretMs < minIntervalMs)
