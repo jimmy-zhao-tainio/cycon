@@ -1,13 +1,17 @@
 using System;
 using Cycon.Backends.Abstractions;
+using Silk.NET.GLFW;
 using Silk.NET.Input;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
+using InputMouseButton = Silk.NET.Input.MouseButton;
 
 namespace Cycon.Backends.SilkNet;
 
 public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposable
 {
+    private static readonly Glfw GlfwApi = Glfw.GetApi();
+
     private readonly Silk.NET.Windowing.IWindow _window;
     private IInputContext? _input;
     private IMouse? _primaryMouse;
@@ -35,8 +39,8 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     public event Action<Key>? KeyDown;
     public event Action<Key>? KeyUp;
     public event Action<int, int>? MouseMoved;
-    public event Action<int, int, MouseButton>? MouseDown;
-    public event Action<int, int, MouseButton>? MouseUp;
+    public event Action<int, int, InputMouseButton>? MouseDown;
+    public event Action<int, int, InputMouseButton>? MouseUp;
     public event Action<int, int, int>? MouseWheel;
     public event Action<string>? FileDropped;
     public event Action<bool>? FocusChanged;
@@ -92,9 +96,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         options.Size = new Vector2D<int>(snapWidth, snapHeight);
         options.Title = title;
         options.IsVisible = false;
-        options.IsEventDriven = true;
-        options.FramesPerSecond = 60;
-        options.UpdatesPerSecond = 60;
+        options.IsEventDriven = false;
         options.API = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.ForwardCompatible, new APIVersion(3, 3));
         options.PreferredDepthBufferBits = 24;
         options.PreferredStencilBufferBits = 8;
@@ -143,11 +145,38 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         }
     }
 
-    public void Run() => _window.Run();
+    public void Initialize() => _window.Initialize();
+
+    public void RunScheduled(Func<double?> getWaitSeconds, Func<bool> shouldRender)
+    {
+        while (!_window.IsClosing)
+        {
+            var waitSeconds = getWaitSeconds();
+            if (waitSeconds is null)
+            {
+                GlfwApi.WaitEvents();
+            }
+            else
+            {
+                GlfwApi.WaitEventsTimeout(Math.Max(0.0, waitSeconds.Value));
+            }
+
+            _window.DoEvents();
+
+            if (shouldRender())
+            {
+                _window.DoRender();
+            }
+        }
+    }
 
     internal void SwapBuffers() => _window.SwapBuffers();
 
-    public void Wake() => _window.ContinueEvents();
+    public void Wake()
+    {
+        GlfwApi.PostEmptyEvent();
+        _window.ContinueEvents();
+    }
 
     public void SetStandardCursor(StandardCursor cursor)
     {

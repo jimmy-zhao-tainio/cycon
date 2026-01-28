@@ -107,6 +107,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         IClipboard clipboard,
         int resizeSettleMs,
         int rebuildThrottleMs,
+        Action? wake,
         Action<BlockCommandRegistry>? configureBlockCommands)
     {
         _clipboard = clipboard;
@@ -130,7 +131,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _selectionStyle = SelectionStyle.Default;
         _layoutEngine = new LayoutEngine();
 
-        _jobScheduler = new JobScheduler();
+        _jobScheduler = new JobScheduler(wake);
         var registry = new CommandRegistry();
         registry.Register(new EchoCommandHandler());
         registry.Register(new AskCommandHandler());
@@ -169,9 +170,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         IClipboard clipboard,
         int resizeSettleMs = 80,
         int rebuildThrottleMs = 80,
+        Action? wake = null,
         Action<BlockCommandRegistry>? configureBlockCommands = null)
     {
-        return new ConsoleHostSession(text, clipboard, resizeSettleMs, rebuildThrottleMs, configureBlockCommands);
+        return new ConsoleHostSession(text, clipboard, resizeSettleMs, rebuildThrottleMs, wake, configureBlockCommands);
     }
 
     public GlyphAtlasData Atlas => _atlasData;

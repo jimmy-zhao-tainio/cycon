@@ -19,9 +19,11 @@ public sealed class JobScheduler : IJobRuntime
 
     private readonly CancelEscalationPolicy _cancelPolicy;
     private readonly ConcurrentDictionary<JobId, CancellationState> _cancelStates = new();
+    private readonly Action? _wake;
 
-    public JobScheduler(CancelEscalationPolicy? policy = null)
+    public JobScheduler(Action? wake = null, CancelEscalationPolicy? policy = null)
     {
+        _wake = wake;
         _cancelPolicy = policy ?? CancelEscalationPolicy.Default;
     }
 
@@ -122,6 +124,7 @@ public sealed class JobScheduler : IJobRuntime
         var arrival = Interlocked.Increment(ref _arrivalIndex);
         var seq = _eventSeq.AddOrUpdate(jobId, 1, static (_, existing) => existing + 1);
         _events.Enqueue(new PublishedEvent(jobId, seq, arrival, e));
+        _wake?.Invoke();
     }
 
     private sealed class SchedulerEventSink : IEventSink
