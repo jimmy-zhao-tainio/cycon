@@ -47,8 +47,11 @@ public sealed class ConsoleRenderer
 
         var grid = layout.Grid;
         var blocks = document.Transcript.Blocks;
-        var scrollOffsetRows = GetScrollOffsetRows(document, layout);
-        var scrollYPx = scrollOffsetRows * grid.CellHeightPx;
+        var scrollOffsetPx = GetScrollOffsetPx(document, layout);
+        var cellH = grid.CellHeightPx;
+        var scrollOffsetRows = cellH <= 0 ? 0 : scrollOffsetPx / cellH;
+        var scrollRemainderPx = cellH <= 0 ? 0 : scrollOffsetPx - (scrollOffsetRows * cellH);
+        var scrollYPx = scrollOffsetPx;
 
         var selection = SelectionPass.ComputeSelectionBounds(document);
         var selectionBackground = selectionStyle.SelectedBackgroundRgba;
@@ -168,6 +171,7 @@ public sealed class ConsoleRenderer
                     fontMetrics,
                     grid,
                     rowOnScreen,
+                    scrollRemainderPx,
                     lineForeground,
                     timeSeconds);
             }
@@ -191,6 +195,7 @@ public sealed class ConsoleRenderer
                     line,
                     grid,
                     rowOnScreen,
+                    scrollRemainderPx,
                     selectionBackground.Value);
             }
 
@@ -201,6 +206,7 @@ public sealed class ConsoleRenderer
                 grid,
                 line,
                 rowOnScreen,
+                scrollRemainderPx,
                 block,
                 text,
                 lineForeground,
@@ -214,19 +220,21 @@ public sealed class ConsoleRenderer
         if (pendingCaret is { } caretQuad)
         {
             var caretColor = document.Settings.DefaultTextStyle.ForegroundRgba;
-            CaretPass.RenderCaret(frame, grid, fontMetrics, scrollOffsetRows, caretQuad, caretColor, caretAlpha);
+            CaretPass.RenderCaret(frame, grid, fontMetrics, scrollOffsetPx, caretQuad, caretColor, caretAlpha);
         }
 
         return frame;
     }
 
-    private static int GetScrollOffsetRows(ConsoleDocument document, LayoutFrame layout)
+    private static int GetScrollOffsetPx(ConsoleDocument document, LayoutFrame layout)
     {
         var maxScrollOffsetRows = layout.Grid.Rows <= 0
             ? 0
             : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
 
-        return Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
+        var cellH = layout.Grid.CellHeightPx;
+        var maxScrollOffsetPx = Math.Max(0, maxScrollOffsetRows * cellH);
+        return Math.Clamp(document.Scroll.ScrollOffsetPx, 0, maxScrollOffsetPx);
     }
 
     private static void AddActionSpanHighlight(RenderFrame frame, in HitTestActionSpan span, int scrollYPx, in FixedCellGrid grid, int rgba)

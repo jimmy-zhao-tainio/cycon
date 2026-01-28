@@ -25,6 +25,7 @@ internal static class ActivityIndicatorPass
         FontMetrics fontMetrics,
         FixedCellGrid grid,
         int rowOnScreen,
+        int scrollRemainderPx,
         int lineForegroundRgba,
         double timeSeconds)
     {
@@ -48,7 +49,7 @@ internal static class ActivityIndicatorPass
             return;
         }
 
-        AddActivityIndicator(frame, settings, fontMetrics, activityBlock, runnable, grid, rowOnScreen, lineForegroundRgba, timeSeconds, lineLengthCols);
+        AddActivityIndicator(frame, settings, fontMetrics, activityBlock, runnable, grid, rowOnScreen, scrollRemainderPx, lineForegroundRgba, timeSeconds, lineLengthCols);
     }
 
     private static void AddActivityIndicator(
@@ -59,6 +60,7 @@ internal static class ActivityIndicatorPass
         IRunnableBlock runnable,
         FixedCellGrid grid,
         int rowOnScreen,
+        int scrollRemainderPx,
         int blockForegroundRgba,
         double timeSeconds,
         int lineLengthCols)
@@ -68,7 +70,7 @@ internal static class ActivityIndicatorPass
             return;
         }
 
-        var rectY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
+        var rectY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx) - scrollRemainderPx;
         var rectW = grid.CellWidthPx;
         if (rectW <= 0 || lineLengthCols >= grid.Cols)
         {

@@ -121,7 +121,9 @@ public sealed class LayoutEngine
 
         var hitMap = new HitTestMap(grid, hitLines, actionSpans);
         var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, rowIndex - grid.Rows);
-        var clampedScrollOffsetRows = Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
+        var clampedScrollOffsetRows = grid.CellHeightPx <= 0
+            ? 0
+            : Math.Clamp(document.Scroll.ScrollOffsetPx / grid.CellHeightPx, 0, maxScrollOffsetRows);
         var scrollbar = ScrollbarLayouter.Layout(grid, rowIndex, clampedScrollOffsetRows, document.Settings.Scrollbar);
         return new LayoutFrame(grid, lines, hitMap, rowIndex, scrollbar, sceneViewports);
     }

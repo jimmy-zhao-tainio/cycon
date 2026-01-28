@@ -236,8 +236,10 @@ internal sealed class Scene3DPointerController
             return;
         }
 
-        var delta = settings.InvertZoom ? -wheelDelta : wheelDelta;
-        var factor = MathF.Exp(-delta * settings.ZoomSensitivity);
+        // Wheel deltas are pixel-scaled (16px per wheel unit) to support smooth scrolling.
+        // Normalize back to wheel "units" for camera zoom.
+        var deltaUnits = (settings.InvertZoom ? -wheelDelta : wheelDelta) / 16f;
+        var factor = MathF.Exp(-deltaUnits * settings.ZoomSensitivity);
         ApplySceneDollyFactor(stl, factor);
     }
 

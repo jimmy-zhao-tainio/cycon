@@ -60,25 +60,31 @@ internal sealed class RenderPipeline
         var maxScrollOffsetRows = layout.Grid.Rows <= 0
             ? 0
             : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
+        var cellH = layout.Grid.CellHeightPx;
+        var maxScrollOffsetPx = Math.Max(0, maxScrollOffsetRows * cellH);
 
         if (document.Scroll.IsFollowingTail)
         {
-            if (document.Scroll.ScrollOffsetRows != maxScrollOffsetRows)
+            if (document.Scroll.ScrollOffsetPx != maxScrollOffsetPx)
             {
-                document.Scroll.ScrollOffsetRows = maxScrollOffsetRows;
-                document.Scroll.ScrollRowsFromBottom = 0;
+                document.Scroll.ScrollOffsetPx = maxScrollOffsetPx;
+                document.Scroll.ScrollPxFromBottom = 0;
             }
         }
         else
         {
-            document.Scroll.ScrollOffsetRows = Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
-            document.Scroll.ScrollRowsFromBottom = maxScrollOffsetRows - document.Scroll.ScrollOffsetRows;
+            document.Scroll.ScrollOffsetPx = Math.Clamp(document.Scroll.ScrollOffsetPx, 0, maxScrollOffsetPx);
+            document.Scroll.ScrollPxFromBottom = maxScrollOffsetPx - document.Scroll.ScrollOffsetPx;
         }
+
+        var scrollOffsetRowsForScrollbar = cellH <= 0
+            ? 0
+            : Math.Clamp(document.Scroll.ScrollOffsetPx / cellH, 0, maxScrollOffsetRows);
 
         var scrollbar = ScrollbarLayouter.Layout(
             layout.Grid,
             layout.TotalRows,
-            document.Scroll.ScrollOffsetRows,
+            scrollOffsetRowsForScrollbar,
             document.Settings.Scrollbar);
 
         if (scrollbar != layout.Scrollbar)

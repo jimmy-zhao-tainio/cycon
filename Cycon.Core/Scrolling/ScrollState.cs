@@ -5,22 +5,22 @@ namespace Cycon.Core.Scrolling;
 
 public sealed class ScrollState
 {
-    public int ScrollOffsetRows { get; set; }
+    public int ScrollOffsetPx { get; set; }
     public bool IsFollowingTail { get; set; } = true;
-    public int ScrollRowsFromBottom { get; set; }
+    public int ScrollPxFromBottom { get; set; }
     public TopVisualLineAnchor? TopVisualLineAnchor { get; set; }
     public ScrollbarUiState ScrollbarUi { get; } = new();
 
-    public void ApplyUserScrollDelta(int deltaRows, int maxScrollOffsetRows)
+    public void ApplyUserScrollDelta(int deltaPx, int maxScrollOffsetPx)
     {
-        if (deltaRows == 0)
+        if (deltaPx == 0)
         {
             return;
         }
 
-        ScrollOffsetRows = Math.Clamp(ScrollOffsetRows + deltaRows, 0, maxScrollOffsetRows);
-        IsFollowingTail = ScrollOffsetRows >= maxScrollOffsetRows;
-        ScrollRowsFromBottom = maxScrollOffsetRows - ScrollOffsetRows;
+        ScrollOffsetPx = Math.Clamp(ScrollOffsetPx + deltaPx, 0, maxScrollOffsetPx);
+        IsFollowingTail = ScrollOffsetPx >= maxScrollOffsetPx;
+        ScrollPxFromBottom = maxScrollOffsetPx - ScrollOffsetPx;
     }
 }
 

@@ -10,41 +10,45 @@ public static class ScrollAnchoring
         if (layout.Lines.Count == 0)
         {
             scroll.TopVisualLineAnchor = null;
-            scroll.ScrollRowsFromBottom = 0;
-            scroll.ScrollOffsetRows = 0;
+            scroll.ScrollPxFromBottom = 0;
+            scroll.ScrollOffsetPx = 0;
             return;
         }
 
+        var cellH = layout.Grid.CellHeightPx;
         var maxScrollOffsetRows = Math.Max(0, layout.TotalRows - layout.Grid.Rows);
-        scroll.ScrollOffsetRows = Math.Clamp(scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
-        scroll.ScrollRowsFromBottom = maxScrollOffsetRows - scroll.ScrollOffsetRows;
+        var maxScrollOffsetPx = Math.Max(0, maxScrollOffsetRows * cellH);
+        scroll.ScrollOffsetPx = Math.Clamp(scroll.ScrollOffsetPx, 0, maxScrollOffsetPx);
+        scroll.ScrollPxFromBottom = maxScrollOffsetPx - scroll.ScrollOffsetPx;
 
-        var topRow = Math.Clamp(scroll.ScrollOffsetRows, 0, layout.Lines.Count - 1);
+        var topRow = Math.Clamp(cellH <= 0 ? 0 : scroll.ScrollOffsetPx / cellH, 0, layout.Lines.Count - 1);
         var topLine = layout.Lines[topRow];
         scroll.TopVisualLineAnchor = new TopVisualLineAnchor(topLine.BlockId, topLine.Start);
     }
 
     public static void RestoreFromAnchor(ScrollState scroll, LayoutFrame layout)
     {
+        var cellH = layout.Grid.CellHeightPx;
         var maxScrollOffsetRows = Math.Max(0, layout.TotalRows - layout.Grid.Rows);
+        var maxScrollOffsetPx = Math.Max(0, maxScrollOffsetRows * cellH);
 
         if (scroll.IsFollowingTail)
         {
-            scroll.ScrollOffsetRows = maxScrollOffsetRows;
-            scroll.ScrollRowsFromBottom = 0;
+            scroll.ScrollOffsetPx = maxScrollOffsetPx;
+            scroll.ScrollPxFromBottom = 0;
             return;
         }
 
         if (scroll.TopVisualLineAnchor is not { } anchor || layout.Lines.Count == 0)
         {
-            scroll.ScrollOffsetRows = Math.Clamp(scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
-            scroll.ScrollRowsFromBottom = maxScrollOffsetRows - scroll.ScrollOffsetRows;
+            scroll.ScrollOffsetPx = Math.Clamp(scroll.ScrollOffsetPx, 0, maxScrollOffsetPx);
+            scroll.ScrollPxFromBottom = maxScrollOffsetPx - scroll.ScrollOffsetPx;
             return;
         }
 
         var anchoredRow = FindRowForAnchor(layout, anchor);
-        scroll.ScrollOffsetRows = Math.Clamp(anchoredRow, 0, maxScrollOffsetRows);
-        scroll.ScrollRowsFromBottom = maxScrollOffsetRows - scroll.ScrollOffsetRows;
+        scroll.ScrollOffsetPx = Math.Clamp(anchoredRow * cellH, 0, maxScrollOffsetPx);
+        scroll.ScrollPxFromBottom = maxScrollOffsetPx - scroll.ScrollOffsetPx;
     }
 
     private static int FindRowForAnchor(LayoutFrame layout, TopVisualLineAnchor anchor)

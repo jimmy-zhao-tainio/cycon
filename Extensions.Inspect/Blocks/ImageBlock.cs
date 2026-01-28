@@ -149,13 +149,9 @@ public sealed class ImageBlock : IBlock, IRenderBlock, IMeasureBlock, IBlockPoin
             SyncTargetsToCurrent();
         }
 
-        var wheel = (float)e.WheelDelta;
-
-        // If the backend is Windows-style (120 per notch), normalize to "notches".
-        if (MathF.Abs(wheel) >= 10f)
-        {
-            wheel /= 120f;
-        }
+        // Wheel deltas are pixel-scaled (16px per wheel unit) to support smooth scrolling.
+        // Normalize back to wheel "units" for zoom.
+        var wheel = e.WheelDelta / 16f;
 
         _input.WheelDeltaAccum += wheel * WheelZoomSpeed;
         var minScale = MinScale; //GetFitScale(viewportRectPx);

@@ -78,6 +78,7 @@ internal static class TextPass
         FixedCellGrid grid,
         LayoutLine line,
         int rowOnScreen,
+        int scrollRemainderPx,
         IBlock block,
         string text,
         int lineForeground,
@@ -98,7 +99,7 @@ internal static class TextPass
             var glyph = font.MapGlyph(codepoint);
 
             var cellX = grid.PaddingLeftPx + (i * grid.CellWidthPx);
-            var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
+            var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx) - scrollRemainderPx;
             var baselineY = cellY + fontMetrics.BaselinePx;
 
             var glyphX = cellX + glyph.BearingX;

@@ -32,7 +32,10 @@ internal sealed class ConsoleScrollModel : IScrollModel
 
         var grid = FixedCellGrid.FromViewport(new ConsoleViewport(viewportRectPx.Width, viewportRectPx.Height), _layoutSettings);
         var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, TotalRows - grid.Rows);
-        var clampedScrollOffsetRows = Math.Clamp(_document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
+        var cellH = grid.CellHeightPx;
+        var clampedScrollOffsetRows = cellH <= 0
+            ? 0
+            : Math.Clamp(_document.Scroll.ScrollOffsetPx / cellH, 0, maxScrollOffsetRows);
         var sb = ScrollbarLayouter.Layout(grid, TotalRows, clampedScrollOffsetRows, settings);
         if (!sb.IsScrollable)
         {
@@ -58,10 +61,13 @@ internal sealed class ConsoleScrollModel : IScrollModel
             return false;
         }
 
-        var before = _document.Scroll.ScrollOffsetRows;
-        var deltaRows = -wheelDelta;
-        _document.Scroll.ApplyUserScrollDelta(deltaRows, maxScrollOffsetRows);
-        return _document.Scroll.ScrollOffsetRows != before;
+        var cellH = grid.CellHeightPx;
+        var maxScrollOffsetPx = Math.Max(0, maxScrollOffsetRows * cellH);
+
+        var before = _document.Scroll.ScrollOffsetPx;
+        var deltaPx = -wheelDelta;
+        _document.Scroll.ApplyUserScrollDelta(deltaPx, maxScrollOffsetPx);
+        return _document.Scroll.ScrollOffsetPx != before;
     }
 
     public bool DragThumbTo(int pointerYPx, int grabOffsetYPx, PxRect viewportRectPx, ScrollbarLayout layout)
@@ -94,20 +100,17 @@ internal sealed class ConsoleScrollModel : IScrollModel
             ? 0
             : (int)((long)(desiredThumbTop - track.Y) * maxScrollYPx / thumbTravel);
 
-        var maxScrollOffsetRows = grid.Rows <= 0 ? 0 : Math.Max(0, TotalRows - grid.Rows);
-        var newScrollRows = (newScrollYPx + (cellH / 2)) / cellH;
-
-        var before = _document.Scroll.ScrollOffsetRows;
-        SetScrollOffsetRows(newScrollRows, maxScrollOffsetRows);
-        return _document.Scroll.ScrollOffsetRows != before;
+        var before = _document.Scroll.ScrollOffsetPx;
+        SetScrollOffsetPx(newScrollYPx, maxScrollYPx);
+        return _document.Scroll.ScrollOffsetPx != before;
     }
 
-    private void SetScrollOffsetRows(int scrollOffsetRows, int maxScrollOffsetRows)
+    private void SetScrollOffsetPx(int scrollOffsetPx, int maxScrollOffsetPx)
     {
-        var clamped = Math.Clamp(scrollOffsetRows, 0, maxScrollOffsetRows);
-        _document.Scroll.ScrollOffsetRows = clamped;
-        _document.Scroll.IsFollowingTail = clamped >= maxScrollOffsetRows;
-        _document.Scroll.ScrollRowsFromBottom = maxScrollOffsetRows - clamped;
+        var clamped = Math.Clamp(scrollOffsetPx, 0, maxScrollOffsetPx);
+        _document.Scroll.ScrollOffsetPx = clamped;
+        _document.Scroll.IsFollowingTail = clamped >= maxScrollOffsetPx;
+        _document.Scroll.ScrollPxFromBottom = maxScrollOffsetPx - clamped;
     }
 
     private static ScrollbarLayout Offset(ScrollbarLayout sb, int dx, int dy)

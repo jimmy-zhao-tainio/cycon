@@ -773,10 +773,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                         delta = -delta;
                     }
 
+                    var cellH = _lastLayout.Grid.CellHeightPx;
                     var maxScrollOffsetRows = Math.Max(0, _lastLayout.TotalRows - _lastLayout.Grid.Rows);
-                    var before = _document.Scroll.ScrollOffsetRows;
-                    _document.Scroll.ApplyUserScrollDelta(delta, maxScrollOffsetRows);
-                    if (_document.Scroll.ScrollOffsetRows != before)
+                    var maxScrollOffsetPx = Math.Max(0, maxScrollOffsetRows * cellH);
+                    var before = _document.Scroll.ScrollOffsetPx;
+                    _document.Scroll.ApplyUserScrollDelta(delta * cellH, maxScrollOffsetPx);
+                    if (_document.Scroll.ScrollOffsetPx != before)
                     {
                         _pendingContentRebuild = true;
                     }
@@ -794,14 +796,13 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 _lastMouseY = mouseEvent.Y;
                 _hasMousePosition = true;
 
-                if (mouseEvent.Kind == HostMouseEventKind.Down)
-                {
-                    var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
-                    var scrollYPx = scrollOffsetRows * _font.Metrics.CellHeightPx;
-                    if (TryHitTestInlineViewport(_lastLayout, mouseEvent.X, mouseEvent.Y, scrollYPx, out var hitViewport, out _))
+                    if (mouseEvent.Kind == HostMouseEventKind.Down)
                     {
-                        SetFocusedInlineViewport(hitViewport.BlockId);
-                    }
+                        var scrollYPx = GetScrollOffsetPx(_document, _lastLayout);
+                        if (TryHitTestInlineViewport(_lastLayout, mouseEvent.X, mouseEvent.Y, scrollYPx, out var hitViewport, out _))
+                        {
+                            SetFocusedInlineViewport(hitViewport.BlockId);
+                        }
                     else
                     {
                         SetFocusedInlineViewport(null);
@@ -938,9 +939,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             }
         }
 
-        var scrollOffsetRows = GetScrollOffsetRows(_document, layout);
-        var adjustedY = mouseY + (scrollOffsetRows * layout.Grid.CellHeightPx);
-        var scrollYPx = scrollOffsetRows * layout.Grid.CellHeightPx;
+        var scrollYPx = GetScrollOffsetPx(_document, layout);
+        var adjustedY = mouseY + scrollYPx;
 
         HostCursorKind cursor;
 
@@ -1001,9 +1001,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             return null;
         }
 
-        var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
         var adjustedX = e.X;
-        var adjustedY = e.Y + (scrollOffsetRows * _font.Metrics.CellHeightPx);
+        var adjustedY = e.Y + GetScrollOffsetPx(_document, _lastLayout);
 
         return e.Kind switch
         {
@@ -1224,8 +1223,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             return false;
         }
 
-        var scrollOffsetRows = GetScrollOffsetRows(_document, _lastLayout);
-        var scrollYPx = scrollOffsetRows * _font.Metrics.CellHeightPx;
+        var scrollYPx = GetScrollOffsetPx(_document, _lastLayout);
 
         if (_capturedInlineViewportBlockId is { } capturedId)
         {
@@ -1824,9 +1822,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _commandIndicatorStartTicks.Clear();
         _visibleCommandIndicators.Clear();
 
-        _document.Scroll.ScrollOffsetRows = 0;
+        _document.Scroll.ScrollOffsetPx = 0;
         _document.Scroll.IsFollowingTail = true;
-        _document.Scroll.ScrollRowsFromBottom = 0;
+        _document.Scroll.ScrollPxFromBottom = 0;
         _document.Scroll.TopVisualLineAnchor = null;
         _document.Scroll.ScrollbarUi.Visibility = 0;
         _document.Scroll.ScrollbarUi.IsHovering = false;
@@ -2331,13 +2329,15 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
 
 
-    private static int GetScrollOffsetRows(ConsoleDocument document, LayoutFrame layout)
+    private static int GetScrollOffsetPx(ConsoleDocument document, LayoutFrame layout)
     {
         var maxScrollOffsetRows = layout.Grid.Rows <= 0
             ? 0
             : Math.Max(0, layout.TotalRows - layout.Grid.Rows);
 
-        return Math.Clamp(document.Scroll.ScrollOffsetRows, 0, maxScrollOffsetRows);
+        var cellH = layout.Grid.CellHeightPx;
+        var maxScrollOffsetPx = Math.Max(0, maxScrollOffsetRows * cellH);
+        return Math.Clamp(document.Scroll.ScrollOffsetPx, 0, maxScrollOffsetPx);
     }
 
     private static long GetDoubleClickTicks() => (long)(Stopwatch.Frequency * 0.35);
@@ -2524,22 +2524,20 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             return;
         }
 
-        var scrollYPx = _document.Scroll.ScrollOffsetRows * grid.CellHeightPx;
+        var scrollYPx = _document.Scroll.ScrollOffsetPx;
         var y0 = rect.Y - scrollYPx;
         var y1 = y0 + rect.Height;
         var viewH = grid.FramebufferHeightPx;
 
         if (y0 < 0)
         {
-            var rowsUp = (int)Math.Ceiling((-y0) / (double)grid.CellHeightPx);
-            _document.Scroll.ScrollOffsetRows = Math.Max(0, _document.Scroll.ScrollOffsetRows - Math.Max(1, rowsUp));
+            _document.Scroll.ScrollOffsetPx = Math.Max(0, _document.Scroll.ScrollOffsetPx + y0);
             _document.Scroll.IsFollowingTail = false;
         }
         else if (y1 > viewH)
         {
-            var rowsDown = (int)Math.Ceiling((y1 - viewH) / (double)grid.CellHeightPx);
-            var maxScrollOffsetRows = Math.Max(0, layout.TotalRows - grid.Rows);
-            _document.Scroll.ScrollOffsetRows = Math.Min(maxScrollOffsetRows, _document.Scroll.ScrollOffsetRows + Math.Max(1, rowsDown));
+            var maxScrollOffsetPx = Math.Max(0, (layout.TotalRows - grid.Rows) * grid.CellHeightPx);
+            _document.Scroll.ScrollOffsetPx = Math.Min(maxScrollOffsetPx, _document.Scroll.ScrollOffsetPx + (y1 - viewH));
             _document.Scroll.IsFollowingTail = false;
         }
     }
@@ -2568,8 +2566,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             }
         }
 
-        var scrollOffsetRows = GetScrollOffsetRows(_document, layout);
-        var adjustedY = mouseEvent.Y + (scrollOffsetRows * layout.Grid.CellHeightPx);
+        var adjustedY = mouseEvent.Y + GetScrollOffsetPx(_document, layout);
 
         if (!TryGetActionSpanIndexOnRow(layout, mouseEvent.X, adjustedY, out int spanIndex) ||
             spanIndex < 0 ||

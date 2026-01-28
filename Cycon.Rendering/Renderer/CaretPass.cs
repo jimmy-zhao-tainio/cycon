@@ -44,12 +44,16 @@ internal static class CaretPass
         RenderFrame frame,
         FixedCellGrid grid,
         FontMetrics fontMetrics,
-        int scrollOffsetRows,
+        int scrollOffsetPx,
         CaretQuad caretQuad,
         int caretColorRgba,
         byte caretAlpha)
     {
-        var rowOnScreen = caretQuad.RowIndex - scrollOffsetRows;
+        var cellH = grid.CellHeightPx;
+        var scrollRows = cellH <= 0 ? 0 : scrollOffsetPx / cellH;
+        var scrollRemainderPx = cellH <= 0 ? 0 : scrollOffsetPx - (scrollRows * cellH);
+
+        var rowOnScreen = caretQuad.RowIndex - scrollRows;
         if (rowOnScreen < 0 || rowOnScreen >= grid.Rows)
         {
             return;
@@ -61,7 +65,7 @@ internal static class CaretPass
         }
 
         var cellX = grid.PaddingLeftPx + (caretQuad.ColIndex * grid.CellWidthPx);
-        var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
+        var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx) - scrollRemainderPx;
         var underlineY = fontMetrics.GetUnderlineTopY(cellY);
         var underlineH = Math.Max(2, fontMetrics.UnderlineThicknessPx);
 

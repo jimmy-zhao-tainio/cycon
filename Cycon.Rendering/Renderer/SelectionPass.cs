@@ -49,6 +49,7 @@ internal static class SelectionPass
         LayoutLine line,
         FixedCellGrid grid,
         int rowOnScreen,
+        int scrollRemainderPx,
         int backgroundRgba)
     {
         var runStart = -1;
@@ -65,14 +66,14 @@ internal static class SelectionPass
             }
             else if (runStart >= 0)
             {
-                AddRun(frame, grid, rowOnScreen, runStart, i - runStart, backgroundRgba);
+                AddRun(frame, grid, rowOnScreen, scrollRemainderPx, runStart, i - runStart, backgroundRgba);
                 runStart = -1;
             }
         }
 
         if (runStart >= 0)
         {
-            AddRun(frame, grid, rowOnScreen, runStart, line.Length - runStart, backgroundRgba);
+            AddRun(frame, grid, rowOnScreen, scrollRemainderPx, runStart, line.Length - runStart, backgroundRgba);
         }
     }
 
@@ -90,6 +91,7 @@ internal static class SelectionPass
         RenderFrame frame,
         FixedCellGrid grid,
         int rowOnScreen,
+        int scrollRemainderPx,
         int colStart,
         int colLength,
         int rgba)
@@ -100,7 +102,7 @@ internal static class SelectionPass
         }
 
         var x = grid.PaddingLeftPx + (colStart * grid.CellWidthPx);
-        var y = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx);
+        var y = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx) - scrollRemainderPx;
         var w = colLength * grid.CellWidthPx;
         var h = grid.CellHeightPx;
         frame.Add(new DrawQuad(x, y, w, h, rgba));

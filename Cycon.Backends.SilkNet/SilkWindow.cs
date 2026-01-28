@@ -17,7 +17,7 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     private int _lastPolledMouseY;
     private bool _lastPolledLeftPressed;
     private bool _lastPolledRightPressed;
-    private float _wheelAccumY;
+    private float _wheelAccumYPx;
     private bool _disposed;
     private bool _resizingSnap;
 
@@ -279,11 +279,13 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
             mouse.Scroll += (_, wheel) =>
             {
                 var pos = mouse.Position;
-                _wheelAccumY += wheel.Y;
-                var delta = (int)MathF.Truncate(_wheelAccumY);
+                // Convert smooth (fractional) wheel input into pixel-precise deltas.
+                // One "wheel unit" corresponds to one text row (16px) to match the console grid.
+                _wheelAccumYPx += wheel.Y * 16f;
+                var delta = (int)MathF.Truncate(_wheelAccumYPx);
                 if (delta != 0)
                 {
-                    _wheelAccumY -= delta;
+                    _wheelAccumYPx -= delta;
                     MouseWheel?.Invoke((int)pos.X, (int)pos.Y, delta);
                 }
             };
