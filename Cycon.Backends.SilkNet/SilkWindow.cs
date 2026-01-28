@@ -52,6 +52,18 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         set => _window.VSync = value;
     }
 
+    public double FramesPerSecond
+    {
+        get => _window.FramesPerSecond;
+        set => _window.FramesPerSecond = value;
+    }
+
+    public double UpdatesPerSecond
+    {
+        get => _window.UpdatesPerSecond;
+        set => _window.UpdatesPerSecond = value;
+    }
+
     public string Title
     {
         get => _window.Title;
@@ -80,6 +92,8 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
         options.Size = new Vector2D<int>(snapWidth, snapHeight);
         options.Title = title;
         options.IsVisible = false;
+        options.FramesPerSecond = 60;
+        options.UpdatesPerSecond = 60;
         options.API = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.ForwardCompatible, new APIVersion(3, 3));
         options.PreferredDepthBufferBits = 24;
         options.PreferredStencilBufferBits = 8;

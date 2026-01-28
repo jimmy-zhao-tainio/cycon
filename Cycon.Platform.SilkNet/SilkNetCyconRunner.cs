@@ -4,7 +4,6 @@ using Cycon.Backends.SilkNet.Execution;
 using Cycon.Host.Hosting;
 using Cycon.Host.Input;
 using System.Diagnostics;
-using System.Threading;
 using Silk.NET.Input;
 
 namespace Cycon.Platform.SilkNet;
@@ -36,7 +35,7 @@ public static class SilkNetCyconRunner
         var pressedKeys = new HashSet<Key>();
         var repeatKeys = new Dictionary<HostKey, long>();
         var lastInteractionTicks = Stopwatch.GetTimestamp();
-        var lastPresentedTicks = 0L;
+        var lastAppliedFps = ActiveFps;
 
         window.Loaded += () =>
         {
@@ -60,6 +59,9 @@ public static class SilkNetCyconRunner
             }
             swapchain.Present();
             window.Show();
+
+            window.FramesPerSecond = ActiveFps;
+            window.UpdatesPerSecond = ActiveFps;
         };
 
         window.FramebufferResized += (width, height) =>
@@ -280,13 +282,14 @@ public static class SilkNetCyconRunner
             }
 
             var nowTicks = Stopwatch.GetTimestamp();
-            var idle = nowTicks - lastInteractionTicks >= MsToTicks(IdleAfterMs);
+            var active = pressedKeys.Count > 0 || buttonsDown != HostMouseButtons.None;
+            var idle = !active && nowTicks - lastInteractionTicks >= MsToTicks(IdleAfterMs);
             var targetFps = idle ? IdleFps : ActiveFps;
-            var frameIntervalTicks = targetFps <= 0 ? 0 : (long)(Stopwatch.Frequency / (double)targetFps);
-            if (frameIntervalTicks > 0 && lastPresentedTicks != 0 && nowTicks - lastPresentedTicks < frameIntervalTicks)
+            if (targetFps != lastAppliedFps)
             {
-                SleepTicks(frameIntervalTicks - (nowTicks - lastPresentedTicks));
-                return;
+                window.FramesPerSecond = targetFps;
+                window.UpdatesPerSecond = targetFps;
+                lastAppliedFps = targetFps;
             }
 
             if (repeatKeys.Count > 0)
@@ -331,7 +334,6 @@ public static class SilkNetCyconRunner
                 session.ReportRenderFailure(failure.Key, failure.Value);
             }
             swapchain.Present();
-            lastPresentedTicks = nowTicks;
 
             if (tick.RequestExit)
             {
@@ -348,26 +350,6 @@ public static class SilkNetCyconRunner
 
     private static long MsToTicks(int ms) =>
         (long)(ms * (Stopwatch.Frequency / 1000.0));
-
-    private static void SleepTicks(long remainingTicks)
-    {
-        if (remainingTicks <= 0)
-        {
-            return;
-        }
-
-        var deadline = Stopwatch.GetTimestamp() + remainingTicks;
-        var ms = (int)(remainingTicks * 1000.0 / Stopwatch.Frequency);
-        if (ms > 1)
-        {
-            Thread.Sleep(ms - 1);
-        }
-
-        while (Stopwatch.GetTimestamp() < deadline)
-        {
-            Thread.SpinWait(50);
-        }
-    }
 
     private static void UpdateModifiers(ref bool ctrl, ref bool shift, ref bool alt, Key key, bool isDown)
     {
