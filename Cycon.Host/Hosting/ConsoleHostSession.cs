@@ -101,7 +101,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private int _lastSpinnerFrameIndex = -1;
     private long _lastTickTicks;
     private int _tickIndex;
-    private byte? _caretAlphaOverride;
+    private readonly PromptCaretController _caret = new();
+    private bool _windowIsFocused = true;
 
     private ConsoleHostSession(
         string text,
@@ -208,6 +209,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     public void OnWindowFocusChanged(bool isFocused)
     {
+        _windowIsFocused = isFocused;
+        _pendingContentRebuild = true;
         _inspectController.OnWindowFocusChanged(isFocused);
     }
 
@@ -266,14 +269,13 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
     }
 
-    public FrameTickResult Tick()
+    public FrameTickResult Tick(long nowTicks)
     {
         if (!_initialized)
         {
             throw new InvalidOperationException("Session must be initialized before ticking.");
         }
 
-        var nowTicks = Stopwatch.GetTimestamp();
         _tickIndex++;
         var dtMs = _lastTickTicks == 0
             ? 0
@@ -297,6 +299,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         if (_inspectController.IsActive)
         {
+            _caret.SetSuppressed(true, nowTicks);
             _inspectController.DrainPendingEvents(pendingEvents, framebufferWidth, framebufferHeight);
             ApplyInspectActions(_inspectController.DrainActions());
             pendingEvents = null;
@@ -330,14 +333,20 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         var currentGrid = resizePlan.CurrentGrid;
 
-        var caretAlphaNow = _caretAlphaOverride ?? ComputeCaretAlpha(nowTicks);
-        if (_document.Selection.ActiveRange is { } range && range.Anchor != range.Caret)
+        var typingPending = pendingEvents is not null && IsPromptFocused() && HasTypingTrigger(pendingEvents);
+
+        _caret.SetSuppressed(false, nowTicks);
+        _caret.SetPromptFocused(IsPromptFocused(), nowTicks);
+        if (typingPending)
         {
-            caretAlphaNow = 0;
+            _caret.OnTyped(nowTicks);
         }
-        if (_focusedInlineViewportBlockId is not null)
+        _caret.Update(nowTicks);
+        var caretAlphaNow = _caret.SampleAlpha(nowTicks);
+        if (!typingPending && _document.Selection.ActiveRange is { } range && range.Anchor != range.Caret)
         {
             caretAlphaNow = 0;
+            _caret.SetSuppressed(true, nowTicks);
         }
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
 
@@ -411,7 +420,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             currentGrid = snapGrid;
         }
 
-        DrainPendingEvents(pendingEvents, framebufferWidth, framebufferHeight);
+        DrainPendingEvents(pendingEvents, framebufferWidth, framebufferHeight, nowTicks);
 
         if (TickFocusedScene3DKeys(TimeSpan.FromMilliseconds(dtMs)))
         {
@@ -497,32 +506,15 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         UpdateVisibleCommandIndicators(nowTicks);
         var spinnerIndex = ComputeSpinnerFrameIndex(nowTicks);
-        var minIntervalMs = 33;
-        if (spinnerIndex != -1)
-        {
-            var indicators = _document.Settings.Indicators;
-            var fps = Math.Max(1, indicators.AnimationFps);
-            minIntervalMs = (int)Math.Clamp(Math.Floor(1000.0 / fps), 1.0, 33.0);
-        }
-        if (_caretAlphaOverride is not null)
-        {
-            minIntervalMs = 0;
-        }
 
-        var elapsedSinceCaretMs = (nowTicks - _lastCaretRenderTicks) * 1000.0 / Stopwatch.Frequency;
-        if (_lastCaretRenderTicks != 0 && elapsedSinceCaretMs < minIntervalMs)
-        {
-            return;
-        }
-
-        var caretAlpha = _caretAlphaOverride ?? ComputeCaretAlpha(nowTicks);
+        _caret.SetSuppressed(false, nowTicks);
+        _caret.SetPromptFocused(IsPromptFocused(), nowTicks);
+        _caret.Update(nowTicks);
+        var caretAlpha = _caret.SampleAlpha(nowTicks);
         if (_document.Selection.ActiveRange is { } range && range.Anchor != range.Caret)
         {
             caretAlpha = 0;
-        }
-        if (_focusedInlineViewportBlockId is not null)
-        {
-            caretAlpha = 0;
+            _caret.SetSuppressed(true, nowTicks);
         }
         if (caretAlpha == _lastCaretAlpha &&
             spinnerIndex == _lastSpinnerFrameIndex)
@@ -576,10 +568,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
     }
 
-    public void SetCaretAlphaOverride(byte? alpha)
-    {
-        _caretAlphaOverride = alpha;
-    }
+    public long GetNextCaretDeadlineTicks() => _caret.NextDeadlineTicks;
 
     private void UpdateVisibleCommandIndicators(long nowTicks)
     {
@@ -713,20 +702,20 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         return _pendingEventQueue.DequeueAll();
     }
 
-    private void DrainPendingEvents(List<PendingEvent>? events, int framebufferWidth, int framebufferHeight)
+    private void DrainPendingEvents(List<PendingEvent>? events, int framebufferWidth, int framebufferHeight, long nowTicks)
     {
         if (events is null || events.Count == 0)
         {
             return;
         }
 
-        EnsureLayoutExists(framebufferWidth, framebufferHeight);
+        EnsureLayoutExists(framebufferWidth, framebufferHeight, nowTicks);
         for (var i = 0; i < events.Count; i++)
         {
             if (events[i] is PendingEvent.FileDrop fileDrop)
             {
                 ApplyCommandHostActions(_commandHost.HandleFileDrop(fileDrop.Path, _commandHostView));
-                EnsureLayoutExists(framebufferWidth, framebufferHeight);
+                EnsureLayoutExists(framebufferWidth, framebufferHeight, nowTicks);
                 _scrollbarController.UpdateTotalRows(_lastLayout);
                 continue;
             }
@@ -744,6 +733,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                     continue;
                 }
 
+                _caret.OnTyped(nowTicks);
                 if (_selectedActionSpanIndex >= 0)
                 {
                     ClearSelectedActionSpan();
@@ -754,6 +744,13 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             if (events[i] is PendingEvent.Key key && key.KeyCode != HostKey.Unknown)
             {
                 if (key.IsDown &&
+                    _focusedInlineViewportBlockId is null &&
+                    key.KeyCode == HostKey.Backspace)
+                {
+                    _caret.OnTyped(nowTicks);
+                }
+
+                if (key.IsDown &&
                     (key.KeyCode == HostKey.Escape || key.KeyCode == HostKey.Q) &&
                     _focusedInlineViewportBlockId is not null)
                 {
@@ -762,12 +759,12 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                         _suppressNextTextInputTickIndex = _tickIndex;
                     }
 
-                    SetFocusedInlineViewport(null);
+                    SetFocusedInlineViewport(null, nowTicks);
                     _pendingContentRebuild = true;
                 }
                 else if (_focusedInlineViewportBlockId is not null)
                 {
-                    var handledFocusedKey = TryHandleFocusedInlineViewportKey(key);
+                    var handledFocusedKey = TryHandleFocusedInlineViewportKey(key, nowTicks);
                     if (handledFocusedKey)
                     {
                         _pendingContentRebuild = true;
@@ -834,11 +831,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                         var scrollYPx = GetScrollOffsetPx(_document, _lastLayout);
                         if (TryHitTestInlineViewport(_lastLayout, mouseEvent.X, mouseEvent.Y, scrollYPx, out var hitViewport, out _))
                         {
-                            SetFocusedInlineViewport(hitViewport.BlockId);
+                            SetFocusedInlineViewport(hitViewport.BlockId, nowTicks);
                         }
                     else
                     {
-                        SetFocusedInlineViewport(null);
+                        SetFocusedInlineViewport(null, nowTicks);
                     }
                 }
 
@@ -852,7 +849,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
                 if (mouseEvent.Kind == HostMouseEventKind.Down &&
                     (mouseEvent.Buttons & HostMouseButtons.Left) != 0 &&
-                    TryHandleActionSpanClick(mouseEvent, _lastLayout))
+                    TryHandleActionSpanClick(mouseEvent, _lastLayout, nowTicks))
                 {
                     _pendingContentRebuild = true;
                     continue;
@@ -901,29 +898,28 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 i + 1 < events.Count &&
                 events[i + 1] is PendingEvent.Mouse)
             {
-                EnsureLayoutExists(framebufferWidth, framebufferHeight);
+                EnsureLayoutExists(framebufferWidth, framebufferHeight, nowTicks);
                 _pendingContentRebuild = false;
             }
         }
     }
 
-    private void EnsureLayoutExists(int framebufferWidth, int framebufferHeight)
+    private void EnsureLayoutExists(int framebufferWidth, int framebufferHeight, long nowTicks)
     {
         if (_lastLayout is not null && _lastFrame is not null && !_pendingContentRebuild)
         {
             return;
         }
 
-        var nowTicks = Stopwatch.GetTimestamp();
         UpdateVisibleCommandIndicators(nowTicks);
-        var caretAlphaNow = _caretAlphaOverride ?? ComputeCaretAlpha(nowTicks);
+        _caret.SetSuppressed(false, nowTicks);
+        _caret.SetPromptFocused(IsPromptFocused(), nowTicks);
+        _caret.Update(nowTicks);
+        var caretAlphaNow = _caret.SampleAlpha(nowTicks);
         if (_document.Selection.ActiveRange is { } range && range.Anchor != range.Caret)
         {
             caretAlphaNow = 0;
-        }
-        if (_focusedInlineViewportBlockId is not null)
-        {
-            caretAlphaNow = 0;
+            _caret.SetSuppressed(true, nowTicks);
         }
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
         FreezeTranscriptFollowTailWhileViewportFocused();
@@ -1051,7 +1047,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         };
     }
 
-    private void SetFocusedInlineViewport(BlockId? blockId)
+    private void SetFocusedInlineViewport(BlockId? blockId, long nowTicks)
     {
         if (_focusedInlineViewportBlockId == blockId)
         {
@@ -1071,6 +1067,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         FreezeTranscriptFollowTailWhileViewportFocused();
 
+        _caret.SetSuppressed(false, nowTicks);
+        _caret.SetPromptFocused(IsPromptFocused(), nowTicks);
+        _caret.Update(nowTicks);
+
         if (_focusedInlineViewportBlockId is { } next && TryGetBlockById(next, out var nextBlock))
         {
             if (nextBlock is IMouseFocusableViewportBlock focusable)
@@ -1082,12 +1082,45 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _pendingContentRebuild = true;
     }
 
-    private bool TryHandleFocusedInlineViewportKey(in PendingEvent.Key key)
+    private bool IsPromptFocused()
+    {
+        if (!_windowIsFocused)
+        {
+            return false;
+        }
+
+        if (_inspectController.IsActive)
+        {
+            return false;
+        }
+
+        return _focusedInlineViewportBlockId is null;
+    }
+
+    private static bool HasTypingTrigger(List<PendingEvent> events)
+    {
+        for (var i = 0; i < events.Count; i++)
+        {
+            if (events[i] is PendingEvent.Text text && !char.IsControl(text.Ch))
+            {
+                return true;
+            }
+
+            if (events[i] is PendingEvent.Key key && key.IsDown && key.KeyCode != HostKey.Unknown)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryHandleFocusedInlineViewportKey(in PendingEvent.Key key, long nowTicks)
     {
         if (_focusedInlineViewportBlockId is not { } focusedId ||
             !TryGetBlockById(focusedId, out var block))
         {
-            SetFocusedInlineViewport(null);
+            SetFocusedInlineViewport(null, nowTicks);
             return false;
         }
 
@@ -2576,7 +2609,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
     }
 
-    private bool TryHandleActionSpanClick(in HostMouseEvent mouseEvent, LayoutFrame layout)
+    private bool TryHandleActionSpanClick(in HostMouseEvent mouseEvent, LayoutFrame layout, long nowTicks)
     {
         if (mouseEvent.Kind != HostMouseEventKind.Down || (mouseEvent.Buttons & HostMouseButtons.Left) == 0)
         {
@@ -2627,7 +2660,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             return false;
         }
 
-        var nowTicks = Stopwatch.GetTimestamp();
         var isDoubleClick =
             _lastActionSpanClickBlockId == span.BlockId &&
             _lastActionSpanClickIndex == spanIndex &&
@@ -2726,6 +2758,14 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     void IBlockCommandSession.RequestExit()
     {
         _pendingExit = true;
+        _pendingContentRebuild = true;
+    }
+
+    PromptCaretSettings IBlockCommandSession.GetPromptCaretSettings() => _caret.Settings;
+
+    void IBlockCommandSession.SetPromptCaretSettings(in PromptCaretSettings settings)
+    {
+        _caret.SetSettings(settings);
         _pendingContentRebuild = true;
     }
 }

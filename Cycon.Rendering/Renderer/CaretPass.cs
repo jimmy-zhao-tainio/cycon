@@ -70,7 +70,8 @@ internal static class CaretPass
         var underlineH = Math.Max(2, fontMetrics.UnderlineThicknessPx);
 
         var caretColor = WithAlpha(caretColorRgba, caretAlpha);
-        frame.Add(new DrawQuad(cellX, underlineY, grid.CellWidthPx, underlineH, caretColor));
+        var caretW = Math.Max(1, grid.CellWidthPx - 1);
+        frame.Add(new DrawQuad(cellX, underlineY, caretW, underlineH, caretColor));
     }
 
     private static int WithAlpha(int rgba, byte alpha)

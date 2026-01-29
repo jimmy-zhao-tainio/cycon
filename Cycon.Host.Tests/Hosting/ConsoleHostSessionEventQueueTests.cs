@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Cycon.Backends.Abstractions;
 using Cycon.Backends.Abstractions.Rendering;
 using Cycon.Host.Hosting;
@@ -14,7 +15,7 @@ public sealed class ConsoleHostSessionEventQueueTests
         var session = ConsoleHostSession.CreateVga(string.Empty, clipboard, resizeSettleMs: 0, rebuildThrottleMs: 0);
 
         session.Initialize(initialFbW: 50, initialFbH: 86);
-        session.Tick();
+        session.Tick(Stopwatch.GetTimestamp());
 
         for (var i = 0; i < 10; i++)
         {
@@ -27,7 +28,7 @@ public sealed class ConsoleHostSessionEventQueueTests
         session.OnMouseEvent(new HostMouseEvent(HostMouseEventKind.Move, X: 30, Y: 20, HostMouseButtons.Left, HostKeyModifiers.None, 0));
         session.OnMouseEvent(new HostMouseEvent(HostMouseEventKind.Up, X: 30, Y: 20, HostMouseButtons.Left, HostKeyModifiers.None, 0));
 
-        var tick = session.Tick();
+        var tick = session.Tick(Stopwatch.GetTimestamp());
 
         Assert.Contains(tick.Frame.Commands, c => c is DrawQuad q && q.Rgba == unchecked((int)0xEEEEEEFF));
     }
@@ -41,4 +42,3 @@ public sealed class ConsoleHostSessionEventQueueTests
         public string? GetText() => Text;
     }
 }
-

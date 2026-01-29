@@ -2,6 +2,7 @@ using Cycon.BlockCommands;
 using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
+using Cycon.Host.Hosting;
 
 namespace Cycon.Host.Commands;
 
@@ -20,6 +21,8 @@ internal interface IBlockCommandSession
     string ResolvePath(string path);
     bool TrySetCurrentDirectory(string directory, out string error);
     IFileSystem FileSystem { get; }
+    PromptCaretSettings GetPromptCaretSettings();
+    void SetPromptCaretSettings(in PromptCaretSettings settings);
 }
 
 internal sealed class BlockCommandContext : IBlockCommandContext, IFileCommandContext
@@ -105,4 +108,8 @@ internal sealed class BlockCommandContext : IBlockCommandContext, IFileCommandCo
     public bool TrySetCurrentDirectory(string directory, out string error) => _session.TrySetCurrentDirectory(directory, out error);
 
     public IFileSystem FileSystem => _session.FileSystem;
+
+    public PromptCaretSettings GetPromptCaretSettings() => _session.GetPromptCaretSettings();
+
+    public void SetPromptCaretSettings(in PromptCaretSettings settings) => _session.SetPromptCaretSettings(settings);
 }
