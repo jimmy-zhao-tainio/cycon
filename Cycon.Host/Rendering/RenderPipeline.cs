@@ -103,7 +103,7 @@ internal sealed class RenderPipeline
             uiActions: uiActions,
             overlaySlab: overlaySlab,
             overlayActions: overlayActions,
-            renderMuted: overlaySlab is { IsModal: true });
+            renderMuted: overlaySlab is { IsModal: true } || focusedViewportBlockId is not null);
 
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         return new RenderPipelineResult(backendFrame, backendFrame.BuiltGrid, layout, renderFrame);

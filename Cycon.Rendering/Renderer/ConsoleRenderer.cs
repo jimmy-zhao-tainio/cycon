@@ -8,6 +8,7 @@ using Cycon.Core.Transcript.Blocks;
 using Cycon.Layout;
 using Cycon.Layout.HitTesting;
 using Cycon.Layout.Metrics;
+using Cycon.Layout.Scrolling;
 using Cycon.Rendering.Commands;
 using Cycon.Rendering.Styling;
 using Cycon.Layout.Overlays;
@@ -209,12 +210,20 @@ public sealed class ConsoleRenderer
             CaretPass.RenderCaret(frame, grid, fontMetrics, scrollOffsetPx, caretQuad, caretColor, caretAlpha);
         }
 
+        const int modalScrimRgba = unchecked((int)0x00000088);
+
         // Modal overlays should push the whole background back without changing per-glyph colors.
         // Apply a full-screen scrim over the already-rendered scene, then draw the slab on top.
         if (overlaySlab is { IsModal: true })
         {
-            const int modalScrimRgba = unchecked((int)0x00000088);
             frame.Add(new DrawQuad(0, 0, grid.FramebufferWidthPx, grid.FramebufferHeightPx, modalScrimRgba));
+        }
+        else if (focusedViewportBlockId is not null)
+        {
+            // In-transcript focused viewports "own" input; dim everything else using the same scrim,
+            // but keep the focused block undimmed so focus is obvious.
+            var focusRect = TryGetFocusedViewportRectOnScreen(layout, focusedViewportBlockId.Value, scrollYPx);
+            AddScrimWithHole(frame, grid.FramebufferWidthPx, grid.FramebufferHeightPx, modalScrimRgba, focusRect);
         }
 
         if (overlaySlab is not null)
@@ -229,6 +238,79 @@ public sealed class ConsoleRenderer
         }
 
         return frame;
+    }
+
+    private static PxRect? TryGetFocusedViewportRectOnScreen(LayoutFrame layout, BlockId focusedBlockId, int scrollYPx)
+    {
+        var viewports = layout.Scene3DViewports;
+        for (var i = 0; i < viewports.Count; i++)
+        {
+            var v = viewports[i];
+            if (v.BlockId != focusedBlockId)
+            {
+                continue;
+            }
+
+            var r = v.ViewportRectPx;
+            return new PxRect(r.X, r.Y - scrollYPx, r.Width, r.Height);
+        }
+
+        return null;
+    }
+
+    private static void AddScrimWithHole(RenderFrame frame, int screenW, int screenH, int scrimRgba, PxRect? holeRect)
+    {
+        if (screenW <= 0 || screenH <= 0)
+        {
+            return;
+        }
+
+        if (holeRect is not { } hole || hole.Width <= 0 || hole.Height <= 0)
+        {
+            frame.Add(new DrawQuad(0, 0, screenW, screenH, scrimRgba));
+            return;
+        }
+
+        var hx0 = Math.Clamp(hole.X, 0, screenW);
+        var hy0 = Math.Clamp(hole.Y, 0, screenH);
+        var hx1 = Math.Clamp(hole.X + hole.Width, 0, screenW);
+        var hy1 = Math.Clamp(hole.Y + hole.Height, 0, screenH);
+
+        if (hx0 >= hx1 || hy0 >= hy1)
+        {
+            frame.Add(new DrawQuad(0, 0, screenW, screenH, scrimRgba));
+            return;
+        }
+
+        // Top band.
+        if (hy0 > 0)
+        {
+            frame.Add(new DrawQuad(0, 0, screenW, hy0, scrimRgba));
+        }
+
+        // Bottom band.
+        if (hy1 < screenH)
+        {
+            frame.Add(new DrawQuad(0, hy1, screenW, screenH - hy1, scrimRgba));
+        }
+
+        var midH = hy1 - hy0;
+        if (midH <= 0)
+        {
+            return;
+        }
+
+        // Left band.
+        if (hx0 > 0)
+        {
+            frame.Add(new DrawQuad(0, hy0, hx0, midH, scrimRgba));
+        }
+
+        // Right band.
+        if (hx1 < screenW)
+        {
+            frame.Add(new DrawQuad(hx1, hy0, screenW - hx1, midH, scrimRgba));
+        }
     }
 
     private static HitTestActionSpan? TryFindSpan(LayoutFrame layout, UIActionId? id)

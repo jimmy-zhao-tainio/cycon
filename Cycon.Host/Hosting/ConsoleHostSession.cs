@@ -495,7 +495,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         _scrollbarController.UpdateTotalRows(_lastLayout);
-        var scrimRgba = (_overlay.IsOpen && _overlay.IsModal)
+        var scrimRgba = ((_overlay.IsOpen && _overlay.IsModal) || _focusedInlineViewportBlockId is not null)
             ? unchecked((int)0x00000088)
             : (int?)null;
         var overlayFrame = _scrollbarController.BuildOverlayFrame(
