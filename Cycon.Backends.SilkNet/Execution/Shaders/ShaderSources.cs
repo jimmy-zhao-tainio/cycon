@@ -64,6 +64,27 @@ void main()
 }
 ";
 
+    // Dual-filter Kawase-style blur tap (4 samples). Intended for multi-resolution downsample/upsample chains.
+    public const string FragmentKawaseBlur = @"#version 330 core
+in vec2 vTexCoord;
+
+out vec4 FragColor;
+
+uniform sampler2D uImage;
+uniform vec2 uTexel;   // 1/sourceWidth, 1/sourceHeight
+uniform float uOffset; // offset in source texels
+
+void main()
+{
+    vec2 o = uTexel * uOffset;
+    vec4 c = texture(uImage, vTexCoord + vec2( o.x,  o.y));
+    c += texture(uImage, vTexCoord + vec2(-o.x,  o.y));
+    c += texture(uImage, vTexCoord + vec2( o.x, -o.y));
+    c += texture(uImage, vTexCoord + vec2(-o.x, -o.y));
+    FragColor = c * 0.25;
+}
+";
+
     public const string FragmentVignette = @"#version 330 core
 uniform vec2 uViewport;
 uniform vec4 uRect;   // x,y,w,h in TOP-LEFT pixel space

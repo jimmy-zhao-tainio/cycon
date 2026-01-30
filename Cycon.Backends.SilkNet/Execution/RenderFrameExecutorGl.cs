@@ -20,6 +20,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private uint _mesh3dProgram;
     private uint _imageProgram;
     private uint _vignetteProgram;
+    private uint _kawaseProgram;
     private uint _vao;
     private uint _vbo;
     private uint _atlasTexture;
@@ -33,6 +34,10 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private int _uViewportLocationVignette;
     private int _uRectLocationVignette;
     private int _uParamsLocationVignette;
+    private int _uViewportLocationKawase;
+    private int _uImageLocationKawase;
+    private int _uTexelLocationKawase;
+    private int _uOffsetLocationKawase;
     private int _uModelLocationMesh3d;
     private int _uViewLocationMesh3d;
     private int _uProjLocationMesh3d;
@@ -53,6 +58,8 @@ public sealed class RenderFrameExecutorGl : IDisposable
     private readonly HashSet<int> _loggedMesh3DStateTags = new();
     private readonly Dictionary<int, Mesh3D> _meshes3D = new();
     private readonly Dictionary<int, Image2D> _images2D = new();
+    private readonly ModalBackdropBlurGl _modalBackdropBlur;
+    private bool _skipModalBackdropCommands;
 
     private readonly record struct Mesh3D(uint Vao, uint Vbo, int VertexCount);
     private readonly record struct Image2D(uint Texture, int Width, int Height);
@@ -60,6 +67,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
     public RenderFrameExecutorGl(GL gl)
     {
         _gl = gl;
+        _modalBackdropBlur = new ModalBackdropBlurGl(gl);
     }
 
     public IReadOnlyDictionary<int, string> DrainRenderFailures()
@@ -92,6 +100,12 @@ public sealed class RenderFrameExecutorGl : IDisposable
         _uViewportLocationImage = _gl.GetUniformLocation(_imageProgram, "uViewport");
         _uImageLocationImage = _gl.GetUniformLocation(_imageProgram, "uImage");
 
+        _kawaseProgram = CreateProgram(ShaderSources.Vertex, ShaderSources.FragmentKawaseBlur);
+        _uViewportLocationKawase = _gl.GetUniformLocation(_kawaseProgram, "uViewport");
+        _uImageLocationKawase = _gl.GetUniformLocation(_kawaseProgram, "uImage");
+        _uTexelLocationKawase = _gl.GetUniformLocation(_kawaseProgram, "uTexel");
+        _uOffsetLocationKawase = _gl.GetUniformLocation(_kawaseProgram, "uOffset");
+
         _mesh3dProgram = CreateProgram(ShaderSources.VertexMesh3D, ShaderSources.FragmentMesh3D);
         _uModelLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uModel");
         _uViewLocationMesh3d = _gl.GetUniformLocation(_mesh3dProgram, "uView");
@@ -108,6 +122,16 @@ public sealed class RenderFrameExecutorGl : IDisposable
         _uViewportLocationVignette = _gl.GetUniformLocation(_vignetteProgram, "uViewport");
         _uRectLocationVignette = _gl.GetUniformLocation(_vignetteProgram, "uRect");
         _uParamsLocationVignette = _gl.GetUniformLocation(_vignetteProgram, "uParams");
+
+        _modalBackdropBlur.SetPrograms(
+            imageProgram: _imageProgram,
+            uViewportImage: _uViewportLocationImage,
+            uImageImage: _uImageLocationImage,
+            kawaseProgram: _kawaseProgram,
+            uViewportKawase: _uViewportLocationKawase,
+            uImageKawase: _uImageLocationKawase,
+            uTexelKawase: _uTexelLocationKawase,
+            uOffsetKawase: _uOffsetLocationKawase);
 
         _vao = _gl.GenVertexArray();
         _vbo = _gl.GenBuffer();
@@ -166,6 +190,9 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
             _gl.UseProgram(_quadProgram);
             _gl.Uniform2(_uViewportLocationQuad, (float)_viewportWidth, (float)_viewportHeight);
+
+            _gl.UseProgram(_kawaseProgram);
+            _gl.Uniform2(_uViewportLocationKawase, (float)_viewportWidth, (float)_viewportHeight);
 
             _gl.UseProgram(_vignetteProgram);
             _gl.Uniform2(_uViewportLocationVignette, (float)_viewportWidth, (float)_viewportHeight);
@@ -280,8 +307,43 @@ public sealed class RenderFrameExecutorGl : IDisposable
 
         for (var i = 0; i < commands.Count; i++)
         {
+            if (_skipModalBackdropCommands)
+            {
+                if (commands[i] is EndModalBackdropBlur)
+                {
+                    _skipModalBackdropCommands = false;
+                    _clipStack.Clear();
+                    ApplyClipState();
+                }
+
+                continue;
+            }
+
             switch (commands[i])
             {
+                case BeginModalBackdropBlur beginBackdropBlur:
+                {
+                    Flush();
+                    _skipModalBackdropCommands = _modalBackdropBlur.BeginCapture(_viewportWidth, _viewportHeight, beginBackdropBlur.CacheKey);
+                    _clipStack.Clear();
+                    ApplyClipState();
+                    currentKind = null;
+                    break;
+                }
+                case EndModalBackdropBlur:
+                    Flush();
+                    _modalBackdropBlur.EndCapture(_viewportWidth, _viewportHeight);
+                    _clipStack.Clear();
+                    ApplyClipState();
+                    currentKind = null;
+                    break;
+                case DrawModalBackdropBlur drawBackdropBlur:
+                    Flush();
+                    _modalBackdropBlur.Present(_viewportWidth, _viewportHeight, drawBackdropBlur.CacheKey);
+                    _clipStack.Clear();
+                    ApplyClipState();
+                    currentKind = null;
+                    break;
                 case SetDebugTag tag:
                     Flush();
                     _debugTag = tag.Tag;
@@ -1121,6 +1183,8 @@ public sealed class RenderFrameExecutorGl : IDisposable
             return;
         }
 
+        _modalBackdropBlur.Dispose();
+
         if (_atlasTexture != 0)
         {
             _gl.DeleteTexture(_atlasTexture);
@@ -1152,6 +1216,7 @@ public sealed class RenderFrameExecutorGl : IDisposable
         if (_glyphProgram != 0) _gl.DeleteProgram(_glyphProgram);
         if (_quadProgram != 0) _gl.DeleteProgram(_quadProgram);
         if (_imageProgram != 0) _gl.DeleteProgram(_imageProgram);
+        if (_kawaseProgram != 0) _gl.DeleteProgram(_kawaseProgram);
         if (_mesh3dProgram != 0) _gl.DeleteProgram(_mesh3dProgram);
         if (_vignetteProgram != 0) _gl.DeleteProgram(_vignetteProgram);
 

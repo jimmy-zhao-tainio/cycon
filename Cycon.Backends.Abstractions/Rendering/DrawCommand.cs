@@ -38,6 +38,14 @@ public sealed record DrawImage2D(
 
 public sealed record ReleaseImage2D(int ImageId) : DrawCommand;
 
+// Modal backdrop blur: capture the background into an offscreen texture, blur it, then present it.
+// Intended for modal overlays (slabs) only; overlay content should be drawn after the blur is presented.
+public sealed record BeginModalBackdropBlur(long CacheKey) : DrawCommand;
+
+public sealed record EndModalBackdropBlur : DrawCommand;
+
+public sealed record DrawModalBackdropBlur(long CacheKey) : DrawCommand;
+
 // Debug/profiling metadata for renderers/executors. Not intended for UI logic.
 public sealed record SetDebugTag(int Tag) : DrawCommand;
 

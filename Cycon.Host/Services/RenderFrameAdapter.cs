@@ -69,6 +69,15 @@ public static class RenderFrameAdapter
                 case RenderingCommands.ReleaseImage2D releaseImage:
                     adapted.Add(new BackendRender.ReleaseImage2D(releaseImage.ImageId));
                     break;
+                case RenderingCommands.BeginModalBackdropBlur beginModalBackdropBlur:
+                    adapted.Add(new BackendRender.BeginModalBackdropBlur(beginModalBackdropBlur.CacheKey));
+                    break;
+                case RenderingCommands.EndModalBackdropBlur:
+                    adapted.Add(new BackendRender.EndModalBackdropBlur());
+                    break;
+                case RenderingCommands.DrawModalBackdropBlur drawModalBackdropBlur:
+                    adapted.Add(new BackendRender.DrawModalBackdropBlur(drawModalBackdropBlur.CacheKey));
+                    break;
                 case RenderingCommands.SetDebugTag tag:
                     adapted.Add(new BackendRender.SetDebugTag(tag.Tag));
                     break;

@@ -68,6 +68,16 @@ public sealed class ConsoleRenderer
         var canvas = new RenderCanvas(frame, font);
         var nextSceneViewportIndex = 0;
 
+        // Modal backdrop blur: capture the whole background into an offscreen texture and blur it,
+        // then draw the modal slab on top fully sharp.
+        var wantsModalBackdropBlur = overlaySlab is { IsModal: true };
+        long modalBackdropCacheKey = 0;
+        if (wantsModalBackdropBlur)
+        {
+            modalBackdropCacheKey = ComputeModalBackdropCacheKey(document, layout);
+            frame.Add(new BeginModalBackdropBlur(modalBackdropCacheKey));
+        }
+
         CaretPass.CaretQuad? pendingCaret = null;
 
         var defaultFg = document.Settings.DefaultTextStyle.ForegroundRgba;
@@ -210,20 +220,26 @@ public sealed class ConsoleRenderer
             CaretPass.RenderCaret(frame, grid, fontMetrics, scrollOffsetPx, caretQuad, caretColor, caretAlpha);
         }
 
-        const int modalScrimRgba = unchecked((int)0x000000B0);
+        // Focus-stealing viewports should push the whole background back without changing per-glyph colors.
+        // Keep consistent with the modal scrub layer (blur uses scrim lightly; focus uses scrim only).
+        const int focusScrimRgba = unchecked((int)0x00000055);
 
-        // Modal overlays should push the whole background back without changing per-glyph colors.
-        // Apply a full-screen scrim over the already-rendered scene, then draw the slab on top.
-        if (overlaySlab is { IsModal: true })
-        {
-            frame.Add(new DrawQuad(0, 0, grid.FramebufferWidthPx, grid.FramebufferHeightPx, modalScrimRgba));
-        }
-        else if (focusedViewportBlockId is not null)
+        if (!wantsModalBackdropBlur && focusedViewportBlockId is not null)
         {
             // In-transcript focused viewports "own" input; dim everything else using the same scrim,
             // but keep the focused block undimmed so focus is obvious.
             var focusRect = TryGetFocusedViewportRectOnScreen(layout, focusedViewportBlockId.Value, scrollYPx);
-            AddScrimWithHole(frame, grid.FramebufferWidthPx, grid.FramebufferHeightPx, modalScrimRgba, focusRect);
+            AddScrimWithHole(frame, grid.FramebufferWidthPx, grid.FramebufferHeightPx, focusScrimRgba, focusRect);
+        }
+
+        if (wantsModalBackdropBlur)
+        {
+            frame.Add(new EndModalBackdropBlur());
+            frame.Add(new DrawModalBackdropBlur(modalBackdropCacheKey));
+
+            // Light scrim on top of blurred background to compress contrast slightly; blur is the primary cue.
+            const int modalBlurScrimRgba = unchecked((int)0x00000055);
+            frame.Add(new DrawQuad(0, 0, grid.FramebufferWidthPx, grid.FramebufferHeightPx, modalBlurScrimRgba));
         }
 
         if (overlaySlab is not null)
@@ -238,6 +254,57 @@ public sealed class ConsoleRenderer
         }
 
         return frame;
+    }
+
+    private static long ComputeModalBackdropCacheKey(ConsoleDocument document, LayoutFrame layout)
+    {
+        // Constant-time key for caching blurred backdrops while a modal overlay is open.
+        // Focus/hover state is suppressed under modals, so omit UIActionState and caret.
+        unchecked
+        {
+            var blocks = document.Transcript.Blocks;
+            var count = blocks.Count;
+            var last0 = count > 0 ? blocks[^1].Id.Value : 0;
+            var last1 = count > 1 ? blocks[^2].Id.Value : 0;
+            var last2 = count > 2 ? blocks[^3].Id.Value : 0;
+
+            long h = 1469598103934665603L; // FNV-1a 64-bit offset basis
+            h = Fnv1a(h, (ulong)layout.Grid.FramebufferWidthPx);
+            h = Fnv1a(h, (ulong)layout.Grid.FramebufferHeightPx);
+            h = Fnv1a(h, (ulong)layout.TotalRows);
+            h = Fnv1a(h, (ulong)document.Scroll.ScrollOffsetPx);
+            h = Fnv1a(h, (ulong)count);
+            h = Fnv1a(h, (ulong)last0);
+            h = Fnv1a(h, (ulong)last1);
+            h = Fnv1a(h, (ulong)last2);
+            if (h == 0) h = 1;
+            return h;
+        }
+    }
+
+    private static long Fnv1a(long h, ulong data)
+    {
+        unchecked
+        {
+            ulong u = (ulong)h;
+            u ^= (byte)data;
+            u *= 1099511628211UL;
+            u ^= (byte)(data >> 8);
+            u *= 1099511628211UL;
+            u ^= (byte)(data >> 16);
+            u *= 1099511628211UL;
+            u ^= (byte)(data >> 24);
+            u *= 1099511628211UL;
+            u ^= (byte)(data >> 32);
+            u *= 1099511628211UL;
+            u ^= (byte)(data >> 40);
+            u *= 1099511628211UL;
+            u ^= (byte)(data >> 48);
+            u *= 1099511628211UL;
+            u ^= (byte)(data >> 56);
+            u *= 1099511628211UL;
+            return (long)u;
+        }
     }
 
     private static PxRect? TryGetFocusedViewportRectOnScreen(LayoutFrame layout, BlockId focusedBlockId, int scrollYPx)
