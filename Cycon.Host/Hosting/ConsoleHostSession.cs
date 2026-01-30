@@ -1011,21 +1011,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             }
         }
 
-        var cursor = HostCursorKind.Default;
-        if (layout.HitTestMap.Lines.Count > 0)
-        {
-            var hit = new HitTester().HitTest(layout.HitTestMap, mouseX, mouseYDocPx);
-            if (hit is { } pos && TryGetBlockById(pos.BlockId, out var block))
-            {
-                if (block is PromptBlock ||
-                    (block is ITextSelectable selectable && selectable.CanSelect))
-                {
-                    cursor = HostCursorKind.IBeam;
-                }
-            }
-        }
-
-        _cursorKind = cursor;
+        // Keep a consistent pointer cursor over transcript content (selection is still supported).
+        _cursorKind = HostCursorKind.Default;
     }
 
     private bool TryHandleUiActionKey(in PendingEvent.Key key, LayoutFrame layout, long nowTicks)
