@@ -210,7 +210,7 @@ public sealed class ConsoleRenderer
             CaretPass.RenderCaret(frame, grid, fontMetrics, scrollOffsetPx, caretQuad, caretColor, caretAlpha);
         }
 
-        const int modalScrimRgba = unchecked((int)0x00000088);
+        const int modalScrimRgba = unchecked((int)0x000000B0);
 
         // Modal overlays should push the whole background back without changing per-glyph colors.
         // Apply a full-screen scrim over the already-rendered scene, then draw the slab on top.
