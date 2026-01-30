@@ -24,9 +24,6 @@ public static class Program
 
     private static string BuildDemoText()
     {
-        return string.Join('\n',
-            "Cycon [Version 0.0]",
-            "(c) Cycon Corporation. No rights reserved.",
-            "");
+        return string.Empty;
     }
 }

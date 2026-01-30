@@ -88,7 +88,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private UIActionState _lastRenderedOverlayActions = UIActionState.Empty;
     private int _lastMouseX;
     private int _lastMouseY;
-    private bool _hasMousePosition;
     private BlockId? _capturedInlineViewportBlockId;
     private BlockId? _focusedInlineViewportBlockId;
     private Scene3DNavKeys _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
@@ -849,7 +848,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
                 _lastMouseX = mouseEvent.X;
                 _lastMouseY = mouseEvent.Y;
-                _hasMousePosition = true;
 
                 if (_overlay.IsOpen && _overlay.HandleMouse(mouseEvent, _lastLayout.Grid))
                 {
@@ -1739,6 +1737,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private static string[] SplitLines(string text)
     {
+        if (string.IsNullOrEmpty(text))
+        {
+            return Array.Empty<string>();
+        }
+
         return text
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n')
