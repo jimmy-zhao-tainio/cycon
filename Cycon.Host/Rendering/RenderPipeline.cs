@@ -8,6 +8,7 @@ using Cycon.Core.Transcript;
 using Cycon.Layout;
 using Cycon.Layout.HitTesting;
 using Cycon.Layout.Metrics;
+using Cycon.Layout.Overlays;
 using Cycon.Layout.Scrolling;
 using Cycon.Rendering.Renderer;
 using Cycon.Rendering.Styling;
@@ -44,12 +45,9 @@ internal sealed class RenderPipeline
         IReadOnlyDictionary<BlockId, BlockId> commandIndicators,
         IReadOnlyList<int>? meshReleases,
         BlockId? focusedViewportBlockId = null,
-        BlockId? selectedActionSpanBlockId = null,
-        string? selectedActionSpanCommandText = null,
-        int selectedActionSpanIndex = -1,
-        bool hasMousePosition = false,
-        int mouseX = 0,
-        int mouseY = 0)
+        UIActionState uiActions = default,
+        OverlaySlabFrame? overlaySlab = null,
+        UIActionState overlayActions = default)
     {
         var layout = _layoutEngine.Layout(document, layoutSettings, viewport);
         if (restoreAnchor)
@@ -102,12 +100,10 @@ internal sealed class RenderPipeline
             caretAlpha: caretAlpha,
             meshReleases: meshReleases,
             focusedViewportBlockId: focusedViewportBlockId,
-            selectedActionSpanBlockId: selectedActionSpanBlockId,
-            selectedActionSpanCommandText: selectedActionSpanCommandText,
-            selectedActionSpanIndex: selectedActionSpanIndex,
-            hasMousePosition: hasMousePosition,
-            mouseX: mouseX,
-            mouseY: mouseY);
+            uiActions: uiActions,
+            overlaySlab: overlaySlab,
+            overlayActions: overlayActions,
+            renderMuted: overlaySlab is { IsModal: true });
 
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         return new RenderPipelineResult(backendFrame, backendFrame.BuiltGrid, layout, renderFrame);

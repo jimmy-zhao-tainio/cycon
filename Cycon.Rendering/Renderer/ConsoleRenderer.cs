@@ -10,6 +10,7 @@ using Cycon.Layout.HitTesting;
 using Cycon.Layout.Metrics;
 using Cycon.Rendering.Commands;
 using Cycon.Rendering.Styling;
+using Cycon.Layout.Overlays;
 
 namespace Cycon.Rendering.Renderer;
 
@@ -25,12 +26,10 @@ public sealed class ConsoleRenderer
         byte caretAlpha = 0xFF,
         IReadOnlyList<int>? meshReleases = null,
         BlockId? focusedViewportBlockId = null,
-        BlockId? selectedActionSpanBlockId = null,
-        string? selectedActionSpanCommandText = null,
-        int selectedActionSpanIndex = -1,
-        bool hasMousePosition = false,
-        int mouseX = 0,
-        int mouseY = 0)
+        UIActionState uiActions = default,
+        OverlaySlabFrame? overlaySlab = null,
+        UIActionState overlayActions = default,
+        bool renderMuted = false)
     {
         var frame = new RenderFrame
         {
@@ -58,6 +57,7 @@ public sealed class ConsoleRenderer
         var contentHighlightWidthPx = Math.Max(0, scrollbarClipRightX - grid.PaddingLeftPx);
 
         var selection = SelectionPass.ComputeSelectionBounds(document);
+        var selectionForRender = renderMuted ? null : selection;
         var selectionBackground = selectionStyle.SelectedBackgroundRgba;
 
         var fontMetrics = font.Metrics;
@@ -72,54 +72,32 @@ public sealed class ConsoleRenderer
         var defaultFg = document.Settings.DefaultTextStyle.ForegroundRgba;
         var defaultBg = document.Settings.DefaultTextStyle.BackgroundRgba;
 
-        HitTestActionSpan? selectedSpan = null;
-        if (selectedActionSpanIndex >= 0 &&
-            selectedActionSpanIndex < layout.HitTestMap.ActionSpans.Count &&
-            selectedActionSpanBlockId is { } selBlock &&
-            !string.IsNullOrEmpty(selectedActionSpanCommandText))
-        {
-            var candidate = layout.HitTestMap.ActionSpans[selectedActionSpanIndex];
-            if (candidate.BlockId == selBlock && candidate.CommandText == selectedActionSpanCommandText)
-            {
-                selectedSpan = candidate;
-            }
-        }
-
-        if (selectedSpan is null &&
-            selectedActionSpanBlockId is { } selectedBlock &&
-            !string.IsNullOrEmpty(selectedActionSpanCommandText))
-        {
-            foreach (var span in layout.HitTestMap.ActionSpans)
-            {
-                if (span.BlockId == selectedBlock && span.CommandText == selectedActionSpanCommandText)
-                {
-                    selectedSpan = span;
-                    break;
-                }
-            }
-        }
-
-        HitTestActionSpan? hoveredSpan = null;
-        if (hasMousePosition &&
-            (!layout.Scrollbar.IsScrollable || (!layout.Scrollbar.HitTrackRectPx.Contains(mouseX, mouseY) && mouseX < layout.Scrollbar.TrackRectPx.X)) &&
-            TryGetActionSpanIndexOnRow(layout, mouseX, mouseY + scrollYPx, out var hoveredIndex) &&
-            hoveredIndex >= 0 &&
-            hoveredIndex < layout.HitTestMap.ActionSpans.Count)
-        {
-            hoveredSpan = layout.HitTestMap.ActionSpans[hoveredIndex];
-        }
+        var selectedSpan = renderMuted ? null : TryFindSpan(layout, uiActions.FocusedId);
+        var pressedSpan = renderMuted ? null : TryFindSpan(layout, uiActions.PressedId);
+        var hoveredSpan = renderMuted ? null : TryFindSpan(layout, uiActions.HoveredId);
 
         // Inverted highlight for clickable entries: bg becomes fg, text becomes bg.
         if (selectedSpan is { } selectedSpanValue)
         {
             AddActionSpanHighlight(frame, selectedSpanValue, scrollYPx, layout.Grid, contentHighlightWidthPx, defaultFg);
         }
+
+        // Pressed uses a slightly stronger background while keeping normal text color.
+        if (pressedSpan is { } p)
+        {
+            if (selectedSpan is null || p != selectedSpan.Value)
+            {
+                var pressedBg = unchecked((int)0x303030FF);
+                AddActionSpanHighlight(frame, p, scrollYPx, layout.Grid, contentHighlightWidthPx, pressedBg);
+            }
+        }
+
         if (hoveredSpan is { } h)
         {
-            // Don't double-layer when the same segment is both selected and hovered.
-            if (selectedSpan is null || h != selectedSpan.Value)
+            // Don't double-layer when the same segment is already selected/pressed.
+            if ((selectedSpan is null || h != selectedSpan.Value) &&
+                (pressedSpan is null || h != pressedSpan.Value))
             {
-                // Hover uses a darker background while keeping normal text color.
                 var hoverBg = unchecked((int)0x202020FF);
                 AddActionSpanHighlight(frame, h, scrollYPx, layout.Grid, contentHighlightWidthPx, hoverBg);
             }
@@ -194,35 +172,35 @@ public sealed class ConsoleRenderer
                 continue;
             }
 
-            if (selection is { } s && selectionBackground.HasValue)
-            {
-                SelectionPass.AddSelectionBackgroundRuns(
-                    frame,
-                    block,
-                    s,
+        if (selectionForRender is { } s && selectionBackground.HasValue)
+        {
+            SelectionPass.AddSelectionBackgroundRuns(
+                frame,
+                block,
+                s,
                     line,
                     grid,
-                    rowOnScreen,
-                    scrollRemainderPx,
-                    selectionBackground.Value);
-            }
-
-            TextPass.AddGlyphRun(
-                frame,
-                font,
-                fontMetrics,
-                grid,
-                line,
                 rowOnScreen,
                 scrollRemainderPx,
-                block,
-                text,
-                lineForeground,
-                selection,
-                selectionStyle.SelectedForegroundRgba,
-                hoveredActionSpan: null,
-                selectedActionSpan: selectedSpan,
-                invertedTextRgba: defaultBg);
+                selectionBackground.Value);
+        }
+
+        TextPass.AddGlyphRun(
+            frame,
+            font,
+            fontMetrics,
+            grid,
+            line,
+            rowOnScreen,
+            scrollRemainderPx,
+            block,
+            text,
+            lineForeground,
+            selectionForRender,
+            selectionStyle.SelectedForegroundRgba,
+            hoveredActionSpan: null,
+            selectedActionSpan: selectedSpan,
+            invertedTextRgba: defaultBg);
         }
 
         if (pendingCaret is { } caretQuad)
@@ -231,7 +209,46 @@ public sealed class ConsoleRenderer
             CaretPass.RenderCaret(frame, grid, fontMetrics, scrollOffsetPx, caretQuad, caretColor, caretAlpha);
         }
 
+        // Modal overlays should push the whole background back without changing per-glyph colors.
+        // Apply a full-screen scrim over the already-rendered scene, then draw the slab on top.
+        if (overlaySlab is { IsModal: true })
+        {
+            const int modalScrimRgba = unchecked((int)0x00000088);
+            frame.Add(new DrawQuad(0, 0, grid.FramebufferWidthPx, grid.FramebufferHeightPx, modalScrimRgba));
+        }
+
+        if (overlaySlab is not null)
+        {
+            OverlaySlabPass.Render(
+                canvas,
+                grid,
+                overlaySlab,
+                overlayActions,
+                foregroundRgba: defaultFg,
+                backgroundRgba: defaultBg);
+        }
+
         return frame;
+    }
+
+    private static HitTestActionSpan? TryFindSpan(LayoutFrame layout, UIActionId? id)
+    {
+        if (id is null || id.Value.IsEmpty)
+        {
+            return null;
+        }
+
+        var spans = layout.HitTestMap.ActionSpans;
+        for (var i = 0; i < spans.Count; i++)
+        {
+            var span = spans[i];
+            if (UIActionFactory.GetId(span) == id.Value)
+            {
+                return span;
+            }
+        }
+
+        return null;
     }
 
     private static int GetScrollOffsetPx(ConsoleDocument document, LayoutFrame layout)

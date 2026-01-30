@@ -33,12 +33,22 @@ internal sealed class SystemFileSystem : IFileSystem
 
     public IEnumerable<FileSystemEntry> Enumerate(string directory)
     {
+        return Enumerate(directory, "*");
+    }
+
+    public IEnumerable<FileSystemEntry> Enumerate(string directory, string searchPattern)
+    {
+        if (string.IsNullOrWhiteSpace(searchPattern))
+        {
+            searchPattern = "*";
+        }
+
         IEnumerable<string> dirs;
         IEnumerable<string> files;
 
         try
         {
-            dirs = Directory.EnumerateDirectories(directory);
+            dirs = Directory.EnumerateDirectories(directory, searchPattern);
         }
         catch
         {
@@ -47,7 +57,7 @@ internal sealed class SystemFileSystem : IFileSystem
 
         try
         {
-            files = Directory.EnumerateFiles(directory);
+            files = Directory.EnumerateFiles(directory, searchPattern);
         }
         catch
         {
@@ -82,4 +92,3 @@ internal sealed class SystemFileSystem : IFileSystem
         return File.ReadAllText(path);
     }
 }
-

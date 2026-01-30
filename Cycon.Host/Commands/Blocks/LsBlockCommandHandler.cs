@@ -30,6 +30,11 @@ public sealed class LsBlockCommandHandler : IBlockCommandHandler
             ? "."
             : (request.Args.Count == 1 ? request.Args[0] : string.Join(" ", request.Args));
 
+        if (ContainsWildcard(rawTarget))
+        {
+            return TryExecuteWildcard(rawTarget, ctx, fs);
+        }
+
         string fullTarget;
         try
         {
@@ -88,6 +93,73 @@ public sealed class LsBlockCommandHandler : IBlockCommandHandler
 
         EmitListing(ctx, entries);
         return true;
+    }
+
+    private static bool TryExecuteWildcard(string rawTarget, IBlockCommandContext ctx, IFileCommandContext fs)
+    {
+        string fullPattern;
+        try
+        {
+            fullPattern = fs.ResolvePath(rawTarget);
+        }
+        catch (Exception ex)
+        {
+            ctx.InsertTextAfterCommandEcho($"Invalid path: {ex.Message}", ConsoleTextStream.System);
+            return true;
+        }
+
+        var directory = Path.GetDirectoryName(fullPattern);
+        var pattern = Path.GetFileName(fullPattern);
+        if (string.IsNullOrEmpty(directory))
+        {
+            ctx.InsertTextAfterCommandEcho($"Invalid path: {fullPattern}", ConsoleTextStream.System);
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(pattern))
+        {
+            pattern = "*";
+        }
+
+        if (!fs.FileSystem.DirectoryExists(directory))
+        {
+            ctx.InsertTextAfterCommandEcho($"Directory not found: {directory}", ConsoleTextStream.System);
+            return true;
+        }
+
+        var entries = new List<FileSystemEntry>();
+        foreach (var entry in fs.FileSystem.Enumerate(directory, pattern))
+        {
+            entries.Add(entry);
+        }
+
+        entries.Sort(static (a, b) =>
+        {
+            var byDir = b.IsDirectory.CompareTo(a.IsDirectory);
+            return byDir != 0 ? byDir : StringComparer.OrdinalIgnoreCase.Compare(a.Name, b.Name);
+        });
+
+        EmitListing(ctx, entries);
+        return true;
+    }
+
+    private static bool ContainsWildcard(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c == '*' || c == '?')
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void EmitListing(IBlockCommandContext ctx, IReadOnlyList<FileSystemEntry> entries)

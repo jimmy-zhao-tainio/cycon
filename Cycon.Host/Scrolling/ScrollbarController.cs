@@ -29,8 +29,8 @@ internal sealed class ScrollbarController
 
     public void UpdateTotalRows(LayoutFrame? layout) => _scrollModel.TotalRows = layout?.TotalRows ?? 0;
 
-    public RenderFrame? BuildOverlayFrame(PxRect viewportRectPx, int rgba) =>
-        _scrollbar.BuildOverlayFrame(viewportRectPx, _document.Settings.Scrollbar, rgba, string.Empty);
+    public RenderFrame? BuildOverlayFrame(PxRect viewportRectPx, int rgba, int? scrimRgba = null) =>
+        _scrollbar.BuildOverlayFrame(viewportRectPx, _document.Settings.Scrollbar, rgba, string.Empty, scrimRgba: scrimRgba);
 
     public bool TryHandleMouse(
         HostMouseEvent mouseEvent,

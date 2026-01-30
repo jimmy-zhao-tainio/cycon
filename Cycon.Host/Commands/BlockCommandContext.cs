@@ -23,9 +23,15 @@ internal interface IBlockCommandSession
     IFileSystem FileSystem { get; }
     PromptCaretSettings GetPromptCaretSettings();
     void SetPromptCaretSettings(in PromptCaretSettings settings);
+    void ShowHelpControlsOverlay();
 }
 
-internal sealed class BlockCommandContext : IBlockCommandContext, IFileCommandContext
+internal interface IOverlayCommandContext
+{
+    void ShowHelpControlsOverlay();
+}
+
+internal sealed class BlockCommandContext : IBlockCommandContext, IFileCommandContext, IOverlayCommandContext
 {
     private readonly IBlockCommandSession _session;
     private readonly BlockId _commandEchoId;
@@ -112,4 +118,6 @@ internal sealed class BlockCommandContext : IBlockCommandContext, IFileCommandCo
     public PromptCaretSettings GetPromptCaretSettings() => _session.GetPromptCaretSettings();
 
     public void SetPromptCaretSettings(in PromptCaretSettings settings) => _session.SetPromptCaretSettings(settings);
+
+    public void ShowHelpControlsOverlay() => _session.ShowHelpControlsOverlay();
 }

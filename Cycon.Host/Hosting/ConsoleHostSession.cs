@@ -23,6 +23,7 @@ using Cycon.Host.FileSystem;
 using Cycon.Host.Inspect;
 using Cycon.Host.Interaction;
 using Cycon.Host.Input;
+using Cycon.Host.Overlays;
 using Cycon.Host.Scrolling;
 using Cycon.Host.Rendering;
 using Cycon.Host.Services;
@@ -30,6 +31,7 @@ using Cycon.Layout;
 using Cycon.Layout.Metrics;
 using Cycon.Layout.Scrolling;
 using Cycon.Layout.HitTesting;
+using Cycon.Layout.Overlays;
 using Cycon.Rendering.Renderer;
 using Cycon.Rendering.Styling;
 using Cycon.Runtime.Events;
@@ -76,14 +78,14 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private string _currentDirectory = string.Empty;
     private string _homeDirectory = string.Empty;
     private HostCursorKind _cursorKind;
-    private HitTestActionSpan? _hoveredActionSpan;
-    private int _hoveredActionSpanIndex = -1;
-    private int _selectedActionSpanIndex = -1;
-    private BlockId? _selectedActionSpanBlockId;
-    private string? _selectedActionSpanCommandText;
-    private long _lastActionSpanClickTicks;
-    private int _lastActionSpanClickIndex = -1;
-    private BlockId? _lastActionSpanClickBlockId;
+    private readonly UIActionRouter _uiActions = new();
+    private UIActionState _lastRenderedUiActions = UIActionState.Empty;
+    private long _lastUiActionClickTicks;
+    private UIActionId? _lastUiActionClickId;
+    private readonly OverlayManager _overlay = new();
+    private bool _lastRenderedOverlayOpen;
+    private int _lastRenderedOverlayVersion;
+    private UIActionState _lastRenderedOverlayActions = UIActionState.Empty;
     private int _lastMouseX;
     private int _lastMouseY;
     private bool _hasMousePosition;
@@ -219,10 +221,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _scrollbarController.OnPointerInWindowChanged(isInWindow);
         if (!isInWindow)
         {
-            if (_hoveredActionSpan is not null)
+            _ = _overlay.ClearAllActions();
+            if (_uiActions.ClearAll())
             {
-                _hoveredActionSpan = null;
-                _hoveredActionSpanIndex = -1;
                 _pendingContentRebuild = true;
             }
 
@@ -365,36 +366,40 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             var snapGrid = currentGrid;
 
             var rebuildPasses = resizePlan.RebuildPasses;
-            for (var pass = 0; pass < rebuildPasses; pass++)
-            {
-                var passNowTicks = Stopwatch.GetTimestamp();
+                for (var pass = 0; pass < rebuildPasses; pass++)
+                {
+                    var passNowTicks = Stopwatch.GetTimestamp();
 
-                FreezeTranscriptFollowTailWhileViewportFocused();
-                var viewport = new ConsoleViewport(snapW, snapH);
-                var result = _renderPipeline.BuildFrame(
-                    _document,
-                    _layoutSettings,
-                    viewport,
-                    restoreAnchor,
-                    caretAlphaNow,
-                    timeSeconds,
-                    _visibleCommandIndicators,
-                    TakePendingMeshReleases(),
-                    focusedViewportBlockId: _focusedInlineViewportBlockId,
-                    selectedActionSpanBlockId: _selectedActionSpanBlockId,
-                    selectedActionSpanCommandText: _selectedActionSpanCommandText,
-                    selectedActionSpanIndex: _selectedActionSpanIndex,
-                    hasMousePosition: _hasMousePosition,
-                    mouseX: _lastMouseX,
-                    mouseY: _lastMouseY);
+                    FreezeTranscriptFollowTailWhileViewportFocused();
+                    var viewport = new ConsoleViewport(snapW, snapH);
+                    var overlayGrid = FixedCellGrid.FromViewport(viewport, _layoutSettings);
+                    var overlaySlab = _overlay.GetFrame(overlayGrid);
+                    var overlayActions = _overlay.ActionState;
+                    var result = _renderPipeline.BuildFrame(
+                        _document,
+                        _layoutSettings,
+                        viewport,
+                        restoreAnchor,
+                        caretAlphaNow,
+                        timeSeconds,
+                        _visibleCommandIndicators,
+                        TakePendingMeshReleases(),
+                        focusedViewportBlockId: _focusedInlineViewportBlockId,
+                        uiActions: _uiActions.State,
+                        overlaySlab: overlaySlab,
+                        overlayActions: overlayActions);
 
-                _lastFrame = result.BackendFrame;
-                _lastLayout = result.Layout;
-                _resizeCoordinator.NotifyFrameBuilt(snapW, snapH, result.BuiltGrid, passNowTicks);
-                _lastCaretAlpha = caretAlphaNow;
-                _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(passNowTicks);
-                _lastCaretRenderTicks = passNowTicks;
-                ClearPendingMeshReleases();
+                    _lastFrame = result.BackendFrame;
+                    _lastLayout = result.Layout;
+                    _resizeCoordinator.NotifyFrameBuilt(snapW, snapH, result.BuiltGrid, passNowTicks);
+                    _lastCaretAlpha = caretAlphaNow;
+                    _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(passNowTicks);
+                    _lastCaretRenderTicks = passNowTicks;
+                    _lastRenderedUiActions = _uiActions.State;
+                    _lastRenderedOverlayOpen = overlaySlab is not null;
+                    _lastRenderedOverlayVersion = _overlay.Version;
+                    _lastRenderedOverlayActions = overlayActions;
+                    ClearPendingMeshReleases();
 
                 var verifySnapshot = _resizeCoordinator.GetLatestSnapshot();
                 var verifyGrid = verifySnapshot.Grid;
@@ -451,6 +456,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         {
             FreezeTranscriptFollowTailWhileViewportFocused();
             var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
+            var overlayGrid = FixedCellGrid.FromViewport(viewport, _layoutSettings);
+            var overlaySlab = _overlay.GetFrame(overlayGrid);
+            var overlayActions = _overlay.ActionState;
             var result = _renderPipeline.BuildFrame(
                 _document,
                 _layoutSettings,
@@ -461,12 +469,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 _visibleCommandIndicators,
                 TakePendingMeshReleases(),
                 focusedViewportBlockId: _focusedInlineViewportBlockId,
-                selectedActionSpanBlockId: _selectedActionSpanBlockId,
-                selectedActionSpanCommandText: _selectedActionSpanCommandText,
-                selectedActionSpanIndex: _selectedActionSpanIndex,
-                hasMousePosition: _hasMousePosition,
-                mouseX: _lastMouseX,
-                mouseY: _lastMouseY);
+                uiActions: _uiActions.State,
+                overlaySlab: overlaySlab,
+                overlayActions: overlayActions);
 
             _lastFrame = result.BackendFrame;
             _lastLayout = result.Layout;
@@ -475,6 +480,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             _lastCaretAlpha = caretAlphaNow;
             _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(rebuiltTicks);
             _lastCaretRenderTicks = rebuiltTicks;
+            _lastRenderedUiActions = _uiActions.State;
+            _lastRenderedOverlayOpen = overlaySlab is not null;
+            _lastRenderedOverlayVersion = _overlay.Version;
+            _lastRenderedOverlayActions = overlayActions;
             _pendingContentRebuild = false;
             ClearPendingMeshReleases();
         }
@@ -487,9 +496,13 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         _scrollbarController.UpdateTotalRows(_lastLayout);
+        var scrimRgba = (_overlay.IsOpen && _overlay.IsModal)
+            ? unchecked((int)0x00000088)
+            : (int?)null;
         var overlayFrame = _scrollbarController.BuildOverlayFrame(
             new PxRect(0, 0, framebufferWidth, framebufferHeight),
-            _document.Settings.DefaultTextStyle.ForegroundRgba);
+            _document.Settings.DefaultTextStyle.ForegroundRgba,
+            scrimRgba: scrimRgba);
 
         var setVSync = _resizeCoordinator.ConsumeVSyncRequest();
         var requestExit = _pendingExit;
@@ -516,8 +529,14 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             caretAlpha = 0;
             _caret.SetSuppressed(true, nowTicks);
         }
+        var overlaySlab = _overlay.GetFrame(_lastLayout.Grid);
+        var overlayActions = _overlay.ActionState;
         if (caretAlpha == _lastCaretAlpha &&
-            spinnerIndex == _lastSpinnerFrameIndex)
+            spinnerIndex == _lastSpinnerFrameIndex &&
+            _uiActions.State == _lastRenderedUiActions &&
+            (overlaySlab is not null) == _lastRenderedOverlayOpen &&
+            _overlay.Version == _lastRenderedOverlayVersion &&
+            overlayActions == _lastRenderedOverlayActions)
         {
             return;
         }
@@ -533,18 +552,19 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             caretAlpha: caretAlpha,
             meshReleases: TakePendingMeshReleases(),
             focusedViewportBlockId: _focusedInlineViewportBlockId,
-            selectedActionSpanBlockId: _selectedActionSpanBlockId,
-            selectedActionSpanCommandText: _selectedActionSpanCommandText,
-            selectedActionSpanIndex: _selectedActionSpanIndex,
-            hasMousePosition: _hasMousePosition,
-            mouseX: _lastMouseX,
-            mouseY: _lastMouseY);
+            uiActions: _uiActions.State,
+            overlaySlab: overlaySlab,
+            overlayActions: overlayActions);
         var backendFrame = RenderFrameAdapter.Adapt(renderFrame);
         ClearPendingMeshReleases();
         _lastFrame = backendFrame;
         _lastCaretAlpha = caretAlpha;
         _lastSpinnerFrameIndex = spinnerIndex;
         _lastCaretRenderTicks = nowTicks;
+        _lastRenderedUiActions = _uiActions.State;
+        _lastRenderedOverlayOpen = overlaySlab is not null;
+        _lastRenderedOverlayVersion = _overlay.Version;
+        _lastRenderedOverlayActions = overlayActions;
     }
 
     public void ResetTickClock(long nowTicks)
@@ -728,21 +748,27 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                     continue;
                 }
 
+                if (_overlay.HandleText(textInput))
+                {
+                    continue;
+                }
+
                 if (_focusedInlineViewportBlockId is not null)
                 {
                     continue;
                 }
 
                 _caret.OnTyped(nowTicks);
-                if (_selectedActionSpanIndex >= 0)
-                {
-                    ClearSelectedActionSpan();
-                    _pendingContentRebuild = true;
-                }
+                _ = _uiActions.ClearFocus();
             }
 
             if (events[i] is PendingEvent.Key key && key.KeyCode != HostKey.Unknown)
             {
+                if (_overlay.IsOpen && _overlay.HandleKey(key, nowTicks))
+                {
+                    continue;
+                }
+
                 if (key.IsDown &&
                     _focusedInlineViewportBlockId is null &&
                     key.KeyCode == HostKey.Backspace)
@@ -779,11 +805,10 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
                 if (key.IsDown &&
                     _focusedInlineViewportBlockId is null &&
-                    _selectedActionSpanIndex >= 0 &&
                     _lastLayout is not null &&
-                    TryHandleSelectedActionSpanKey(key, _lastLayout))
+                    _uiActions.State.FocusedId is not null &&
+                    TryHandleUiActionKey(key, _lastLayout, nowTicks))
                 {
-                    _pendingContentRebuild = true;
                     continue;
                 }
 
@@ -826,32 +851,50 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 _lastMouseY = mouseEvent.Y;
                 _hasMousePosition = true;
 
-                    if (mouseEvent.Kind == HostMouseEventKind.Down)
+                if (_overlay.IsOpen && _overlay.HandleMouse(mouseEvent, _lastLayout.Grid))
+                {
+                    _cursorKind = HostCursorKind.Default;
+                    continue;
+                }
+
+                var scrollYPx = GetScrollOffsetPx(_document, _lastLayout);
+                var mouseYDocPx = mouseEvent.Y + scrollYPx;
+
+                if (mouseEvent.Kind == HostMouseEventKind.Move)
+                {
+                    UpdateHoverAndCursor(mouseEvent.X, mouseEvent.Y, _lastLayout);
+                }
+
+                if (mouseEvent.Kind == HostMouseEventKind.Down &&
+                    (mouseEvent.Buttons & HostMouseButtons.Left) != 0)
+                {
+                    if (TryHitTestInlineViewport(_lastLayout, mouseEvent.X, mouseEvent.Y, scrollYPx, out var hitViewport, out _))
                     {
-                        var scrollYPx = GetScrollOffsetPx(_document, _lastLayout);
-                        if (TryHitTestInlineViewport(_lastLayout, mouseEvent.X, mouseEvent.Y, scrollYPx, out var hitViewport, out _))
-                        {
-                            SetFocusedInlineViewport(hitViewport.BlockId, nowTicks);
-                        }
+                        SetFocusedInlineViewport(hitViewport.BlockId, nowTicks);
+                    }
                     else
                     {
                         SetFocusedInlineViewport(null, nowTicks);
                     }
-                }
 
-                if (mouseEvent.Kind == HostMouseEventKind.Move)
-                {
-                    if (UpdateHoverAndCursor(mouseEvent.X, mouseEvent.Y, _lastLayout))
+                    if ((mouseEvent.Mods & HostKeyModifiers.Shift) == 0 &&
+                        _uiActions.HandleMouseDown(_lastLayout, mouseEvent.X, mouseYDocPx, out var focusedIdChangedTo) &&
+                        focusedIdChangedTo is not null)
                     {
-                        _pendingContentRebuild = true;
+                        continue;
                     }
                 }
 
-                if (mouseEvent.Kind == HostMouseEventKind.Down &&
+                if (mouseEvent.Kind == HostMouseEventKind.Up &&
                     (mouseEvent.Buttons & HostMouseButtons.Left) != 0 &&
-                    TryHandleActionSpanClick(mouseEvent, _lastLayout, nowTicks))
+                    _uiActions.State.PressedId is not null)
                 {
-                    _pendingContentRebuild = true;
+                    _ = _uiActions.HandleMouseUp(_lastLayout, mouseEvent.X, mouseYDocPx, out var activatedId);
+                    if (activatedId is { } id && TryActivateUiAction(_lastLayout, id, nowTicks))
+                    {
+                        _pendingContentRebuild = true;
+                    }
+
                     continue;
                 }
 
@@ -924,6 +967,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
         FreezeTranscriptFollowTailWhileViewportFocused();
         var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
+        var overlayGrid = FixedCellGrid.FromViewport(viewport, _layoutSettings);
+        var overlaySlab = _overlay.GetFrame(overlayGrid);
+        var overlayActions = _overlay.ActionState;
         var result = _renderPipeline.BuildFrame(
             _document,
             _layoutSettings,
@@ -934,12 +980,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             _visibleCommandIndicators,
             TakePendingMeshReleases(),
             focusedViewportBlockId: _focusedInlineViewportBlockId,
-            selectedActionSpanBlockId: _selectedActionSpanBlockId,
-            selectedActionSpanCommandText: _selectedActionSpanCommandText,
-            selectedActionSpanIndex: _selectedActionSpanIndex,
-            hasMousePosition: _hasMousePosition,
-            mouseX: _lastMouseX,
-            mouseY: _lastMouseY);
+            uiActions: _uiActions.State,
+            overlaySlab: overlaySlab,
+            overlayActions: overlayActions);
 
         _lastFrame = result.BackendFrame;
         _lastLayout = result.Layout;
@@ -947,56 +990,33 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _lastCaretAlpha = caretAlphaNow;
         _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(nowTicks);
         _lastCaretRenderTicks = nowTicks;
+        _lastRenderedUiActions = _uiActions.State;
+        _lastRenderedOverlayOpen = overlaySlab is not null;
+        _lastRenderedOverlayVersion = _overlay.Version;
+        _lastRenderedOverlayActions = overlayActions;
         ClearPendingMeshReleases();
     }
 
-    private bool UpdateHoverAndCursor(int mouseX, int mouseY, LayoutFrame layout)
+    private void UpdateHoverAndCursor(int mouseX, int mouseY, LayoutFrame layout)
     {
+        var scrollYPx = GetScrollOffsetPx(_document, layout);
+        var mouseYDocPx = mouseY + scrollYPx;
+        _ = _uiActions.UpdateHover(layout, mouseX, mouseYDocPx);
+
         if (layout.Scrollbar.IsScrollable)
         {
             var sb = layout.Scrollbar;
-            if ((mouseX >= sb.HitTrackRectPx.X &&
-                 mouseY >= sb.HitTrackRectPx.Y &&
-                 mouseX < sb.HitTrackRectPx.X + sb.HitTrackRectPx.Width &&
-                 mouseY < sb.HitTrackRectPx.Y + sb.HitTrackRectPx.Height) ||
-                mouseX >= sb.TrackRectPx.X)
+            if (mouseX >= sb.HitTrackRectPx.X || mouseX >= sb.TrackRectPx.X)
             {
-                var hadHover = _hoveredActionSpan is not null;
-                _hoveredActionSpan = null;
-                _hoveredActionSpanIndex = -1;
                 _cursorKind = HostCursorKind.Default;
-                return hadHover;
+                return;
             }
         }
 
-        var scrollYPx = GetScrollOffsetPx(_document, layout);
-        var adjustedY = mouseY + scrollYPx;
-
-        HostCursorKind cursor;
-
-        var hoveredIndex = -1;
-        if (TryGetActionSpanIndexOnRow(layout, mouseX, adjustedY, out hoveredIndex) &&
-            hoveredIndex >= 0 &&
-            hoveredIndex < layout.HitTestMap.ActionSpans.Count)
-        {
-            var span = layout.HitTestMap.ActionSpans[hoveredIndex];
-            cursor = HostCursorKind.Default;
-
-            var hoverChanged = _hoveredActionSpanIndex != hoveredIndex || _hoveredActionSpan != span;
-            _hoveredActionSpan = span;
-            _hoveredActionSpanIndex = hoveredIndex;
-            _cursorKind = cursor;
-            return hoverChanged;
-        }
-
-        var clearedHover = _hoveredActionSpan is not null;
-        _hoveredActionSpan = null;
-        _hoveredActionSpanIndex = -1;
-
-        cursor = HostCursorKind.Default;
+        var cursor = HostCursorKind.Default;
         if (layout.HitTestMap.Lines.Count > 0)
         {
-            var hit = new HitTester().HitTest(layout.HitTestMap, mouseX, adjustedY);
+            var hit = new HitTester().HitTest(layout.HitTestMap, mouseX, mouseYDocPx);
             if (hit is { } pos && TryGetBlockById(pos.BlockId, out var block))
             {
                 if (block is PromptBlock ||
@@ -1008,7 +1028,224 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         _cursorKind = cursor;
-        return clearedHover;
+    }
+
+    private bool TryHandleUiActionKey(in PendingEvent.Key key, LayoutFrame layout, long nowTicks)
+    {
+        if (_uiActions.State.FocusedId is not { } focused)
+        {
+            return false;
+        }
+
+        if (key.KeyCode == HostKey.Escape)
+        {
+            _ = _uiActions.ClearFocus();
+            _lastUiActionClickTicks = 0;
+            _lastUiActionClickId = null;
+            return true;
+        }
+
+        if (key.KeyCode == HostKey.Enter)
+        {
+            if (TryGetActionCommandText(layout, focused, out var commandText))
+            {
+                ActivateEntry(commandText);
+            }
+
+            _ = _uiActions.ClearFocus();
+            _lastUiActionClickTicks = 0;
+            _lastUiActionClickId = null;
+            return true;
+        }
+
+        var delta = key.KeyCode switch
+        {
+            HostKey.Up => -1,
+            HostKey.Left => -1,
+            HostKey.Down => 1,
+            HostKey.Right => 1,
+            _ => 0
+        };
+
+        if (delta == 0)
+        {
+            return false;
+        }
+
+        if (TryMoveUiActionFocus(layout, focused, delta, out var newRectDocPx))
+        {
+            if (EnsureUiActionVisible(layout, newRectDocPx))
+            {
+                _pendingContentRebuild = true;
+            }
+        }
+
+        return true;
+    }
+
+    private bool TryMoveUiActionFocus(LayoutFrame layout, UIActionId focused, int delta, out PxRect newFocusedRectDocPx)
+    {
+        newFocusedRectDocPx = default;
+        if (!TryFindActionSpan(layout, focused, out var currentSpan, out var currentIndex))
+        {
+            _ = _uiActions.ClearFocus();
+            _lastUiActionClickTicks = 0;
+            _lastUiActionClickId = null;
+            return false;
+        }
+
+        var spans = layout.HitTestMap.ActionSpans;
+        var blockId = currentSpan.BlockId;
+        if (delta < 0)
+        {
+            for (var i = currentIndex - 1; i >= 0; i--)
+            {
+                var span = spans[i];
+                if (span.BlockId != blockId || string.IsNullOrWhiteSpace(span.CommandText))
+                {
+                    continue;
+                }
+
+                var id = UIActionFactory.GetId(span);
+                if (id.IsEmpty)
+                {
+                    continue;
+                }
+
+                _ = _uiActions.SetFocus(id);
+                newFocusedRectDocPx = span.RectPx;
+                return true;
+            }
+
+            return false;
+        }
+
+        for (var i = currentIndex + 1; i < spans.Count; i++)
+        {
+            var span = spans[i];
+            if (span.BlockId != blockId || string.IsNullOrWhiteSpace(span.CommandText))
+            {
+                continue;
+            }
+
+            var id = UIActionFactory.GetId(span);
+            if (id.IsEmpty)
+            {
+                continue;
+            }
+
+            _ = _uiActions.SetFocus(id);
+            newFocusedRectDocPx = span.RectPx;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryFindActionSpan(LayoutFrame layout, UIActionId id, out HitTestActionSpan span, out int index)
+    {
+        span = default;
+        index = -1;
+
+        if (id.IsEmpty)
+        {
+            return false;
+        }
+
+        var spans = layout.HitTestMap.ActionSpans;
+        for (var i = 0; i < spans.Count; i++)
+        {
+            var candidate = spans[i];
+            if (UIActionFactory.GetId(candidate) == id)
+            {
+                span = candidate;
+                index = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool EnsureUiActionVisible(LayoutFrame layout, in PxRect rectDocPx)
+    {
+        var grid = layout.Grid;
+        if (grid.CellHeightPx <= 0)
+        {
+            return false;
+        }
+
+        var before = _document.Scroll.ScrollOffsetPx;
+        var y0 = rectDocPx.Y - before;
+        var y1 = y0 + rectDocPx.Height;
+        var viewH = grid.FramebufferHeightPx;
+
+        if (y0 < 0)
+        {
+            _document.Scroll.ScrollOffsetPx = Math.Max(0, before + y0);
+            _document.Scroll.IsFollowingTail = false;
+            return _document.Scroll.ScrollOffsetPx != before;
+        }
+
+        if (y1 > viewH)
+        {
+            var maxScrollOffsetPx = Math.Max(0, (layout.TotalRows - grid.Rows) * grid.CellHeightPx);
+            _document.Scroll.ScrollOffsetPx = Math.Min(maxScrollOffsetPx, before + (y1 - viewH));
+            _document.Scroll.IsFollowingTail = false;
+            return _document.Scroll.ScrollOffsetPx != before;
+        }
+
+        return false;
+    }
+
+    private bool TryActivateUiAction(LayoutFrame layout, UIActionId id, long nowTicks)
+    {
+        if (!TryGetActionCommandText(layout, id, out var commandText))
+        {
+            return false;
+        }
+
+        var isDoubleClick =
+            _lastUiActionClickId == id &&
+            nowTicks - _lastUiActionClickTicks <= GetDoubleClickTicks();
+
+        _lastUiActionClickTicks = nowTicks;
+        _lastUiActionClickId = id;
+
+        if (!isDoubleClick)
+        {
+            return false;
+        }
+
+        ActivateEntry(commandText);
+        _ = _uiActions.ClearFocus();
+        _lastUiActionClickId = null;
+        _lastUiActionClickTicks = 0;
+        return true;
+    }
+
+    private static bool TryGetActionCommandText(LayoutFrame layout, UIActionId id, out string commandText)
+    {
+        commandText = string.Empty;
+        if (id.IsEmpty)
+        {
+            return false;
+        }
+
+        var spans = layout.HitTestMap.ActionSpans;
+        for (var i = 0; i < spans.Count; i++)
+        {
+            var span = spans[i];
+            if (UIActionFactory.GetId(span) != id)
+            {
+                continue;
+            }
+
+            commandText = span.CommandText;
+            return !string.IsNullOrWhiteSpace(commandText);
+        }
+
+        return false;
     }
 
     private InputEvent? Translate(PendingEvent e)
@@ -1090,6 +1327,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
 
         if (_inspectController.IsActive)
+        {
+            return false;
+        }
+
+        if (_overlay.IsOpen)
         {
             return false;
         }
@@ -1877,9 +2119,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _capturedInlineViewportBlockId = null;
         _focusedInlineViewportBlockId = null;
         _focusedScene3DNavKeysDown = Scene3DNavKeys.None;
-        _hoveredActionSpanIndex = -1;
-        _hoveredActionSpan = null;
-        ClearSelectedActionSpan();
+        _ = _uiActions.ClearAll();
+        _lastUiActionClickTicks = 0;
+        _lastUiActionClickId = null;
         SetCaretToEndOfLastPrompt(_document.Transcript);
         UpdateShellPromptTextIfPresent();
 
@@ -1983,6 +2225,14 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         {
             UpdateShellPromptTextIfPresent();
             _promptLifecycle.PendingShellPrompt = false;
+            return;
+        }
+
+        // If a modal overlay is open, keep the transcript visually inert and defer creating a new prompt
+        // until the modal returns.
+        if (_overlay.IsOpen && _overlay.IsModal)
+        {
+            _promptLifecycle.PendingShellPrompt = true;
             return;
         }
 
@@ -2409,279 +2659,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private static long GetDoubleClickTicks() => (long)(Stopwatch.Frequency * 0.35);
 
-    private static bool IsFileEntryCommand(string commandText)
-    {
-        return IsCdCommand(commandText) || commandText.StartsWith("view ", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsCdCommand(string commandText) => commandText.StartsWith("cd ", StringComparison.OrdinalIgnoreCase);
-
-    private static bool TryGetActionSpanIndexOnRow(LayoutFrame layout, int pixelX, int pixelY, out int spanIndex)
-    {
-        var map = layout.HitTestMap;
-        if (map.TryGetActionAt(pixelX, pixelY, out spanIndex))
-        {
-            return true;
-        }
-
-        spanIndex = -1;
-        var grid = layout.Grid;
-        var cellH = grid.CellHeightPx;
-        if (cellH <= 0)
-        {
-            return false;
-        }
-
-        var localY = pixelY - grid.PaddingTopPx;
-        if (localY < 0)
-        {
-            return false;
-        }
-
-        var row = localY / cellH;
-        var rowY = grid.PaddingTopPx + (row * cellH);
-
-        var best = -1;
-        var bestDist = int.MaxValue;
-        var spans = map.ActionSpans;
-        for (var i = 0; i < spans.Count; i++)
-        {
-            var span = spans[i];
-            var r = span.RectPx;
-            if (r.Y > rowY)
-            {
-                break;
-            }
-
-            if (r.Y != rowY)
-            {
-                continue;
-            }
-
-            var dist = 0;
-            if (pixelX < r.X) dist = r.X - pixelX;
-            else if (pixelX >= r.X + r.Width) dist = pixelX - (r.X + r.Width);
-
-            if (dist < bestDist)
-            {
-                bestDist = dist;
-                best = i;
-                if (dist == 0)
-                {
-                    break;
-                }
-            }
-        }
-
-        if (best >= 0)
-        {
-            spanIndex = best;
-            return true;
-        }
-
-        return false;
-    }
-
-    private void ClearSelectedActionSpan()
-    {
-        _selectedActionSpanIndex = -1;
-        _selectedActionSpanBlockId = null;
-        _selectedActionSpanCommandText = null;
-        _lastActionSpanClickTicks = 0;
-        _lastActionSpanClickIndex = -1;
-        _lastActionSpanClickBlockId = null;
-    }
-
-    private bool TryHandleSelectedActionSpanKey(in PendingEvent.Key key, LayoutFrame layout)
-    {
-        if (_selectedActionSpanIndex < 0 ||
-            _selectedActionSpanBlockId is null ||
-            _selectedActionSpanCommandText is null)
-        {
-            return false;
-        }
-
-        if (key.KeyCode == HostKey.Escape)
-        {
-            ClearSelectedActionSpan();
-            return true;
-        }
-
-        if (key.KeyCode == HostKey.Enter)
-        {
-            ActivateEntry(_selectedActionSpanCommandText);
-            ClearSelectedActionSpan();
-            return true;
-        }
-
-        var delta = key.KeyCode switch
-        {
-            HostKey.Up => -1,
-            HostKey.Left => -1,
-            HostKey.Down => 1,
-            HostKey.Right => 1,
-            _ => 0
-        };
-
-        if (delta == 0)
-        {
-            return false;
-        }
-
-        if (!TryMoveSelectedActionSpan(layout, delta))
-        {
-            return true;
-        }
-
-        EnsureSelectedActionSpanVisible(layout);
-        return true;
-    }
-
-    private bool TryMoveSelectedActionSpan(LayoutFrame layout, int delta)
-    {
-        var spans = layout.HitTestMap.ActionSpans;
-        if (_selectedActionSpanIndex < 0 || _selectedActionSpanIndex >= spans.Count || _selectedActionSpanBlockId is null)
-        {
-            ClearSelectedActionSpan();
-            return false;
-        }
-
-        var blockId = _selectedActionSpanBlockId.Value;
-        if (delta < 0)
-        {
-            for (var i = _selectedActionSpanIndex - 1; i >= 0; i--)
-            {
-                var span = spans[i];
-                if (span.BlockId == blockId && IsFileEntryCommand(span.CommandText))
-                {
-                    _selectedActionSpanIndex = i;
-                    _selectedActionSpanCommandText = span.CommandText;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        for (var i = _selectedActionSpanIndex + 1; i < spans.Count; i++)
-        {
-            var span = spans[i];
-            if (span.BlockId == blockId && IsFileEntryCommand(span.CommandText))
-            {
-                _selectedActionSpanIndex = i;
-                _selectedActionSpanCommandText = span.CommandText;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private void EnsureSelectedActionSpanVisible(LayoutFrame layout)
-    {
-        if (_selectedActionSpanIndex < 0 || _selectedActionSpanIndex >= layout.HitTestMap.ActionSpans.Count)
-        {
-            return;
-        }
-
-        var rect = layout.HitTestMap.ActionSpans[_selectedActionSpanIndex].RectPx;
-        var grid = layout.Grid;
-        if (grid.CellHeightPx <= 0)
-        {
-            return;
-        }
-
-        var scrollYPx = _document.Scroll.ScrollOffsetPx;
-        var y0 = rect.Y - scrollYPx;
-        var y1 = y0 + rect.Height;
-        var viewH = grid.FramebufferHeightPx;
-
-        if (y0 < 0)
-        {
-            _document.Scroll.ScrollOffsetPx = Math.Max(0, _document.Scroll.ScrollOffsetPx + y0);
-            _document.Scroll.IsFollowingTail = false;
-        }
-        else if (y1 > viewH)
-        {
-            var maxScrollOffsetPx = Math.Max(0, (layout.TotalRows - grid.Rows) * grid.CellHeightPx);
-            _document.Scroll.ScrollOffsetPx = Math.Min(maxScrollOffsetPx, _document.Scroll.ScrollOffsetPx + (y1 - viewH));
-            _document.Scroll.IsFollowingTail = false;
-        }
-    }
-
-    private bool TryHandleActionSpanClick(in HostMouseEvent mouseEvent, LayoutFrame layout, long nowTicks)
-    {
-        if (mouseEvent.Kind != HostMouseEventKind.Down || (mouseEvent.Buttons & HostMouseButtons.Left) == 0)
-        {
-            return false;
-        }
-
-        if ((mouseEvent.Mods & HostKeyModifiers.Shift) != 0)
-        {
-            return false;
-        }
-
-        if (layout.Scrollbar.IsScrollable)
-        {
-            var sb = layout.Scrollbar;
-            if (mouseEvent.X >= sb.HitTrackRectPx.X &&
-                mouseEvent.Y >= sb.HitTrackRectPx.Y &&
-                mouseEvent.X < sb.HitTrackRectPx.X + sb.HitTrackRectPx.Width &&
-                mouseEvent.Y < sb.HitTrackRectPx.Y + sb.HitTrackRectPx.Height)
-            {
-                return false;
-            }
-
-            if (mouseEvent.X >= sb.TrackRectPx.X)
-            {
-                return false;
-            }
-        }
-
-        var adjustedY = mouseEvent.Y + GetScrollOffsetPx(_document, layout);
-
-        if (!TryGetActionSpanIndexOnRow(layout, mouseEvent.X, adjustedY, out int spanIndex) ||
-            spanIndex < 0 ||
-            spanIndex >= layout.HitTestMap.ActionSpans.Count)
-        {
-            if (_selectedActionSpanIndex >= 0)
-            {
-                ClearSelectedActionSpan();
-                _pendingContentRebuild = true;
-                return false;
-            }
-
-            return false;
-        }
-
-        var span = layout.HitTestMap.ActionSpans[spanIndex];
-        if (!IsFileEntryCommand(span.CommandText))
-        {
-            return false;
-        }
-
-        var isDoubleClick =
-            _lastActionSpanClickBlockId == span.BlockId &&
-            _lastActionSpanClickIndex == spanIndex &&
-            nowTicks - _lastActionSpanClickTicks <= GetDoubleClickTicks();
-
-        _lastActionSpanClickTicks = nowTicks;
-        _lastActionSpanClickIndex = spanIndex;
-        _lastActionSpanClickBlockId = span.BlockId;
-
-        _selectedActionSpanIndex = spanIndex;
-        _selectedActionSpanBlockId = span.BlockId;
-        _selectedActionSpanCommandText = span.CommandText;
-
-        if (isDoubleClick)
-        {
-            ActivateEntry(span.CommandText);
-            ClearSelectedActionSpan();
-        }
-
-        return true;
-    }
-
     private void ActivateEntry(string commandText)
     {
         if (string.IsNullOrWhiteSpace(commandText))
@@ -2758,6 +2735,33 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     void IBlockCommandSession.RequestExit()
     {
         _pendingExit = true;
+        _pendingContentRebuild = true;
+    }
+
+    void IBlockCommandSession.ShowHelpControlsOverlay()
+    {
+        FixedCellGrid grid;
+        if (_lastLayout is not null)
+        {
+            grid = _lastLayout.Grid;
+        }
+        else
+        {
+            var snap = _resizeCoordinator.GetLatestSnapshot();
+            var viewport = new ConsoleViewport(snap.FramebufferWidth, snap.FramebufferHeight);
+            grid = FixedCellGrid.FromViewport(viewport, _layoutSettings);
+        }
+
+        _overlay.OpenHelpControls(grid);
+
+        // Modal overlays should park the transcript (no editable prompt visible). Defer prompt creation
+        // until the modal closes, similar to blocking activities.
+        if (_overlay.IsModal && TryGetLastEditablePromptId(out var promptId))
+        {
+            RemoveShellPromptIfPresent(promptId);
+            _promptLifecycle.PendingShellPrompt = true;
+        }
+
         _pendingContentRebuild = true;
     }
 

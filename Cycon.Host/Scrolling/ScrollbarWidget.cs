@@ -69,7 +69,7 @@ public sealed class ScrollbarWidget
         _ui.Visibility = MoveTowards(_ui.Visibility, target, step);
     }
 
-    public RenderFrame? BuildOverlayFrame(PxRect viewportRectPx, ScrollbarSettings settings, int rgba, string debugTag, PxRect? clipRectPx = null)
+    public RenderFrame? BuildOverlayFrame(PxRect viewportRectPx, ScrollbarSettings settings, int rgba, string debugTag, PxRect? clipRectPx = null, int? scrimRgba = null)
     {
         if (!_model.TryGetScrollbarLayout(viewportRectPx, settings, out var sb))
         {
@@ -84,13 +84,18 @@ public sealed class ScrollbarWidget
 
         var thumbColor = rgba;
 
-        var clip = clipRectPx ?? viewportRectPx;
+        var clip = clipRectPx ?? sb.HitTrackRectPx;
         var frame = new RenderFrame();
         frame.Add(new PushClip(clip.X, clip.Y, clip.Width, clip.Height));
 
         if (sb.IsScrollable)
         {
             frame.Add(new DrawQuad(sb.ThumbRectPx.X, sb.ThumbRectPx.Y, sb.ThumbRectPx.Width, sb.ThumbRectPx.Height, thumbColor));
+        }
+
+        if (scrimRgba is { } scrim)
+        {
+            frame.Add(new DrawQuad(clip.X, clip.Y, clip.Width, clip.Height, scrim));
         }
 
         frame.Add(new PopClip());
