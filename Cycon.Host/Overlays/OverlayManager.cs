@@ -679,10 +679,7 @@ internal sealed class OverlayManager
 
     private static OverlaySlab CreateAiApiKeySlab()
     {
-        var lines = new[]
-        {
-            ""
-        };
+        var lines = System.Array.Empty<string>();
 
         var actions = new[]
         {
@@ -691,7 +688,7 @@ internal sealed class OverlayManager
                 Kind: UIActionKind.TextInput,
                 Area: OverlaySlabActionArea.Content,
                 Align: OverlaySlabActionAlign.Left,
-                RowIndex: 1,
+                RowIndex: 0,
                 ColIndex: 0,
                 Label: string.Empty,
                 CommandText: string.Empty,
@@ -703,17 +700,8 @@ internal sealed class OverlayManager
                 Align: OverlaySlabActionAlign.Right,
                 RowIndex: 0,
                 ColIndex: 0,
-                Label: "Save",
-                CommandText: "overlay:submit"),
-            new OverlaySlabActionSpec(
-                Id: new UIActionId(2),
-                Kind: UIActionKind.CloseOverlay,
-                Area: OverlaySlabActionArea.Footer,
-                Align: OverlaySlabActionAlign.Right,
-                RowIndex: 0,
-                ColIndex: 0,
-                Label: "Cancel",
-                CommandText: string.Empty)
+                Label: "Store",
+                CommandText: "overlay:submit")
         };
 
         return new OverlaySlab(
@@ -837,9 +825,9 @@ internal sealed class OverlayManager
                 continue;
             }
 
-            // Text input is 3 rows tall; reserve 2 extra rows so we always get at least 1 blank row below it
+            // Text input is 3 rows tall; reserve 1 extra row so we always get at least 1 blank row below it
             // before the footer buttons.
-            var h = a.Kind == UIActionKind.TextInput ? 5 : 1;
+            var h = a.Kind == UIActionKind.TextInput ? 4 : 1;
             bodyRows = Math.Max(bodyRows, Math.Max(0, a.RowIndex) + h);
         }
         var gapBeforeFooterRows = ContentInsetRowsBottom; // match bottom inset for symmetry

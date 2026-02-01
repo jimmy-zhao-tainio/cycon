@@ -48,7 +48,14 @@ internal static class OverlaySlabPass
         const int ContentInsetRowsTop = 1; // below header separator
         const int ContentInsetRowsBottom = 1;
 
-        var titleX = contentX + (ContentInsetCols * cellW);
+        var baseTextX = contentX + (ContentInsetCols * cellW);
+        if (slab.TextInput is { } inputFrame)
+        {
+            // Align slab text to the framed input's left stroke (cell-authored, consistent with control chrome).
+            baseTextX = inputFrame.OuterRectPx.X + cellW;
+        }
+
+        var titleX = baseTextX;
         var titleY = contentY;
         if (!string.IsNullOrEmpty(slab.Title))
         {
@@ -168,7 +175,7 @@ internal static class OverlaySlabPass
                 continue;
             }
 
-            canvas.DrawText(line, 0, line.Length, contentX + (ContentInsetCols * cellW), y, foregroundRgba);
+            canvas.DrawText(line, 0, line.Length, baseTextX, y, foregroundRgba);
         }
 
         // Action labels (including header close).
