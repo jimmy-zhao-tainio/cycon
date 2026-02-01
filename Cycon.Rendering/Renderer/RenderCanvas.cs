@@ -17,6 +17,8 @@ internal sealed class RenderCanvas : IRenderCanvas
         _font = font;
     }
 
+    public FontMetrics FontMetrics => _font.Metrics;
+
     public void SetCullState(bool enabled, bool frontFaceCcw) =>
         _frame.Add(new SetCullState(enabled, frontFaceCcw));
 

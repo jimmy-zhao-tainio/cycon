@@ -12,6 +12,7 @@ namespace Cycon.Host.Commands;
 public sealed class JobScheduler : IJobRuntime
 {
     private readonly ConcurrentDictionary<JobId, IJob> _jobs = new();
+    private readonly ConcurrentDictionary<JobId, JobOptions> _jobOptions = new();
     private readonly ConcurrentQueue<PublishedEvent> _events = new();
     private long _nextJobId;
     private long _arrivalIndex;
@@ -33,10 +34,17 @@ public sealed class JobScheduler : IJobRuntime
 
     public void StartJob(IJob job)
     {
+        StartJob(job, JobOptions.Default);
+    }
+
+    public void StartJob(IJob job, JobOptions options)
+    {
         if (!_jobs.TryAdd(job.Id, job))
         {
             throw new InvalidOperationException($"Job {job.Id} already exists.");
         }
+
+        _jobOptions[job.Id] = options;
 
         Task.Run(async () =>
         {
@@ -56,6 +64,48 @@ public sealed class JobScheduler : IJobRuntime
     }
 
     public bool TryGetJob(JobId jobId, out IJob job) => _jobs.TryGetValue(jobId, out job!);
+
+    public bool IsForegroundJob(JobId jobId)
+    {
+        return _jobOptions.TryGetValue(jobId, out var options) && options.IsForeground;
+    }
+
+    public bool HasRunningForegroundJobs
+    {
+        get
+        {
+            foreach (var kvp in _jobOptions)
+            {
+                if (!kvp.Value.IsForeground)
+                {
+                    continue;
+                }
+
+                if (_jobs.TryGetValue(kvp.Key, out var job) && job.State == JobState.Running)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    public void RequestCancelForegroundJobsWithEscalation()
+    {
+        foreach (var kvp in _jobOptions)
+        {
+            if (!kvp.Value.IsForeground)
+            {
+                continue;
+            }
+
+            if (_jobs.TryGetValue(kvp.Key, out var job) && job.State == JobState.Running)
+            {
+                RequestCancelWithEscalation(kvp.Key);
+            }
+        }
+    }
 
     public void RequestCancel(JobId jobId, CancelLevel level)
     {

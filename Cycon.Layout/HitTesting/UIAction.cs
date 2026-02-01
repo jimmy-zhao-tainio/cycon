@@ -12,6 +12,7 @@ public enum UIActionKind
     ExecuteCommand = 1,
     CloseOverlay = 2,
     NoOp = 3,
+    TextInput = 4,
 }
 
 public readonly record struct UIActionId(ulong Value)

@@ -103,7 +103,7 @@ internal sealed class UIActionRouter
 
     public bool UpdateHover(IReadOnlyList<UIAction> actions, int mouseX, int mouseY, int buttonCellH)
     {
-        var hovered = TryGetActionIdAt(actions, mouseX, mouseY, buttonCellH, out var id) ? id : (UIActionId?)null;
+        var hovered = TryGetActionIdAt(actions, mouseX, mouseY, buttonCellH, State.PressedId, out var id) ? id : (UIActionId?)null;
         if (State.HoveredId == hovered)
         {
             return false;
@@ -215,7 +215,9 @@ internal sealed class UIActionRouter
             return false;
         }
 
-        var stillInside = TryGetActionIdAt(actions, mouseX, mouseY, buttonCellH, out var idAtUp) && idAtUp == pressed.Value;
+        // If the pressed action is a button, the visuals shrink by 2px (1px per edge) while pressed.
+        // Match the hit target to the visible pressed geometry.
+        var stillInside = TryGetActionIdAt(actions, mouseX, mouseY, buttonCellH, pressed, out var idAtUp) && idAtUp == pressed.Value;
         State = State with { PressedId = null };
 
         if (stillInside)
@@ -287,6 +289,9 @@ internal sealed class UIActionRouter
     }
 
     private static bool TryGetActionIdAt(IReadOnlyList<UIAction> actions, int mouseX, int mouseY, int buttonCellH, out UIActionId id)
+        => TryGetActionIdAt(actions, mouseX, mouseY, buttonCellH, pressedId: null, out id);
+
+    private static bool TryGetActionIdAt(IReadOnlyList<UIAction> actions, int mouseX, int mouseY, int buttonCellH, UIActionId? pressedId, out UIActionId id)
     {
         id = default;
         if (actions is null || actions.Count == 0)
@@ -298,6 +303,7 @@ internal sealed class UIActionRouter
         var thickness = Math.Max(1, chrome.BorderPx);
         var reservation = Math.Max(0, chrome.PaddingPx + chrome.BorderPx);
         var inset = Math.Max(0, (reservation - thickness) / 2);
+        var pressedIdValue = pressedId ?? UIActionId.Empty;
 
         for (var i = 0; i < actions.Count; i++)
         {
@@ -308,11 +314,15 @@ internal sealed class UIActionRouter
             }
 
             var r = a.RectPx;
-            if (buttonCellH > 0 && r.Height == (buttonCellH * 3) && inset > 0)
+            if (buttonCellH > 0 &&
+                a.Kind != UIActionKind.TextInput &&
+                r.Height == (buttonCellH * 3) &&
+                inset > 0)
             {
                 // Buttons have centered-gutter borders; use the visible frame bounds as the hit target
                 // so hover/click matches the button stroke.
-                r = DeflateRect(r, inset);
+                var extraPressedInset = (a.Id == pressedIdValue) ? 1 : 0;
+                r = DeflateRect(r, inset + extraPressedInset);
             }
 
             if (r.Contains(mouseX, mouseY))

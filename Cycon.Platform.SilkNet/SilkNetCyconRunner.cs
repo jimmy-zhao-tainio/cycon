@@ -456,7 +456,7 @@ public static class SilkNetCyconRunner
     }
 
     private static bool IsRepeatable(HostKey key) =>
-        key is HostKey.Backspace or HostKey.Left or HostKey.Right or HostKey.Up or HostKey.Down or HostKey.PageUp or HostKey.PageDown;
+        key is HostKey.Backspace or HostKey.Delete or HostKey.Left or HostKey.Right or HostKey.Up or HostKey.Down or HostKey.PageUp or HostKey.PageDown;
 
     private static long MsToTicks(int ms) =>
         (long)(ms * (Stopwatch.Frequency / 1000.0));
@@ -495,6 +495,7 @@ public static class SilkNetCyconRunner
         return key switch
         {
             Key.Backspace => HostKey.Backspace,
+            Key.Delete => HostKey.Delete,
             Key.Enter => HostKey.Enter,
             Key.KeypadEnter => HostKey.Enter,
             Key.Tab => HostKey.Tab,
@@ -504,9 +505,12 @@ public static class SilkNetCyconRunner
             Key.Down => HostKey.Down,
             Key.PageUp => HostKey.PageUp,
             Key.PageDown => HostKey.PageDown,
+            Key.Home => HostKey.Home,
+            Key.End => HostKey.End,
             Key.Escape => HostKey.Escape,
             Key.C => HostKey.C,
             Key.V => HostKey.V,
+            Key.X => HostKey.X,
             Key.W => HostKey.W,
             Key.A => HostKey.A,
             Key.S => HostKey.S,

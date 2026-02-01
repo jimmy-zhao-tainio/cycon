@@ -36,6 +36,7 @@ using Cycon.Rendering.Renderer;
 using Cycon.Rendering.Styling;
 using Cycon.Runtime.Events;
 using Cycon.Runtime.Jobs;
+using Cycon.Host.Commands.Jobs;
 
 namespace Cycon.Host.Hosting;
 
@@ -82,7 +83,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private UIActionState _lastRenderedUiActions = UIActionState.Empty;
     private long _lastUiActionClickTicks;
     private UIActionId? _lastUiActionClickId;
-    private readonly OverlayManager _overlay = new();
+    private readonly OverlayManager _overlay;
     private bool _lastRenderedOverlayOpen;
     private int _lastRenderedOverlayVersion;
     private UIActionState _lastRenderedOverlayActions = UIActionState.Empty;
@@ -103,7 +104,13 @@ public sealed class ConsoleHostSession : IBlockCommandSession
     private long _lastTickTicks;
     private int _tickIndex;
     private readonly PromptCaretController _caret = new();
+    private readonly PromptCaretController _foregroundJobStatusCaret = new();
     private bool _windowIsFocused = true;
+
+    private readonly HashSet<BlockId> _foregroundStatusCaretBlocks = new();
+    private int _foregroundStatusCaretBlocksVersion;
+    private byte _lastForegroundStatusCaretAlpha;
+    private int _lastForegroundStatusCaretBlocksVersion;
 
     private ConsoleHostSession(
         string text,
@@ -114,6 +121,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         Action<BlockCommandRegistry>? configureBlockCommands)
     {
         _clipboard = clipboard;
+        _overlay = new OverlayManager(clipboard.GetText, clipboard.SetText);
         _document = CreateDocument(text);
         _interaction.Initialize(_document.Transcript);
         SetCaretToEndOfLastPrompt(_document.Transcript);
@@ -159,6 +167,9 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             AllocateNewBlockId,
             TryGetPromptNullable,
             ReplacePromptWithArchivedText,
+            ReplaceTextBlock,
+            _jobScheduler.IsForegroundJob,
+            SetForegroundStatusCaretEnabled,
             EnsureShellPromptAtEndIfNeeded);
         _scrollbarController = new ScrollbarController(_document, _layoutSettings);
         _inspectController = new InspectModeController(new InspectHostAdapter(this));
@@ -348,6 +359,21 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             caretAlphaNow = 0;
             _caret.SetSuppressed(true, nowTicks);
         }
+
+        byte foregroundStatusCaretAlphaNow = 0;
+        if (_foregroundStatusCaretBlocks.Count != 0)
+        {
+            _foregroundJobStatusCaret.SetSuppressed(false, nowTicks);
+            _foregroundJobStatusCaret.SetPromptFocused(true, nowTicks);
+            _foregroundJobStatusCaret.Update(nowTicks);
+            foregroundStatusCaretAlphaNow = _foregroundJobStatusCaret.SampleAlpha(nowTicks);
+        }
+        else
+        {
+            _foregroundJobStatusCaret.SetSuppressed(true, nowTicks);
+        }
+
+        _overlay.Tick(nowTicks);
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
 
         var renderedGrid = _lastFrame?.BuiltGrid ?? default;
@@ -380,6 +406,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                         viewport,
                         restoreAnchor,
                         caretAlphaNow,
+                        _foregroundStatusCaretBlocks,
+                        foregroundStatusCaretAlphaNow,
                         timeSeconds,
                         _visibleCommandIndicators,
                         TakePendingMeshReleases(),
@@ -392,6 +420,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                     _lastLayout = result.Layout;
                     _resizeCoordinator.NotifyFrameBuilt(snapW, snapH, result.BuiltGrid, passNowTicks);
                     _lastCaretAlpha = caretAlphaNow;
+                    _lastForegroundStatusCaretAlpha = foregroundStatusCaretAlphaNow;
+                    _lastForegroundStatusCaretBlocksVersion = _foregroundStatusCaretBlocksVersion;
                     _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(passNowTicks);
                     _lastCaretRenderTicks = passNowTicks;
                     _lastRenderedUiActions = _uiActions.State;
@@ -464,6 +494,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 viewport,
                 restoreAnchor: false,
                 caretAlpha: caretAlphaNow,
+                statusCaretBlocks: _foregroundStatusCaretBlocks,
+                statusCaretAlpha: foregroundStatusCaretAlphaNow,
                 timeSeconds: timeSeconds,
                 _visibleCommandIndicators,
                 TakePendingMeshReleases(),
@@ -477,6 +509,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             var rebuiltTicks = Stopwatch.GetTimestamp();
             _resizeCoordinator.NotifyFrameBuilt(framebufferWidth, framebufferHeight, result.BuiltGrid, rebuiltTicks);
             _lastCaretAlpha = caretAlphaNow;
+            _lastForegroundStatusCaretAlpha = foregroundStatusCaretAlphaNow;
+            _lastForegroundStatusCaretBlocksVersion = _foregroundStatusCaretBlocksVersion;
             _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(rebuiltTicks);
             _lastCaretRenderTicks = rebuiltTicks;
             _lastRenderedUiActions = _uiActions.State;
@@ -496,7 +530,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         _scrollbarController.UpdateTotalRows(_lastLayout);
         var scrimRgba = ((_overlay.IsOpen && _overlay.IsModal) || _focusedInlineViewportBlockId is not null)
-            ? unchecked((int)0x00000055)
+            ? unchecked((int)0x000000CC)
             : (int?)null;
         var overlayFrame = _scrollbarController.BuildOverlayFrame(
             new PxRect(0, 0, framebufferWidth, framebufferHeight),
@@ -528,9 +562,25 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             caretAlpha = 0;
             _caret.SetSuppressed(true, nowTicks);
         }
+
+        byte foregroundStatusCaretAlpha = 0;
+        if (_foregroundStatusCaretBlocks.Count != 0)
+        {
+            _foregroundJobStatusCaret.SetSuppressed(false, nowTicks);
+            _foregroundJobStatusCaret.SetPromptFocused(true, nowTicks);
+            _foregroundJobStatusCaret.Update(nowTicks);
+            foregroundStatusCaretAlpha = _foregroundJobStatusCaret.SampleAlpha(nowTicks);
+        }
+        else
+        {
+            _foregroundJobStatusCaret.SetSuppressed(true, nowTicks);
+        }
+
         var overlaySlab = _overlay.GetFrame(_lastLayout.Grid);
         var overlayActions = _overlay.ActionState;
         if (caretAlpha == _lastCaretAlpha &&
+            foregroundStatusCaretAlpha == _lastForegroundStatusCaretAlpha &&
+            _foregroundStatusCaretBlocksVersion == _lastForegroundStatusCaretBlocksVersion &&
             spinnerIndex == _lastSpinnerFrameIndex &&
             _uiActions.State == _lastRenderedUiActions &&
             (overlaySlab is not null) == _lastRenderedOverlayOpen &&
@@ -549,6 +599,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             timeSeconds: timeSeconds,
             commandIndicators: _visibleCommandIndicators,
             caretAlpha: caretAlpha,
+            statusCaretBlocks: _foregroundStatusCaretBlocks,
+            statusCaretAlpha: foregroundStatusCaretAlpha,
             meshReleases: TakePendingMeshReleases(),
             focusedViewportBlockId: _focusedInlineViewportBlockId,
             uiActions: _uiActions.State,
@@ -558,6 +610,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         ClearPendingMeshReleases();
         _lastFrame = backendFrame;
         _lastCaretAlpha = caretAlpha;
+        _lastForegroundStatusCaretAlpha = foregroundStatusCaretAlpha;
+        _lastForegroundStatusCaretBlocksVersion = _foregroundStatusCaretBlocksVersion;
         _lastSpinnerFrameIndex = spinnerIndex;
         _lastCaretRenderTicks = nowTicks;
         _lastRenderedUiActions = _uiActions.State;
@@ -587,7 +641,19 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         }
     }
 
-    public long GetNextCaretDeadlineTicks() => _caret.NextDeadlineTicks;
+    public long GetNextCaretDeadlineTicks()
+    {
+        var next = _caret.NextDeadlineTicks;
+        if (_foregroundStatusCaretBlocks.Count != 0)
+        {
+            next = Math.Min(next, _foregroundJobStatusCaret.NextDeadlineTicks);
+        }
+        if (_overlay.IsOpen)
+        {
+            next = Math.Min(next, _overlay.GetNextCaretDeadlineTicks());
+        }
+        return next;
+    }
 
     private void UpdateVisibleCommandIndicators(long nowTicks)
     {
@@ -962,6 +1028,20 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             caretAlphaNow = 0;
             _caret.SetSuppressed(true, nowTicks);
         }
+
+        byte foregroundStatusCaretAlphaNow = 0;
+        if (_foregroundStatusCaretBlocks.Count != 0)
+        {
+            _foregroundJobStatusCaret.SetSuppressed(false, nowTicks);
+            _foregroundJobStatusCaret.SetPromptFocused(true, nowTicks);
+            _foregroundJobStatusCaret.Update(nowTicks);
+            foregroundStatusCaretAlphaNow = _foregroundJobStatusCaret.SampleAlpha(nowTicks);
+        }
+        else
+        {
+            _foregroundJobStatusCaret.SetSuppressed(true, nowTicks);
+        }
+
         var timeSeconds = nowTicks / (double)Stopwatch.Frequency;
         FreezeTranscriptFollowTailWhileViewportFocused();
         var viewport = new ConsoleViewport(framebufferWidth, framebufferHeight);
@@ -974,6 +1054,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             viewport,
             restoreAnchor: false,
             caretAlpha: caretAlphaNow,
+            statusCaretBlocks: _foregroundStatusCaretBlocks,
+            statusCaretAlpha: foregroundStatusCaretAlphaNow,
             timeSeconds: timeSeconds,
             _visibleCommandIndicators,
             TakePendingMeshReleases(),
@@ -986,6 +1068,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _lastLayout = result.Layout;
         _resizeCoordinator.NotifyFrameBuilt(framebufferWidth, framebufferHeight, result.BuiltGrid, nowTicks);
         _lastCaretAlpha = caretAlphaNow;
+        _lastForegroundStatusCaretAlpha = foregroundStatusCaretAlphaNow;
+        _lastForegroundStatusCaretBlocksVersion = _foregroundStatusCaretBlocksVersion;
         _lastSpinnerFrameIndex = ComputeSpinnerFrameIndex(nowTicks);
         _lastCaretRenderTicks = nowTicks;
         _lastRenderedUiActions = _uiActions.State;
@@ -1912,6 +1996,14 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private void StopFocusedBlock(StopLevel? levelOverride)
     {
+        if (_jobScheduler.HasRunningForegroundJobs)
+        {
+            _jobScheduler.RequestCancelForegroundJobsWithEscalation();
+            _document.Scroll.IsFollowingTail = true;
+            _pendingContentRebuild = true;
+            return;
+        }
+
         var focused = _interaction.Snapshot.Focused;
         if (focused is null)
         {
@@ -1930,6 +2022,7 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         var level = levelOverride ?? StopLevel.Soft;
         stoppable.RequestStop(level);
+
         UpdateVisibleCommandIndicators(Stopwatch.GetTimestamp());
 
         _document.Scroll.IsFollowingTail = true;
@@ -2117,6 +2210,8 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
         _jobProjectionService.Clear();
         _promptLifecycle.Clear();
+        _foregroundStatusCaretBlocks.Clear();
+        _foregroundStatusCaretBlocksVersion++;
         _commandIndicators.Clear();
         _commandIndicatorStartTicks.Clear();
         _visibleCommandIndicators.Clear();
@@ -2155,7 +2250,6 @@ public sealed class ConsoleHostSession : IBlockCommandSession
             _pendingContentRebuild = true;
         }
     }
-
 
     private void InsertBlockAfter(BlockId afterId, IBlock block)
     {
@@ -2369,6 +2463,11 @@ public sealed class ConsoleHostSession : IBlockCommandSession
 
     private bool HasBlockingActiveBlock()
     {
+        if (_jobScheduler.HasRunningForegroundJobs)
+        {
+            return true;
+        }
+
         foreach (var block in _document.Transcript.Blocks)
         {
             if (block is PromptBlock)
@@ -2414,6 +2513,24 @@ public sealed class ConsoleHostSession : IBlockCommandSession
                 ReplaceBlockAt(i, new TextBlock(id, newText, stream));
                 return;
             }
+        }
+    }
+
+    private void SetForegroundStatusCaretEnabled(BlockId id, bool enabled)
+    {
+        if (enabled)
+        {
+            if (_foregroundStatusCaretBlocks.Add(id))
+            {
+                _foregroundStatusCaretBlocksVersion++;
+            }
+
+            return;
+        }
+
+        if (_foregroundStatusCaretBlocks.Remove(id))
+        {
+            _foregroundStatusCaretBlocksVersion++;
         }
     }
 
@@ -2755,12 +2872,77 @@ public sealed class ConsoleHostSession : IBlockCommandSession
         _pendingContentRebuild = true;
     }
 
+    void IBlockCommandSession.ShowAiApiKeyOverlay()
+    {
+        FixedCellGrid grid;
+        if (_lastLayout is not null)
+        {
+            grid = _lastLayout.Grid;
+        }
+        else
+        {
+            var snap = _resizeCoordinator.GetLatestSnapshot();
+            var viewport = new ConsoleViewport(snap.FramebufferWidth, snap.FramebufferHeight);
+            grid = FixedCellGrid.FromViewport(viewport, _layoutSettings);
+        }
+
+        _overlay.OpenAiApiKey(grid);
+
+        if (_overlay.IsModal && TryGetLastEditablePromptId(out var promptId))
+        {
+            RemoveShellPromptIfPresent(promptId);
+            _promptLifecycle.PendingShellPrompt = true;
+        }
+
+        _pendingContentRebuild = true;
+    }
+
+    void IBlockCommandSession.ShowInputDemoOverlay()
+    {
+        FixedCellGrid grid;
+        if (_lastLayout is not null)
+        {
+            grid = _lastLayout.Grid;
+        }
+        else
+        {
+            var snap = _resizeCoordinator.GetLatestSnapshot();
+            var viewport = new ConsoleViewport(snap.FramebufferWidth, snap.FramebufferHeight);
+            grid = FixedCellGrid.FromViewport(viewport, _layoutSettings);
+        }
+
+        _overlay.OpenInputDemo(grid);
+
+        if (_overlay.IsModal && TryGetLastEditablePromptId(out var promptId))
+        {
+            RemoveShellPromptIfPresent(promptId);
+            _promptLifecycle.PendingShellPrompt = true;
+        }
+
+        _pendingContentRebuild = true;
+    }
+
     PromptCaretSettings IBlockCommandSession.GetPromptCaretSettings() => _caret.Settings;
 
     void IBlockCommandSession.SetPromptCaretSettings(in PromptCaretSettings settings)
     {
         _caret.SetSettings(settings);
+        _foregroundJobStatusCaret.SetSettings(settings);
         _pendingContentRebuild = true;
+    }
+
+    JobId IBlockCommandSession.AllocateJobId() => _jobScheduler.AllocateJobId();
+
+    IEventSink IBlockCommandSession.CreateEventSink(JobId jobId) => _jobScheduler.CreateEventSink(jobId);
+
+    void IBlockCommandSession.StartJob(IJob job)
+    {
+        _jobScheduler.StartJob(job);
+    }
+
+    void IBlockCommandSession.StartJob(IJob job, JobOptions options)
+    {
+        _jobScheduler.StartJob(job, options);
     }
 }
 

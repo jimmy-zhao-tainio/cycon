@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Cycon.Core.Transcript;
+using Cycon.Host.Ai;
 using Cycon.Host.Hosting;
 using Cycon.Host.Input;
 using Cycon.Host.Interaction;
@@ -13,11 +15,31 @@ namespace Cycon.Host.Overlays;
 
 internal sealed class OverlayManager
 {
+    private enum OverlayKind
+    {
+        None = 0,
+        HelpControls,
+        AiApiKey,
+        InputDemo
+    }
+
     private OverlaySlab? _slab;
     private OverlaySlabFrame? _frame;
     private FixedCellGrid _lastGrid;
     private bool _hasGrid;
     private readonly UIActionRouter _actions = new();
+    private readonly Func<string?> _getClipboardText;
+    private readonly Action<string> _setClipboardText;
+    private OverlayKind _kind;
+    private OverlayTextInput? _textInput;
+    private UIActionId _textInputId;
+    private string _textInputError = string.Empty;
+
+    public OverlayManager(Func<string?> getClipboardText, Action<string>? setClipboardText = null)
+    {
+        _getClipboardText = getClipboardText ?? (() => null);
+        _setClipboardText = setClipboardText ?? (_ => { });
+    }
 
     public int Version { get; private set; }
 
@@ -29,6 +51,30 @@ internal sealed class OverlayManager
 
     public bool ClearAllActions() => _actions.ClearAll();
 
+    public long GetNextCaretDeadlineTicks()
+    {
+        if (_textInput is null || !_textInput.HasFocus)
+        {
+            return long.MaxValue;
+        }
+
+        return _textInput.NextDeadlineTicks;
+    }
+
+    public void Tick(long nowTicks)
+    {
+        if (_slab is null || _textInput is null)
+        {
+            return;
+        }
+
+        if (_textInput.Tick(nowTicks))
+        {
+            _frame = null;
+            Version++;
+        }
+    }
+
     public void Close()
     {
         if (_slab is null)
@@ -39,6 +85,10 @@ internal sealed class OverlayManager
         _slab = null;
         _frame = null;
         _hasGrid = false;
+        _kind = OverlayKind.None;
+        _textInput = null;
+        _textInputId = default;
+        _textInputError = string.Empty;
         _ = _actions.ClearAll();
         Version++;
     }
@@ -46,10 +96,51 @@ internal sealed class OverlayManager
     public void OpenHelpControls(in FixedCellGrid grid)
     {
         _slab = CreateHelpControlsSlab();
+        _kind = OverlayKind.HelpControls;
         _frame = null;
         _lastGrid = grid;
         _hasGrid = true;
         _ = _actions.ClearAll();
+        _textInput = null;
+        _textInputId = default;
+        _textInputError = string.Empty;
+        Version++;
+    }
+
+    public void OpenAiApiKey(in FixedCellGrid grid)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var initial = OpenAiApiKeyStore.TryGetApiKey() ?? string.Empty;
+        _slab = CreateAiApiKeySlab();
+        _kind = OverlayKind.AiApiKey;
+        _frame = null;
+        _lastGrid = grid;
+        _hasGrid = true;
+        _ = _actions.ClearAll();
+        _textInput = new OverlayTextInput();
+        _textInput.SetText(initial);
+        _textInputId = new UIActionId(10);
+        _textInputError = string.Empty;
+        _ = _actions.SetFocus(_textInputId);
+        _textInput.SetFocus(true, now);
+        Version++;
+    }
+
+    public void OpenInputDemo(in FixedCellGrid grid)
+    {
+        var now = Stopwatch.GetTimestamp();
+        _slab = CreateInputDemoSlab();
+        _kind = OverlayKind.InputDemo;
+        _frame = null;
+        _lastGrid = grid;
+        _hasGrid = true;
+        _ = _actions.ClearAll();
+        _textInput = new OverlayTextInput();
+        _textInput.SetText(string.Empty);
+        _textInputId = new UIActionId(10);
+        _textInputError = string.Empty;
+        _ = _actions.SetFocus(_textInputId);
+        _textInput.SetFocus(true, now);
         Version++;
     }
 
@@ -88,6 +179,42 @@ internal sealed class OverlayManager
             return false;
         }
 
+        if (_textInput is not null &&
+            _actions.State.FocusedId is { } fid &&
+            fid == _textInputId)
+        {
+            if (_hasGrid)
+            {
+                var frame = GetFrame(_lastGrid);
+                if (frame?.TextInput is { } input)
+                {
+                    var outer = input.OuterRectPx;
+                    var cellW = Math.Max(1, _lastGrid.CellWidthPx);
+                    var textStartX = outer.X + (cellW * 3);
+                    var innerWidth = Math.Max(0, outer.Width - (cellW * 6));
+                    if (_textInput.OnKeyDown(
+                            key,
+                            _getClipboardText,
+                            _setClipboardText,
+                            _lastGrid,
+                            textStartXPx: textStartX,
+                            innerWidthPx: innerWidth,
+                            nowTicks: nowTicks,
+                            out var submitted))
+                    {
+                        _frame = null;
+                        Version++;
+                        if (submitted)
+                        {
+                            SubmitTextInput();
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Route editing/navigation keys to the focused text input (if any).
         if (key.KeyCode == HostKey.Enter)
         {
             if (!_hasGrid)
@@ -150,6 +277,10 @@ internal sealed class OverlayManager
             if (next is not null)
             {
                 _ = _actions.SetFocus(next);
+                if (_textInput is not null)
+                {
+                    _textInput.SetFocus(next.Value == _textInputId, nowTicks);
+                }
             }
 
             return true;
@@ -236,7 +367,44 @@ internal sealed class OverlayManager
 
     public bool HandleText(in PendingEvent.Text text)
     {
-        return _slab is not null;
+        if (_slab is null)
+        {
+            return false;
+        }
+
+        if (_textInput is null)
+        {
+            return true;
+        }
+
+        if (_actions.State.FocusedId is not { } fid || fid != _textInputId)
+        {
+            return true;
+        }
+
+        if (!_hasGrid)
+        {
+            return true;
+        }
+
+        var frame = GetFrame(_lastGrid);
+        if (frame is null || frame.TextInput is null)
+        {
+            return true;
+        }
+
+        var input = frame.TextInput;
+        var outer = input.OuterRectPx;
+        var cellW = Math.Max(1, _lastGrid.CellWidthPx);
+        var textStartX = outer.X + (cellW * 3);
+        var innerWidth = Math.Max(0, outer.Width - (cellW * 6));
+        var now = Stopwatch.GetTimestamp();
+        if (_textInput.OnTextInput(text.Ch, _lastGrid, textStartX, innerWidth, now))
+        {
+            _frame = null;
+            Version++;
+        }
+        return true;
     }
 
     public bool HandleMouse(in HostMouseEvent e, in FixedCellGrid grid)
@@ -264,6 +432,24 @@ internal sealed class OverlayManager
         {
             if (inside)
             {
+                if (_textInput is not null &&
+                    _actions.State.FocusedId is { } fid &&
+                    fid == _textInputId &&
+                    (e.Buttons & HostMouseButtons.Left) != 0 &&
+                    frame.TextInput is not null)
+                {
+                    var input = frame.TextInput;
+                    var outer = input.OuterRectPx;
+                    var cellW = Math.Max(1, grid.CellWidthPx);
+                    var textStartX = outer.X + (cellW * 3);
+                    var innerWidth = Math.Max(0, outer.Width - (cellW * 6));
+                    var clickIndex = OverlayTextInputHitTest.HitTestIndex(grid, textStartX, _textInput.ScrollXPx, _textInput.Text.Length, e.X);
+                    if (_textInput.OnMouseMove(clickIndex, grid, textStartX, innerWidth))
+                    {
+                        _frame = null;
+                        Version++;
+                    }
+                }
                 _ = _actions.UpdateHover(frame.Actions, e.X, e.Y, Math.Max(1, grid.CellHeightPx));
                 return true;
             }
@@ -284,12 +470,47 @@ internal sealed class OverlayManager
                 return slab.IsModal;
             }
 
-            _ = _actions.HandleMouseDown(frame.Actions, e.X, e.Y, Math.Max(1, grid.CellHeightPx), out _);
+            _ = _actions.HandleMouseDown(frame.Actions, e.X, e.Y, Math.Max(1, grid.CellHeightPx), out var focusedChangedTo);
+            if (_textInput is not null && focusedChangedTo is { } fid && fid == _textInputId && frame.TextInput is not null)
+            {
+                var input = frame.TextInput;
+                var outer = input.OuterRectPx;
+                var cellW = Math.Max(1, grid.CellWidthPx);
+                var textStartX = outer.X + (cellW * 3);
+                var innerWidth = Math.Max(0, outer.Width - (cellW * 6));
+                var shift = (e.Mods & HostKeyModifiers.Shift) != 0;
+                var clickIndex = OverlayTextInputHitTest.HitTestIndex(grid, textStartX, _textInput.ScrollXPx, _textInput.Text.Length, e.X);
+                if (_textInput.OnMouseDown(clickIndex, shift, grid, textStartX, innerWidth))
+                {
+                    _frame = null;
+                    Version++;
+                }
+                // Text input shouldn't show "pressed" state like a button.
+                _ = _actions.ClearPressed();
+                _textInput.SetFocus(true, Stopwatch.GetTimestamp());
+            }
+            else if (_textInput is not null)
+            {
+                _textInput.SetFocus(false, Stopwatch.GetTimestamp());
+            }
             return true;
         }
 
         if (e.Kind == HostMouseEventKind.Up && (e.Buttons & HostMouseButtons.Left) != 0)
         {
+            if (_textInput is not null &&
+                _actions.State.FocusedId is { } fid &&
+                fid == _textInputId)
+            {
+                if (_textInput.OnMouseUp())
+                {
+                    _frame = null;
+                    Version++;
+                }
+                _ = _actions.ClearPressed();
+                return true;
+            }
+
             if (_actions.State.PressedId is not null)
             {
                 _ = _actions.HandleMouseUp(frame.Actions, e.X, e.Y, Math.Max(1, grid.CellHeightPx), out var activatedId);
@@ -320,6 +541,61 @@ internal sealed class OverlayManager
             Close();
             return;
         }
+
+        if (action.Kind == UIActionKind.ExecuteCommand &&
+            string.Equals(action.CommandText, "overlay:submit", StringComparison.Ordinal))
+        {
+            SubmitTextInput();
+            return;
+        }
+    }
+
+    private void SubmitTextInput()
+    {
+        if (_textInput is null)
+        {
+            return;
+        }
+
+        var text = _textInput.Text.Trim();
+        if (_kind == OverlayKind.AiApiKey)
+        {
+            if (!OpenAiApiKeyStore.TrySaveToDisk(text, out var error))
+            {
+                _textInputError = error ?? "Failed to save API key.";
+                _frame = null;
+                Version++;
+                return;
+            }
+
+            Close();
+            return;
+        }
+
+        // Default: close on submit.
+        Close();
+    }
+
+    private static int GetTextInputTextStartXPx(in FixedCellGrid grid, OverlaySlabFrame? frame)
+    {
+        if (frame?.TextInput is not { } input)
+        {
+            return 0;
+        }
+
+        var cellW = Math.Max(1, grid.CellWidthPx);
+        return input.OuterRectPx.X + (cellW * 3);
+    }
+
+    private static int GetTextInputInnerWidthPx(in FixedCellGrid grid, OverlaySlabFrame? frame)
+    {
+        if (frame?.TextInput is not { } input)
+        {
+            return 0;
+        }
+
+        var cellW = Math.Max(1, grid.CellWidthPx);
+        return Math.Max(0, input.OuterRectPx.Width - (cellW * 6));
     }
 
     private static bool TryFindActionById(IReadOnlyList<UIAction> actions, UIActionId id, out UIAction action)
@@ -399,7 +675,101 @@ internal sealed class OverlayManager
             actions: actions);
     }
 
-    private static OverlaySlabFrame BuildFrame(OverlaySlab slab, in FixedCellGrid grid)
+    private static OverlaySlab CreateAiApiKeySlab()
+    {
+        var lines = new[]
+        {
+            ""
+        };
+
+        var actions = new[]
+        {
+            new OverlaySlabActionSpec(
+                Id: new UIActionId(10),
+                Kind: UIActionKind.TextInput,
+                Area: OverlaySlabActionArea.Content,
+                Align: OverlaySlabActionAlign.Left,
+                RowIndex: 1,
+                ColIndex: 0,
+                Label: string.Empty,
+                CommandText: string.Empty,
+                MinWidthCols: 64),
+            new OverlaySlabActionSpec(
+                Id: new UIActionId(1),
+                Kind: UIActionKind.ExecuteCommand,
+                Area: OverlaySlabActionArea.Footer,
+                Align: OverlaySlabActionAlign.Right,
+                RowIndex: 0,
+                ColIndex: 0,
+                Label: "Save",
+                CommandText: "overlay:submit"),
+            new OverlaySlabActionSpec(
+                Id: new UIActionId(2),
+                Kind: UIActionKind.CloseOverlay,
+                Area: OverlaySlabActionArea.Footer,
+                Align: OverlaySlabActionAlign.Right,
+                RowIndex: 0,
+                ColIndex: 0,
+                Label: "Cancel",
+                CommandText: string.Empty)
+        };
+
+        return new OverlaySlab(
+            title: "OpenAI API Key",
+            isModal: true,
+            closeOnOutsideClick: false,
+            lines: lines,
+            actions: actions);
+    }
+
+    private static OverlaySlab CreateInputDemoSlab()
+    {
+        var lines = new[]
+        {
+            "Type something:",
+            ""
+        };
+
+        var actions = new[]
+        {
+            new OverlaySlabActionSpec(
+                Id: new UIActionId(10),
+                Kind: UIActionKind.TextInput,
+                Area: OverlaySlabActionArea.Content,
+                Align: OverlaySlabActionAlign.Left,
+                RowIndex: 2,
+                ColIndex: 0,
+                Label: string.Empty,
+                CommandText: string.Empty),
+            new OverlaySlabActionSpec(
+                Id: new UIActionId(1),
+                Kind: UIActionKind.ExecuteCommand,
+                Area: OverlaySlabActionArea.Footer,
+                Align: OverlaySlabActionAlign.Right,
+                RowIndex: 0,
+                ColIndex: 0,
+                Label: "OK",
+                CommandText: "overlay:submit"),
+            new OverlaySlabActionSpec(
+                Id: new UIActionId(2),
+                Kind: UIActionKind.CloseOverlay,
+                Area: OverlaySlabActionArea.Footer,
+                Align: OverlaySlabActionAlign.Right,
+                RowIndex: 0,
+                ColIndex: 0,
+                Label: "Cancel",
+                CommandText: string.Empty)
+        };
+
+        return new OverlaySlab(
+            title: "Input Demo",
+            isModal: true,
+            closeOnOutsideClick: false,
+            lines: lines,
+            actions: actions);
+    }
+
+    private OverlaySlabFrame BuildFrame(OverlaySlab slab, in FixedCellGrid grid)
     {
         // Overlay layout constants (cell-authored).
         const int ContentInsetCols = 2;
@@ -442,11 +812,34 @@ internal sealed class OverlayManager
         var textColsMax = Math.Max(1, contentCols - (chromeCols * 2) - (padCols * 2));
         var textRowsMax = Math.Max(1, contentRows - (chromeRows * 2) - (padRows * 2));
 
-        var textCols = Math.Clamp(Math.Max(maxLineLen, titleRowRequired) + (ContentInsetCols * 2), 20, textColsMax);
+        var minTextCols = 0;
+        for (var i = 0; i < slab.Actions.Count; i++)
+        {
+            var a = slab.Actions[i];
+            if (a.Area == OverlaySlabActionArea.Content && a.Kind == UIActionKind.TextInput && a.MinWidthCols > 0)
+            {
+                minTextCols = Math.Max(minTextCols, a.MinWidthCols);
+            }
+        }
+
+        var textCols = Math.Clamp(Math.Max(Math.Max(maxLineLen, titleRowRequired) + (ContentInsetCols * 2), minTextCols), 20, textColsMax);
         // Content includes: 1-row title line + 1-row separator gutter + body lines.
         // Content includes: 1-row separator band + body lines + 2 footer rows (button overlaps bottom pad row).
         var sectionGapRows = slab.Lines.Count > 0 ? SectionGapRows : 0;
         var bodyRows = slab.Lines.Count + sectionGapRows;
+        for (var i = 0; i < slab.Actions.Count; i++)
+        {
+            var a = slab.Actions[i];
+            if (a.Area != OverlaySlabActionArea.Content)
+            {
+                continue;
+            }
+
+            // Text input is 3 rows tall; reserve 2 extra rows so we always get at least 1 blank row below it
+            // before the footer buttons.
+            var h = a.Kind == UIActionKind.TextInput ? 5 : 1;
+            bodyRows = Math.Max(bodyRows, Math.Max(0, a.RowIndex) + h);
+        }
         var gapBeforeFooterRows = ContentInsetRowsBottom; // match bottom inset for symmetry
         var textRows = Math.Clamp(
             Math.Max(ContentInsetRowsTop + bodyRows + gapBeforeFooterRows + ContentInsetRowsBottom + 2 /*footer rows*/, 6),
@@ -474,16 +867,6 @@ internal sealed class OverlayManager
 
         var actions = new List<UIAction>(slab.Actions.Count);
 
-        // Slab fill rect is the area inside the centered-gutter 2px border stroke.
-        // Use it as the alignment reference for right-aligned footer buttons so they don't inherit extra
-        // padding from ContentRect.
-        var borderThickness = Math.Max(1, BlockChromeSpec.ViewDefault.BorderPx);
-        var borderReservation = Math.Max(0, BlockChromeSpec.ViewDefault.PaddingPx + BlockChromeSpec.ViewDefault.BorderPx);
-        var borderInset = Math.Max(0, (borderReservation - borderThickness) / 2);
-        var fillInsetPx = borderInset + borderThickness;
-        var slabFillRightX = (bounds.X + bounds.Width) - fillInsetPx;
-        var slabFillBottomY = (bounds.Y + bounds.Height) - fillInsetPx;
-
         var innerRect = new PxRect(
             bounds.X + (chromeCols * cellW),
             bounds.Y + (chromeRows * cellH),
@@ -498,13 +881,14 @@ internal sealed class OverlayManager
         // Header sits at the first row of the content rect; the row above is reserved as extra spacing.
         var headerX = contentRect.X;
         var headerY = contentRect.Y;
-        var footerY = slabFillBottomY - (ContentInsetRowsBottom * cellH) - (cellH * 3);
+        // Footer buttons are aligned within the content rect so left/right padding stays symmetric.
+        var footerY = (contentRect.Y + contentRect.Height) - (ContentInsetRowsBottom * cellH) - (cellH * 3);
 
         // Precompute right-aligned footer buttons from right to left with a 1-col gap.
         var footerLayoutsById = new Dictionary<UIActionId, ButtonLayoutResult>();
         {
             var gapCols = 1;
-            var rightX = slabFillRightX - (ContentInsetCols * cellW);
+            var rightX = (contentRect.X + contentRect.Width) - (ContentInsetCols * cellW);
             for (var i = slab.Actions.Count - 1; i >= 0; i--)
             {
                 var spec = slab.Actions[i];
@@ -559,8 +943,23 @@ internal sealed class OverlayManager
             }
             else
             {
-                ax = contentRect.X + (Math.Max(0, spec.ColIndex) * cellW);
-                ay = contentRect.Y + cellH + (Math.Max(0, spec.RowIndex) * cellH);
+                // Content actions share the same body-top baseline as slab lines.
+                var bodyTopY = contentRect.Y + ((1 + ContentInsetRowsTop) * cellH);
+                ay = bodyTopY + (Math.Max(0, spec.RowIndex) * cellH);
+
+                ax = contentRect.X + (ContentInsetCols * cellW) + (Math.Max(0, spec.ColIndex) * cellW);
+                if (spec.Kind == UIActionKind.TextInput)
+                {
+                    // Wide input: full content width minus symmetric insets.
+                    aw = Math.Max(cellW * 8, contentRect.Width - (ContentInsetCols * 2 * cellW));
+                    ah = cellH * 3;
+                    ax = contentRect.X + (ContentInsetCols * cellW);
+                }
+                else
+                {
+                    aw = Math.Max(1, labelLen * cellW);
+                    ah = cellH;
+                }
             }
 
             var rect = new PxRect(ax, ay, aw, ah);
@@ -576,7 +975,49 @@ internal sealed class OverlayManager
                 CharLength: 0));
         }
 
-        return new OverlaySlabFrame(bounds, contentRect, slab.IsModal, slab.Title ?? string.Empty, slab.Lines, actions);
+        OverlayTextInputFrame? textInput = null;
+        if (_textInput is not null)
+        {
+            for (var i = 0; i < actions.Count; i++)
+            {
+                if (actions[i].Id == _textInputId && actions[i].Kind == UIActionKind.TextInput)
+                {
+                    textInput = new OverlayTextInputFrame(
+                        id: _textInputId,
+                        outerRectPx: actions[i].RectPx,
+                        text: _textInput.Text,
+                        caretIndex: _textInput.CaretIndex,
+                        selectionAnchorIndex: _textInput.SelectionAnchorIndex,
+                        scrollXPx: _textInput.ScrollXPx,
+                        caretAlpha: (_textInput.SelectionAnchorIndex is { } a && a != _textInput.CaretIndex) ? (byte)0 : _textInput.CaretAlpha);
+                    break;
+                }
+            }
+        }
+
+        var lines = slab.Lines;
+        if (_kind == OverlayKind.AiApiKey && !string.IsNullOrEmpty(_textInputError))
+        {
+            // Keep errors in the reserved line above the input so we don't overlap the text input rows.
+            var updated = new List<string>(slab.Lines.Count);
+            for (var i = 0; i < slab.Lines.Count; i++)
+            {
+                updated.Add(slab.Lines[i]);
+            }
+
+            if (updated.Count == 0)
+            {
+                updated.Add("Error: " + _textInputError);
+            }
+            else
+            {
+                updated[^1] = "Error: " + _textInputError;
+            }
+
+            lines = updated;
+        }
+
+        return new OverlaySlabFrame(bounds, contentRect, slab.IsModal, slab.Title ?? string.Empty, lines, actions, textInput);
     }
 
     private static PxRect SnapToCellGrid(PxRect rect, int cellW, int cellH)

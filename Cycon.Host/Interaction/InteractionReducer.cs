@@ -313,7 +313,7 @@ public sealed class InteractionReducer
             return actions;
         }
 
-        var normalizedCharIndex = NormalizePromptPrefix(transcript, pos.Value.BlockId, pos.Value.CharIndex);
+        var rawCharIndex = pos.Value.CharIndex;
 
         if ((e.Mods & HostKeyModifiers.Shift) == 0 &&
             frame.HitTestMap.TryGetActionAt(e.X, e.Y, out string commandText) &&
@@ -338,11 +338,12 @@ public sealed class InteractionReducer
 
         if (TryGetPrompt(transcript, pos.Value.BlockId, out var prompt))
         {
-            var inputIndex = Math.Clamp(normalizedCharIndex - prompt.PromptPrefixLength, 0, prompt.Input.Length);
+            var caretCharIndex = Math.Max(rawCharIndex, prompt.PromptPrefixLength);
+            var inputIndex = Math.Clamp(caretCharIndex - prompt.PromptPrefixLength, 0, prompt.Input.Length);
             actions.Add(new HostAction.SetCaret(pos.Value.BlockId, inputIndex));
         }
 
-        var caretPos = new SelectionPosition(pos.Value.BlockId, normalizedCharIndex);
+        var caretPos = new SelectionPosition(pos.Value.BlockId, rawCharIndex);
 
         var shift = (e.Mods & HostKeyModifiers.Shift) != 0;
         if (shift)
@@ -379,13 +380,27 @@ public sealed class InteractionReducer
         }
 
         var pos = _hitTester.HitTest(frame.HitTestMap, e.X, e.Y);
+        if (pos is null)
+        {
+            // If the pointer leaves the window during a drag-select, keep extending the selection by clamping
+            // the hit-test point to the nearest in-bounds pixel.
+            var grid = frame.HitTestMap.Grid;
+            var maxX = Math.Max(0, grid.FramebufferWidthPx - 1);
+            var maxY = Math.Max(0, grid.FramebufferHeightPx - 1);
+            var clampedX = Math.Clamp(e.X, 0, maxX);
+            var clampedY = Math.Clamp(e.Y, 0, maxY);
+            if (clampedX != e.X || clampedY != e.Y)
+            {
+                pos = _hitTester.HitTest(frame.HitTestMap, clampedX, clampedY);
+            }
+        }
+
         if (pos is null || _state.Selection is not { } range)
         {
             return Array.Empty<HostAction>();
         }
 
-        var normalizedCharIndex = NormalizePromptPrefix(transcript, pos.Value.BlockId, pos.Value.CharIndex);
-        var caret = new SelectionPosition(pos.Value.BlockId, normalizedCharIndex);
+        var caret = new SelectionPosition(pos.Value.BlockId, pos.Value.CharIndex);
         var updated = new SelectionRange(range.Anchor, caret);
         if (updated == range)
         {
@@ -489,16 +504,6 @@ public sealed class InteractionReducer
         return false;
     }
 
-    private static int NormalizePromptPrefix(Transcript transcript, BlockId blockId, int charIndex)
-    {
-        if (!TryGetPrompt(transcript, blockId, out var prompt))
-        {
-            return charIndex;
-        }
-
-        return Math.Max(charIndex, prompt.PromptPrefixLength);
-    }
-
     private SelectionPosition? GetPromptSelectionCaret(Transcript transcript)
     {
         if (_state.LastPromptId is not { } promptId ||
@@ -570,7 +575,7 @@ public sealed class InteractionReducer
                 continue;
             }
 
-            var selectableStart = blocks[i] is PromptBlock prompt ? prompt.PromptPrefixLength : 0;
+            var selectableStart = 0;
             if (selectable.TextLength <= selectableStart)
             {
                 continue;
@@ -595,7 +600,7 @@ public sealed class InteractionReducer
                 continue;
             }
 
-            var selectableStart = blocks[i] is PromptBlock prompt ? prompt.PromptPrefixLength : 0;
+            var selectableStart = 0;
             if (selectable.TextLength <= selectableStart)
             {
                 continue;
@@ -659,7 +664,7 @@ public sealed class InteractionReducer
             return TryMoveToAdjacentSelectableBlock(transcript, blockIndex, delta, out moved);
         }
 
-        var selectableStart = block is PromptBlock prompt ? prompt.PromptPrefixLength : 0;
+        var selectableStart = 0;
         var selectableEnd = selectable.TextLength;
         var clampedIndex = Math.Clamp(caret.Index, selectableStart, selectableEnd);
 
@@ -703,7 +708,7 @@ public sealed class InteractionReducer
             var block = blocks[i];
             if (block is ITextSelectable selectable && selectable.CanSelect)
             {
-                var selectableStart = block is PromptBlock prompt ? prompt.PromptPrefixLength : 0;
+                var selectableStart = 0;
                 var selectableEnd = selectable.TextLength;
                 if (selectableEnd > selectableStart)
                 {
@@ -762,14 +767,13 @@ public sealed class InteractionReducer
                 continue;
             }
 
-            var selectableStart = targetBlock is PromptBlock prompt ? prompt.PromptPrefixLength : 0;
+            var selectableStart = 0;
             if (selectable.TextLength <= selectableStart)
             {
                 continue;
             }
 
             var nextIndex = target.Start + Math.Min(col, target.Length);
-            nextIndex = NormalizePromptPrefix(transcript, target.BlockId, nextIndex);
             nextIndex = Math.Clamp(nextIndex, selectableStart, selectable.TextLength);
 
             moved = new SelectionPosition(target.BlockId, nextIndex);
@@ -913,8 +917,7 @@ public sealed class InteractionReducer
         // 2) IsSelecting implies Selection != null
         // 3) Focused != null must exist in transcript
         // 4) If Selection != null, anchor/caret block ids must exist in transcript
-        // 5) Prompt prefix rule: selection indices into PromptBlock must be >= PromptPrefixLength
-        // 6) If not selecting, selection must not be empty (anchor != caret)
+        // 5) If not selecting, selection must not be empty (anchor != caret)
 
         if (_state.IsSelecting != (_state.MouseCaptured is not null))
         {
@@ -936,18 +939,6 @@ public sealed class InteractionReducer
             if (!ContainsBlock(transcript, range.Anchor.BlockId) || !ContainsBlock(transcript, range.Caret.BlockId))
             {
                 throw new InvalidOperationException($"Interaction invariant failed (selection block missing). {FormatStateForDebug()}");
-            }
-
-            if (TryGetPrompt(transcript, range.Anchor.BlockId, out var anchorPrompt) &&
-                range.Anchor.Index < anchorPrompt.PromptPrefixLength)
-            {
-                throw new InvalidOperationException($"Interaction invariant failed (anchor in prompt prefix). {FormatStateForDebug()}");
-            }
-
-            if (TryGetPrompt(transcript, range.Caret.BlockId, out var caretPrompt) &&
-                range.Caret.Index < caretPrompt.PromptPrefixLength)
-            {
-                throw new InvalidOperationException($"Interaction invariant failed (caret in prompt prefix). {FormatStateForDebug()}");
             }
 
             if (!_state.IsSelecting && range.Anchor == range.Caret)

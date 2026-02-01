@@ -325,6 +325,10 @@ public sealed class RenderFrameExecutorGl : IDisposable
                 {
                     Flush();
                     _skipModalBackdropCommands = _modalBackdropBlur.BeginCapture(_viewportWidth, _viewportHeight, beginBackdropBlur.CacheKey);
+                    // ModalBackdropBlurGl may temporarily alter GL state (e.g. disable blending).
+                    // Restore the baseline 2D state so subsequent text/quads render correctly into the capture target.
+                    _gl.Enable(EnableCap.Blend);
+                    _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
                     _clipStack.Clear();
                     ApplyClipState();
                     currentKind = null;
@@ -333,6 +337,8 @@ public sealed class RenderFrameExecutorGl : IDisposable
                 case EndModalBackdropBlur:
                     Flush();
                     _modalBackdropBlur.EndCapture(_viewportWidth, _viewportHeight);
+                    _gl.Enable(EnableCap.Blend);
+                    _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
                     _clipStack.Clear();
                     ApplyClipState();
                     currentKind = null;
@@ -340,6 +346,9 @@ public sealed class RenderFrameExecutorGl : IDisposable
                 case DrawModalBackdropBlur drawBackdropBlur:
                     Flush();
                     _modalBackdropBlur.Present(_viewportWidth, _viewportHeight, drawBackdropBlur.CacheKey);
+                    // Present() draws a fullscreen textured quad and may leave blending disabled. Restore for overlay text.
+                    _gl.Enable(EnableCap.Blend);
+                    _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
                     _clipStack.Clear();
                     ApplyClipState();
                     currentKind = null;

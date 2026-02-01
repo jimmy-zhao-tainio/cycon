@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using Cycon.Backends.Abstractions;
 using Silk.NET.GLFW;
 using Silk.NET.Input;
@@ -11,6 +12,9 @@ namespace Cycon.Backends.SilkNet;
 public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposable
 {
     private static readonly Glfw GlfwApi = Glfw.GetApi();
+    private const double MaxIdleWaitSeconds = 0.25;
+    private const double LiveResizeSeconds = 0.20;
+    private const double SnapDebounceSeconds = 0.12;
 
     private readonly Silk.NET.Windowing.IWindow _window;
     private IInputContext? _input;
@@ -21,6 +25,20 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     private float _wheelAccumYPx;
     private bool _disposed;
     private bool _resizingSnap;
+    private long _liveResizeUntilTicks;
+    private long _liveResizeNextFrameAtTicks;
+    private int _lastObservedSizeW;
+    private int _lastObservedSizeH;
+    private int _lastObservedFbW;
+    private int _lastObservedFbH;
+    private bool _snapPending;
+    private long _snapAtTicks;
+    private int _pendingSnapW;
+    private int _pendingSnapH;
+    private bool _liveResizeVSyncOverridden;
+    private bool _liveResizeVSyncRestore;
+    private bool _inResizeCallbackRender;
+    private long _resizeCallbackNextRenderAtTicks;
 
     private SilkWindow(Silk.NET.Windowing.IWindow window)
     {
@@ -149,23 +167,125 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
 
     public void RunScheduled(Func<double?> getWaitSeconds, Func<bool> shouldRender)
     {
+        var liveResizeFrameIntervalTicks = (long)(Stopwatch.Frequency / 60.0);
+
+        var initialSize = _window.Size;
+        _lastObservedSizeW = initialSize.X;
+        _lastObservedSizeH = initialSize.Y;
+        var initialFb = _window.FramebufferSize;
+        _lastObservedFbW = initialFb.X;
+        _lastObservedFbH = initialFb.Y;
+
         while (!_window.IsClosing)
         {
-            var waitSeconds = getWaitSeconds();
-            if (waitSeconds is null)
+            var nowTicks = Stopwatch.GetTimestamp();
+
+            // Pump events first so callbacks (including resize) are delivered promptly.
+            // IMPORTANT: use GLFW PollEvents to avoid blocking inside certain platform live-resize modal loops.
+            GlfwApi.PollEvents();
+
+            var inLiveResize = nowTicks < _liveResizeUntilTicks;
+            if (inLiveResize)
             {
-                GlfwApi.WaitEvents();
+                if (!_liveResizeVSyncOverridden)
+                {
+                    _liveResizeVSyncRestore = _window.VSync;
+                    _window.VSync = false;
+                    _liveResizeVSyncOverridden = true;
+                }
             }
-            else
+            else if (_liveResizeVSyncOverridden)
             {
-                GlfwApi.WaitEventsTimeout(Math.Max(0.0, waitSeconds.Value));
+                _window.VSync = _liveResizeVSyncRestore;
+                _liveResizeVSyncOverridden = false;
             }
 
-            _window.DoEvents();
+            // If we observe size changes, treat it as live-resize activity for a short window so we repaint smoothly.
+            var size = _window.Size;
+            var fb = _window.FramebufferSize;
+            var sawResize = false;
 
-            if (shouldRender())
+            // Some window-manager resize loops deliver FramebufferResize only on release; poll and forward changes so
+            // the app can rebuild/render at the new size while dragging.
+            if (fb.X != _lastObservedFbW || fb.Y != _lastObservedFbH)
+            {
+                _lastObservedFbW = fb.X;
+                _lastObservedFbH = fb.Y;
+                FramebufferResized?.Invoke(fb.X, fb.Y);
+                _liveResizeUntilTicks = Math.Max(_liveResizeUntilTicks, nowTicks + (long)(Stopwatch.Frequency * LiveResizeSeconds));
+                sawResize = true;
+            }
+
+            if (size.X != _lastObservedSizeW || size.Y != _lastObservedSizeH)
+            {
+                _lastObservedSizeW = size.X;
+                _lastObservedSizeH = size.Y;
+                _liveResizeUntilTicks = Math.Max(_liveResizeUntilTicks, nowTicks + (long)(Stopwatch.Frequency * LiveResizeSeconds));
+                _snapPending = true;
+                _pendingSnapW = SnapToStep(size.X, 8);
+                _pendingSnapH = SnapToStep(size.Y, 16);
+                _snapAtTicks = nowTicks + (long)(Stopwatch.Frequency * SnapDebounceSeconds);
+                sawResize = true;
+            }
+
+            // Apply deferred snapping only once resize activity has settled.
+            if (_snapPending && nowTicks >= _snapAtTicks && nowTicks >= _liveResizeUntilTicks)
+            {
+                var targetW = _pendingSnapW;
+                var targetH = _pendingSnapH;
+                if (targetW == 0 || targetH == 0)
+                {
+                    targetW = SnapToStep(size.X, 8);
+                    targetH = SnapToStep(size.Y, 16);
+                }
+
+                if (targetW != size.X || targetH != size.Y)
+                {
+                    _resizingSnap = true;
+                    _window.Size = new Vector2D<int>(targetW, targetH);
+                    _resizingSnap = false;
+                }
+
+                _snapPending = false;
+            }
+
+            if (sawResize || shouldRender())
             {
                 _window.DoRender();
+                continue;
+            }
+
+            // During live resize, repaint at a stable cadence even if the window manager coalesces resize events.
+            if (inLiveResize)
+            {
+                if (_liveResizeNextFrameAtTicks == 0 || nowTicks > _liveResizeNextFrameAtTicks + liveResizeFrameIntervalTicks * 4)
+                {
+                    _liveResizeNextFrameAtTicks = nowTicks;
+                }
+
+                if (nowTicks >= _liveResizeNextFrameAtTicks)
+                {
+                    while (_liveResizeNextFrameAtTicks <= nowTicks)
+                    {
+                        _liveResizeNextFrameAtTicks += liveResizeFrameIntervalTicks;
+                    }
+
+                    _window.DoRender();
+                    continue;
+                }
+
+                var waitTicks = _liveResizeNextFrameAtTicks - nowTicks;
+                var waitToNextFrameSeconds = Math.Clamp(waitTicks / (double)Stopwatch.Frequency, 0, MaxIdleWaitSeconds);
+                GlfwApi.WaitEventsTimeout(waitToNextFrameSeconds);
+                continue;
+            }
+
+            // Nothing to render: block until the next deadline (or a safety wake).
+            var waitSeconds = getWaitSeconds();
+            var boundedWait = waitSeconds is null ? MaxIdleWaitSeconds : Math.Min(waitSeconds.Value, MaxIdleWaitSeconds);
+            if (boundedWait > 0)
+            {
+                GlfwApi.WaitEventsTimeout(boundedWait);
             }
         }
     }
@@ -255,6 +375,32 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
     private void OnFramebufferResize(Vector2D<int> size)
     {
         FramebufferResized?.Invoke(size.X, size.Y);
+        var nowTicks = Stopwatch.GetTimestamp();
+        _liveResizeUntilTicks = Math.Max(_liveResizeUntilTicks, nowTicks + (long)(Stopwatch.Frequency * LiveResizeSeconds));
+
+        // During interactive window resizing on Windows, the OS enters a modal loop that can block our main loop.
+        // Repaint from inside the resize callback (throttled) using the normal render path.
+        if (_inResizeCallbackRender)
+        {
+            return;
+        }
+
+        var minIntervalTicks = (long)(Stopwatch.Frequency / 60.0);
+        if (_resizeCallbackNextRenderAtTicks != 0 && nowTicks < _resizeCallbackNextRenderAtTicks)
+        {
+            return;
+        }
+
+        _resizeCallbackNextRenderAtTicks = nowTicks + minIntervalTicks;
+        try
+        {
+            _inResizeCallbackRender = true;
+            _window.DoRender();
+        }
+        finally
+        {
+            _inResizeCallbackRender = false;
+        }
     }
 
     private void OnResize(Vector2D<int> size)
@@ -264,14 +410,12 @@ public sealed class SilkWindow : Cycon.Backends.Abstractions.IWindow, IDisposabl
             return;
         }
 
-        var targetWidth = SnapToStep(size.X, 8);
-        var targetHeight = SnapToStep(size.Y, 16);
-        if (targetWidth != size.X || targetHeight != size.Y)
-        {
-            _resizingSnap = true;
-            _window.Size = new Vector2D<int>(targetWidth, targetHeight);
-            _resizingSnap = false;
-        }
+        var nowTicks = Stopwatch.GetTimestamp();
+        _liveResizeUntilTicks = Math.Max(_liveResizeUntilTicks, nowTicks + (long)(Stopwatch.Frequency * LiveResizeSeconds));
+        _snapPending = true;
+        _pendingSnapW = SnapToStep(size.X, 8);
+        _pendingSnapH = SnapToStep(size.Y, 16);
+        _snapAtTicks = nowTicks + (long)(Stopwatch.Frequency * SnapDebounceSeconds);
     }
 
     private void OnFileDrop(string[] paths)

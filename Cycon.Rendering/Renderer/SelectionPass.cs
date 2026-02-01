@@ -32,8 +32,6 @@ internal static class SelectionPass
 
         var a = (BlockIndex: aBlockIndex, Index: range.Anchor.Index);
         var c = (BlockIndex: cBlockIndex, Index: range.Caret.Index);
-        a = ClampPromptSelectionStart(blocks, a);
-        c = ClampPromptSelectionStart(blocks, c);
         if (a.BlockIndex > c.BlockIndex || (a.BlockIndex == c.BlockIndex && a.Index > c.Index))
         {
             (a, c) = (c, a);
@@ -56,7 +54,7 @@ internal static class SelectionPass
         for (var i = 0; i < line.Length; i++)
         {
             var charIndex = line.Start + i;
-            var selected = IsSelectablePromptChar(block, charIndex) && selection.Contains(line.BlockIndex, charIndex);
+            var selected = selection.Contains(line.BlockIndex, charIndex);
             if (selected)
             {
                 if (runStart < 0)
@@ -75,16 +73,6 @@ internal static class SelectionPass
         {
             AddRun(frame, grid, rowOnScreen, scrollRemainderPx, runStart, line.Length - runStart, backgroundRgba);
         }
-    }
-
-    public static bool IsSelectablePromptChar(IBlock block, int charIndex)
-    {
-        if (block is not PromptBlock prompt)
-        {
-            return true;
-        }
-
-        return charIndex >= prompt.PromptPrefixLength;
     }
 
     private static void AddRun(
@@ -106,24 +94,6 @@ internal static class SelectionPass
         var w = colLength * grid.CellWidthPx;
         var h = grid.CellHeightPx;
         frame.Add(new DrawQuad(x, y, w, h, rgba));
-    }
-
-    private static (int BlockIndex, int Index) ClampPromptSelectionStart(
-        IReadOnlyList<IBlock> blocks,
-        (int BlockIndex, int Index) position)
-    {
-        if (position.BlockIndex < 0 || position.BlockIndex >= blocks.Count)
-        {
-            return position;
-        }
-
-        if (blocks[position.BlockIndex] is not PromptBlock prompt)
-        {
-            return position;
-        }
-
-        var clampedIndex = Math.Max(position.Index, prompt.PromptPrefixLength);
-        return (position.BlockIndex, clampedIndex);
     }
 
     private static bool TryFindBlockIndex(IReadOnlyList<IBlock> blocks, BlockId id, out int index)

@@ -3,6 +3,8 @@ using Cycon.Core.Styling;
 using Cycon.Core.Transcript;
 using Cycon.Core.Transcript.Blocks;
 using Cycon.Host.Hosting;
+using Cycon.Runtime.Events;
+using Cycon.Runtime.Jobs;
 
 namespace Cycon.Host.Commands;
 
@@ -24,6 +26,12 @@ internal interface IBlockCommandSession
     PromptCaretSettings GetPromptCaretSettings();
     void SetPromptCaretSettings(in PromptCaretSettings settings);
     void ShowHelpControlsOverlay();
+    void ShowAiApiKeyOverlay();
+    void ShowInputDemoOverlay();
+    JobId AllocateJobId();
+    IEventSink CreateEventSink(JobId jobId);
+    void StartJob(IJob job);
+    void StartJob(IJob job, JobOptions options);
 }
 
 internal interface IOverlayCommandContext
@@ -120,4 +128,24 @@ internal sealed class BlockCommandContext : IBlockCommandContext, IFileCommandCo
     public void SetPromptCaretSettings(in PromptCaretSettings settings) => _session.SetPromptCaretSettings(settings);
 
     public void ShowHelpControlsOverlay() => _session.ShowHelpControlsOverlay();
+
+    public void ShowAiApiKeyOverlay() => _session.ShowAiApiKeyOverlay();
+
+    public void ShowInputDemoOverlay() => _session.ShowInputDemoOverlay();
+
+    public JobId AllocateJobId() => _session.AllocateJobId();
+
+    public IEventSink CreateEventSink(JobId jobId) => _session.CreateEventSink(jobId);
+
+    public void StartJob(IJob job) => _session.StartJob(job);
+
+    public void StartJob(IJob job, JobOptions options)
+    {
+        if (options.IsForeground)
+        {
+            _startedBlockingActivity = true;
+        }
+
+        _session.StartJob(job, options);
+    }
 }

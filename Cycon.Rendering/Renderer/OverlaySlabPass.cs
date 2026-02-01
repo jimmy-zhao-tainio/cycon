@@ -70,7 +70,11 @@ internal static class OverlaySlabPass
             return new RectPx(r.X, r.Y, r.Width, r.Height);
         }
 
-        static bool IsButton(in UIAction action, int cellH) => action.RectPx.Height == (cellH * 3);
+        static bool IsTextInput(in UIAction action) =>
+            action.Kind == UIActionKind.TextInput;
+
+        static bool IsButton(in UIAction action, int cellH) =>
+            !IsTextInput(action) && action.RectPx.Height == (cellH * 3);
 
         void GetButtonRects(in UIAction action, bool isPressed, out RectPx btnOuter, out RectPx btnFrame, out RectPx btnInner, out int btnThickness, out int btnRadius, out int btnInnerRadius)
         {
@@ -89,27 +93,33 @@ internal static class OverlaySlabPass
         // Action highlight ladder: pressed (invert + shrink), focused (invert), hovered (subtle).
         if (pressed is { } p)
         {
-            if (IsButton(p, cellH))
+            if (!IsTextInput(p))
             {
-                GetButtonRects(p, isPressed: true, out _, out _, out var btnInner, out _, out _, out var btnInnerRadius);
-                RoundedRectRenderer.FillRoundedRect(canvas, btnInner, btnInnerRadius, foregroundRgba);
-            }
-            else
-            {
-                canvas.FillRect(GetActionFillRect(p), unchecked((int)0x303030FF));
+                if (IsButton(p, cellH))
+                {
+                    GetButtonRects(p, isPressed: true, out _, out _, out var btnInner, out _, out _, out var btnInnerRadius);
+                    RoundedRectRenderer.FillRoundedRect(canvas, btnInner, btnInnerRadius, foregroundRgba);
+                }
+                else
+                {
+                    canvas.FillRect(GetActionFillRect(p), unchecked((int)0x303030FF));
+                }
             }
         }
 
         if (focused is { } f && (pressed is null || f.Id != pressed.Value.Id))
         {
-            if (IsButton(f, cellH))
+            if (!IsTextInput(f))
             {
-                GetButtonRects(f, isPressed: false, out _, out _, out var btnInner, out _, out _, out var btnInnerRadius);
-                RoundedRectRenderer.FillRoundedRect(canvas, btnInner, btnInnerRadius, foregroundRgba);
-            }
-            else
-            {
-                canvas.FillRect(GetActionFillRect(f), foregroundRgba);
+                if (IsButton(f, cellH))
+                {
+                    GetButtonRects(f, isPressed: false, out _, out _, out var btnInner, out _, out _, out var btnInnerRadius);
+                    RoundedRectRenderer.FillRoundedRect(canvas, btnInner, btnInnerRadius, foregroundRgba);
+                }
+                else
+                {
+                    canvas.FillRect(GetActionFillRect(f), foregroundRgba);
+                }
             }
         }
 
@@ -117,14 +127,17 @@ internal static class OverlaySlabPass
             (pressed is null || h.Id != pressed.Value.Id) &&
             (focused is null || h.Id != focused.Value.Id))
         {
-            if (IsButton(h, cellH))
+            if (!IsTextInput(h))
             {
-                GetButtonRects(h, isPressed: false, out _, out _, out var btnInner, out _, out _, out var btnInnerRadius);
-                RoundedRectRenderer.FillRoundedRect(canvas, btnInner, btnInnerRadius, foregroundRgba);
-            }
-            else
-            {
-                canvas.FillRect(GetActionFillRect(h), unchecked((int)0x202020FF));
+                if (IsButton(h, cellH))
+                {
+                    GetButtonRects(h, isPressed: false, out _, out _, out var btnInner, out _, out _, out var btnInnerRadius);
+                    RoundedRectRenderer.FillRoundedRect(canvas, btnInner, btnInnerRadius, foregroundRgba);
+                }
+                else
+                {
+                    canvas.FillRect(GetActionFillRect(h), unchecked((int)0x202020FF));
+                }
             }
         }
 
@@ -162,29 +175,36 @@ internal static class OverlaySlabPass
         for (var i = 0; i < slab.Actions.Count; i++)
         {
             var a = slab.Actions[i];
+            if (IsTextInput(a))
+            {
+                continue;
+            }
             if (string.IsNullOrEmpty(a.Label))
             {
                 continue;
             }
 
-            var isPressed = pressed is { } pi && pi.Id == a.Id;
-            var isHovered = hovered is { } hi && hi.Id == a.Id;
-            var isInverted = (focused is { } fi && fi.Id == a.Id) || (IsButton(a, cellH) && (isPressed || (isHovered && !hasFocus)));
+            var isPressed = pressed is { } pressedAction && pressedAction.Id == a.Id;
+            var isHovered = hovered is { } hoveredAction && hoveredAction.Id == a.Id;
+            var isInverted = (focused is { } focusedAction && focusedAction.Id == a.Id) || (IsButton(a, cellH) && (isPressed || (isHovered && !hasFocus)));
             var rgba = isInverted ? backgroundRgba : foregroundRgba;
             var r = a.RectPx;
             if (IsButton(a, cellH))
             {
-                var pressShift = isPressed ? 1 : 0;
-                // Label nudge is relative to the unpressed geometry (not the deflated/pressed frame).
-                // This keeps the visual offset exactly +1,+1 regardless of the pressed shrink.
-                var labelX = r.X + (cellW * 3) + pressShift;
-                var labelY = r.Y + cellH + pressShift;
+                // Keep label position stable; pressed visual shrink is handled by the button frame geometry.
+                var labelX = r.X + (cellW * 3);
+                var labelY = r.Y + cellH;
                 canvas.DrawText(a.Label, 0, a.Label.Length, labelX, labelY, rgba);
             }
             else
             {
                 canvas.DrawText(a.Label, 0, a.Label.Length, r.X, r.Y, rgba);
             }
+        }
+
+        if (slab.TextInput is { } input)
+        {
+            OverlayTextInputRenderer.Render(canvas, grid, input, foregroundRgba, backgroundRgba);
         }
 
         // Button borders (after highlight fill, before leaving clip).
@@ -197,7 +217,7 @@ internal static class OverlaySlabPass
             }
 
             var borderRgba = foregroundRgba;
-            var isPressed = pressed is { } pi && pi.Id == a.Id;
+            var isPressed = pressed is { } pressedBorderAction && pressedBorderAction.Id == a.Id;
             GetButtonRects(a, isPressed: isPressed, out _, out var btnFrame, out _, out var btnThickness, out _, out _);
             RoundedRectRenderer.DrawRoundedFrame(canvas, btnFrame, btnThickness, radiusPx: 6, rgba: borderRgba);
         }

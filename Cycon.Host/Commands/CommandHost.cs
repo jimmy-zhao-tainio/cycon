@@ -38,6 +38,8 @@ internal sealed class CommandHost
         _blockCommands.RegisterCore(new ViewFallbackBlockCommandHandler());
         _blockCommands.RegisterCore(new CaretBlockCommandHandler());
         _blockCommands.RegisterCore(new ControlsBlockCommandHandler());
+        _blockCommands.RegisterCore(new AiBlockCommandHandler());
+        _blockCommands.RegisterCore(new InputDemoBlockCommandHandler());
         configureBlockCommands?.Invoke(_blockCommands);
 
         _completion = new InputCompletionController(

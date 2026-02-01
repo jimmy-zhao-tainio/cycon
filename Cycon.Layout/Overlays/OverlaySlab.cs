@@ -49,7 +49,8 @@ public readonly record struct OverlaySlabActionSpec(
     int ColIndex,
     string Label,
     string? CommandText = null,
-    bool Enabled = true);
+    bool Enabled = true,
+    int MinWidthCols = 0);
 
 public sealed class OverlaySlabFrame
 {
@@ -59,7 +60,8 @@ public sealed class OverlaySlabFrame
         bool isModal,
         string title,
         IReadOnlyList<string> lines,
-        IReadOnlyList<UIAction> actions)
+        IReadOnlyList<UIAction> actions,
+        OverlayTextInputFrame? textInput = null)
     {
         OuterRectPx = outerRectPx;
         ContentRectPx = contentRectPx;
@@ -67,6 +69,7 @@ public sealed class OverlaySlabFrame
         Title = title ?? string.Empty;
         Lines = lines ?? new List<string>();
         Actions = actions ?? new List<UIAction>();
+        TextInput = textInput;
     }
 
     public PxRect OuterRectPx { get; }
@@ -75,4 +78,34 @@ public sealed class OverlaySlabFrame
     public string Title { get; }
     public IReadOnlyList<string> Lines { get; }
     public IReadOnlyList<UIAction> Actions { get; }
+    public OverlayTextInputFrame? TextInput { get; }
+}
+
+public sealed class OverlayTextInputFrame
+{
+    public OverlayTextInputFrame(
+        UIActionId id,
+        PxRect outerRectPx,
+        string text,
+        int caretIndex,
+        int? selectionAnchorIndex,
+        int scrollXPx,
+        byte caretAlpha)
+    {
+        Id = id;
+        OuterRectPx = outerRectPx;
+        Text = text ?? string.Empty;
+        CaretIndex = caretIndex;
+        SelectionAnchorIndex = selectionAnchorIndex;
+        ScrollXPx = scrollXPx;
+        CaretAlpha = caretAlpha;
+    }
+
+    public UIActionId Id { get; }
+    public PxRect OuterRectPx { get; }
+    public string Text { get; }
+    public int CaretIndex { get; }
+    public int? SelectionAnchorIndex { get; }
+    public int ScrollXPx { get; }
+    public byte CaretAlpha { get; }
 }

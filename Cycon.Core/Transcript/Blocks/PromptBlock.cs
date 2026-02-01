@@ -58,12 +58,7 @@ public sealed class PromptBlock : IBlock, ITextSelectable, ITextEditable, IRunna
             throw new ArgumentOutOfRangeException();
         }
 
-        var selectableStart = Prompt.Length;
-        var selectableEnd = text.Length;
-        var startClamped = Math.Clamp(start, selectableStart, selectableEnd);
-        var endClamped = Math.Clamp(start + length, selectableStart, selectableEnd);
-        var clampedLength = endClamped - startClamped;
-        return clampedLength <= 0 ? string.Empty : text.Substring(startClamped, clampedLength);
+        return length == 0 ? string.Empty : text.Substring(start, length);
     }
 
     public void InsertText(string s)

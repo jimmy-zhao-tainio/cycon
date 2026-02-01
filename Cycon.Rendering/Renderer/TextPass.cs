@@ -106,9 +106,7 @@ internal static class TextPass
             var glyphY = baselineY - glyph.BearingY;
 
             var color = lineForeground;
-            if (selection is { } bounds &&
-                SelectionPass.IsSelectablePromptChar(block, charIndex) &&
-                bounds.Contains(line.BlockIndex, charIndex))
+            if (selection is { } bounds && bounds.Contains(line.BlockIndex, charIndex))
             {
                 color = selectionForegroundRgba;
             }
@@ -134,4 +132,5 @@ internal static class TextPass
             frame.Add(new DrawGlyphRun(0, 0, glyphs));
         }
     }
+
 }
