@@ -74,6 +74,35 @@ internal static class CaretPass
         frame.Add(new DrawQuad(cellX, underlineY, caretW, underlineH, caretColor));
     }
 
+    public static void RenderBlockCaret(
+        RenderFrame frame,
+        FixedCellGrid grid,
+        int scrollOffsetPx,
+        CaretQuad caretQuad,
+        int caretColorRgba,
+        byte caretAlpha)
+    {
+        var cellH = grid.CellHeightPx;
+        var scrollRows = cellH <= 0 ? 0 : scrollOffsetPx / cellH;
+        var scrollRemainderPx = cellH <= 0 ? 0 : scrollOffsetPx - (scrollRows * cellH);
+
+        var rowOnScreen = caretQuad.RowIndex - scrollRows;
+        if (rowOnScreen < 0 || rowOnScreen >= grid.Rows)
+        {
+            return;
+        }
+
+        if (caretAlpha == 0)
+        {
+            return;
+        }
+
+        var cellX = grid.PaddingLeftPx + (caretQuad.ColIndex * grid.CellWidthPx);
+        var cellY = grid.PaddingTopPx + (rowOnScreen * grid.CellHeightPx) - scrollRemainderPx;
+        var caretColor = WithAlpha(caretColorRgba, caretAlpha);
+        frame.Add(new DrawQuad(cellX, cellY, grid.CellWidthPx, grid.CellHeightPx, caretColor));
+    }
+
     private static int WithAlpha(int rgba, byte alpha)
     {
         return (rgba & unchecked((int)0xFFFFFF00)) | alpha;

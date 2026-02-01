@@ -243,7 +243,7 @@ public sealed class ConsoleRenderer
             var caretColor = document.Settings.DefaultTextStyle.ForegroundRgba;
             for (var i = 0; i < statusCarets.Count; i++)
             {
-                CaretPass.RenderCaret(frame, grid, fontMetrics, scrollOffsetPx, statusCarets[i], caretColor, statusCaretAlpha);
+                CaretPass.RenderBlockCaret(frame, grid, scrollOffsetPx, statusCarets[i], caretColor, statusCaretAlpha);
             }
         }
 

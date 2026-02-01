@@ -10,12 +10,14 @@ public sealed class MockAiStreamer
     private readonly int _chunkChars;
     private readonly int _delayMs;
     private readonly int _phaseMs;
+    private readonly int _initialCaretMs;
 
-    public MockAiStreamer(int chunkChars = 24, int delayMs = 35, int phaseMs = 2500)
+    public MockAiStreamer(int chunkChars = 24, int delayMs = 35, int phaseMs = 2500, int initialCaretMs = 1200)
     {
         _chunkChars = Math.Clamp(chunkChars, 1, 256);
         _delayMs = Math.Clamp(delayMs, 0, 250);
         _phaseMs = Math.Clamp(phaseMs, 400, 4000);
+        _initialCaretMs = Math.Clamp(initialCaretMs, 0, _phaseMs);
     }
 
     public async Task StreamOnceAsync(
@@ -25,7 +27,8 @@ public sealed class MockAiStreamer
     {
         if (sink is null) throw new ArgumentNullException(nameof(sink));
 
-        sink.Status("Thinking...");
+        // Start with a blank status line; the host renders a pulsing status caret for foreground jobs.
+        sink.Status(string.Empty);
         await Task.Yield();
 
         var prompt = ExtractLastUserPrompt(messages);
@@ -36,7 +39,17 @@ public sealed class MockAiStreamer
         }
 
         // Prelude: brief thinking phase before streaming output.
-        await Task.Delay(_phaseMs, ct).ConfigureAwait(false);
+        if (_initialCaretMs > 0)
+        {
+            await Task.Delay(_initialCaretMs, ct).ConfigureAwait(false);
+        }
+
+        var thinkingMs = Math.Max(0, _phaseMs - _initialCaretMs);
+        if (thinkingMs > 0)
+        {
+            sink.Status("Thinking...");
+            await Task.Delay(thinkingMs, ct).ConfigureAwait(false);
+        }
 
         // Deterministic, cheap mock output: short explanation + an echo of the request.
         var response =
