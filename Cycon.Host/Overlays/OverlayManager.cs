@@ -179,6 +179,14 @@ internal sealed class OverlayManager
             return false;
         }
 
+        // Esc is a global cancel for overlays: close immediately and discard any uncommitted edits.
+        // Must win over focused text inputs and selection/drag states.
+        if (key.IsDown && key.KeyCode == HostKey.Escape)
+        {
+            Close();
+            return true;
+        }
+
         if (_textInput is not null &&
             _actions.State.FocusedId is { } fid &&
             fid == _textInputId)
@@ -283,12 +291,6 @@ internal sealed class OverlayManager
                 }
             }
 
-            return true;
-        }
-
-        if (key.KeyCode == HostKey.Escape)
-        {
-            Close();
             return true;
         }
 
