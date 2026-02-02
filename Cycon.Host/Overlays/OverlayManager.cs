@@ -814,9 +814,9 @@ internal sealed class OverlayManager
                 continue;
             }
 
-            // Text input is 3 rows tall; reserve 1 extra row so we always get at least 1 blank row below it
+            // Text input is 3 rows tall; reserve 2 extra rows so we always get at least 1 blank row below it
             // before the footer buttons.
-            var h = a.Kind == UIActionKind.TextInput ? 4 : 1;
+            var h = a.Kind == UIActionKind.TextInput ? 5 : 1;
             bodyRows = Math.Max(bodyRows, Math.Max(0, a.RowIndex) + h);
         }
         var gapBeforeFooterRows = ContentInsetRowsBottom; // match bottom inset for symmetry
