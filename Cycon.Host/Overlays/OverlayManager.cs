@@ -33,7 +33,6 @@ internal sealed class OverlayManager
     private OverlayKind _kind;
     private OverlayTextInput? _textInput;
     private UIActionId _textInputId;
-    private string _textInputError = string.Empty;
 
     public OverlayManager(Func<string?> getClipboardText, Action<string>? setClipboardText = null)
     {
@@ -88,7 +87,6 @@ internal sealed class OverlayManager
         _kind = OverlayKind.None;
         _textInput = null;
         _textInputId = default;
-        _textInputError = string.Empty;
         _ = _actions.ClearAll();
         Version++;
     }
@@ -103,7 +101,6 @@ internal sealed class OverlayManager
         _ = _actions.ClearAll();
         _textInput = null;
         _textInputId = default;
-        _textInputError = string.Empty;
         Version++;
     }
 
@@ -120,7 +117,6 @@ internal sealed class OverlayManager
         _textInput = new OverlayTextInput();
         _textInput.SetText(initial);
         _textInputId = new UIActionId(10);
-        _textInputError = string.Empty;
         _ = _actions.SetFocus(_textInputId);
         _textInput.SetFocus(true, now);
         Version++;
@@ -138,7 +134,6 @@ internal sealed class OverlayManager
         _textInput = new OverlayTextInput();
         _textInput.SetText(string.Empty);
         _textInputId = new UIActionId(10);
-        _textInputError = string.Empty;
         _ = _actions.SetFocus(_textInputId);
         _textInput.SetFocus(true, now);
         Version++;
@@ -559,16 +554,10 @@ internal sealed class OverlayManager
             return;
         }
 
-        var text = _textInput.Text.Trim();
+        var text = _textInput.Text;
         if (_kind == OverlayKind.AiApiKey)
         {
-            if (!OpenAiApiKeyStore.TrySaveToDisk(text, out var error))
-            {
-                _textInputError = error ?? "Failed to save API key.";
-                _frame = null;
-                Version++;
-                return;
-            }
+            _ = OpenAiApiKeyStore.TrySaveToDisk(text, out _);
 
             Close();
             return;
@@ -985,29 +974,7 @@ internal sealed class OverlayManager
             }
         }
 
-        var lines = slab.Lines;
-        if (_kind == OverlayKind.AiApiKey && !string.IsNullOrEmpty(_textInputError))
-        {
-            // Keep errors in the reserved line above the input so we don't overlap the text input rows.
-            var updated = new List<string>(slab.Lines.Count);
-            for (var i = 0; i < slab.Lines.Count; i++)
-            {
-                updated.Add(slab.Lines[i]);
-            }
-
-            if (updated.Count == 0)
-            {
-                updated.Add("Error: " + _textInputError);
-            }
-            else
-            {
-                updated[^1] = "Error: " + _textInputError;
-            }
-
-            lines = updated;
-        }
-
-        return new OverlaySlabFrame(bounds, contentRect, slab.IsModal, slab.Title ?? string.Empty, lines, actions, textInput);
+        return new OverlaySlabFrame(bounds, contentRect, slab.IsModal, slab.Title ?? string.Empty, slab.Lines, actions, textInput);
     }
 
     private static PxRect SnapToCellGrid(PxRect rect, int cellW, int cellH)
